@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>IIT DocChat</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 24px;
+        background: #f7f7f8;
+        color: #222;
+      }
+    
+      h1 {
+        margin-top: 0;
+        margin-bottom: 20px;
+      }
+    
+      #chat {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+    
+      .msg {
+        padding: 14px 16px;
+        border-radius: 12px;
+        white-space: pre-wrap;
+        line-height: 1.5;
+      }
+    
+      .user {
+        background: #dbeafe;
+        align-self: flex-end;
+        max-width: 75%;
+      }
+    
+      .assistant {
+        background: white;
+        border: 1px solid #ddd;
+        max-width: 100%;
+      }
+    
+      .answer-text {
+        white-space: pre-wrap;
+        line-height: 1.55;
+      }
+    
+      .details {
+        margin-top: 16px;
+        padding-top: 12px;
+        border-top: 1px solid #ddd;
+        font-size: 0.9rem;
+        color: #555;
+      }
+    
+      .details h3 {
+        margin: 0 0 10px 0;
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: #444;
+      }
+    
+      .source {
+        margin-bottom: 10px;
+        padding: 8px 10px;
+        background: #fafafa;
+        border: 1px solid #eee;
+        border-radius: 8px;
+      }
+    
+      .source-file {
+        font-weight: 600;
+        margin-bottom: 2px;
+      }
+    
+      .source-path {
+        font-size: 0.82rem;
+        color: #666;
+        margin-bottom: 4px;
+        word-break: break-all;
+      }
+    
+      .source-meta {
+        font-size: 0.8rem;
+        color: #777;
+        margin-bottom: 6px;
+      }
+    
+      .source-text {
+        font-size: 0.88rem;
+        color: #444;
+      }
+    
+      .debug {
+        margin-top: 12px;
+        font-size: 0.8rem;
+        color: #777;
+      }
+    
+      details.debug-details {
+        margin-top: 12px;
+      }
+    
+      details.debug-details summary {
+        cursor: pointer;
+        font-size: 0.85rem;
+        color: #666;
+      }
+    
+      form {
+        display: flex;
+        gap: 8px;
+      }
+    
+      textarea {
+        flex: 1;
+        min-height: 72px;
+        resize: vertical;
+        padding: 12px;
+        font: inherit;
+        border: 1px solid #ccc;
+        border-radius: 10px;
+      }
+    
+      button {
+        padding: 12px 16px;
+        font: inherit;
+        border: 0;
+        border-radius: 10px;
+        background: #2563eb;
+        color: white;
+        cursor: pointer;
+      }
+    
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+    </style>
+</head>
+<body>
+  <h1>IIT DocChat</h1>
+  <div id="chat"></div>
+
+  <form id="chat-form">
+    <textarea id="question" placeholder="Ställ en fråga om dokumenten..."></textarea>
+    <button id="send-btn" type="submit">Skicka</button>
+  </form>
+    <script>
+      const chat = document.getElementById("chat");
+      const form = document.getElementById("chat-form");
+      const questionInput = document.getElementById("question");
+      const sendBtn = document.getElementById("send-btn");
+    
+      function escapeHtml(str) {
+        return String(str)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;");
+      }
+    
+      function addMessage(text, role, sources = null, debug = null) {
+        const wrap = document.createElement("div");
+        wrap.className = `msg ${role}`;
+    
+        const textDiv = document.createElement("div");
+        textDiv.className = role === "assistant" ? "answer-text" : "";
+        textDiv.textContent = text;
+        wrap.appendChild(textDiv);
+    
+        if (role === "assistant" && ((sources && sources.length) || debug)) {
+          const detailsDiv = document.createElement("div");
+          detailsDiv.className = "details";
+    
+          if (sources && sources.length) {
+            const heading = document.createElement("h3");
+            heading.textContent = "Källor";
+            detailsDiv.appendChild(heading);
+    
+            for (const s of sources) {
+              const d = document.createElement("div");
+              d.className = "source";
+    
+              const file = document.createElement("div");
+              file.className = "source-file";
+              file.textContent = s.metadata.file_name || "(okänd fil)";
+              d.appendChild(file);
+    
+              const path = document.createElement("div");
+              path.className = "source-path";
+              path.textContent = s.metadata.source_path || "";
+              d.appendChild(path);
+    
+              const meta = document.createElement("div");
+              meta.className = "source-meta";
+              meta.textContent =
+                `score=${Number(s.score).toFixed(3)} | ` +
+                `chunk=${s.metadata.chunk_index}` +
+                (s.metadata.page_number != null ? ` | sida=${s.metadata.page_number}` : "");
+              d.appendChild(meta);
+    
+              const snippet = document.createElement("div");
+              snippet.className = "source-text";
+              snippet.textContent = (s.text || "").slice(0, 500);
+              d.appendChild(snippet);
+    
+              detailsDiv.appendChild(d);
+            }
+          }
+    
+          if (debug) {
+            const debugDetails = document.createElement("details");
+            debugDetails.className = "debug-details";
+    
+            const summary = document.createElement("summary");
+            summary.textContent = "Teknisk info";
+            debugDetails.appendChild(summary);
+    
+            const debugPre = document.createElement("pre");
+            debugPre.className = "debug";
+            debugPre.textContent = JSON.stringify(debug, null, 2);
+            debugDetails.appendChild(debugPre);
+    
+            detailsDiv.appendChild(debugDetails);
+          }
+    
+          wrap.appendChild(detailsDiv);
+        }
+    
+        chat.appendChild(wrap);
+        window.scrollTo(0, document.body.scrollHeight);
+      }
+    
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const question = questionInput.value.trim();
+        if (!question) return;
+    
+        addMessage(question, "user");
+        questionInput.value = "";
+        sendBtn.disabled = true;
+    
+        try {
+          const res = await fetch("/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question })
+          });
+    
+          const data = await res.json();
+    
+          if (!res.ok) {
+            addMessage(`Fel: ${data.detail || "okänt fel"}`, "assistant");
+          } else {
+            addMessage(data.answer, "assistant", data.sources, data.debug);
+          }
+        } catch (err) {
+          addMessage(`Nätverksfel: ${err}`, "assistant");
+        } finally {
+          sendBtn.disabled = false;
+          questionInput.focus();
+        }
+      });
+    </script>
+</body>
+</html>

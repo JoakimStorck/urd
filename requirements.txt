@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+qdrant-client
+sentence-transformers
+ollama
+python-dotenv
+pydantic
+docling
+python-multipart
