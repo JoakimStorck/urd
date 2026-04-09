@@ -29,7 +29,8 @@ def health() -> dict[str, str]:
 def chat(req: ChatRequest) -> ChatResponse:
     try:
         return rag.answer(req.question)
-    except LLMUnavailableError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internt fel: {type(e).__name__}: {e}") from e
+    except Exception:
+        import traceback
+        tb = traceback.format_exc()
+        print(tb)
+        raise HTTPException(status_code=500, detail=tb)

@@ -5,6 +5,7 @@ import json
 import hashlib
 from collections import defaultdict
 from pathlib import Path
+import requests
 
 import typer
 import uvicorn
@@ -15,7 +16,7 @@ from app.ingest import iter_document_paths, ingest_path, compute_source_fingerpr
 from app.preprocess_llm import SectionMetadataExtractor
 from app.qdrant_store import QdrantStore
 from app.retrieval import RagService
-from app.schemas import SourceHit
+from app.schemas import SourceHit, ChatResponse
 
 app = typer.Typer(
     help="Lokal dokumentchat för IIT-dokument.",
@@ -23,7 +24,27 @@ app = typer.Typer(
     add_completion=False,
 )
 
+def _ask_via_server(question: str, base_url: str) -> dict:
+    url = base_url.rstrip("/") + "/chat"
+    resp = requests.post(url, json={"question": question}, timeout=300)
+    if not resp.ok:
+        try:
+            detail = resp.text
+        except Exception:
+            detail = "<ingen svarstext>"
+        raise RuntimeError(
+            f"Serverfel {resp.status_code} från {url}\n--- svarstext ---\n{detail}"
+        )
+    return resp.json()
 
+def _server_is_available(base_url: str) -> bool:
+    try:
+        url = base_url.rstrip("/") + "/health"
+        resp = requests.get(url, timeout=1.0)
+        return resp.ok
+    except Exception:
+        return False
+        
 def _build_store_and_embedder() -> tuple[QdrantStore, Embedder]:
     embedder = Embedder()
     dim = len(embedder.embed_query("test"))
@@ -36,7 +57,48 @@ def _build_store_only() -> QdrantStore:
     # Dummy-dimension används bara för init; _ensure_collection skapar inget nytt om samlingen finns.
     return QdrantStore(vector_size=1024)
 
+def _is_qdrant_lock_error(exc: Exception) -> bool:
+    msg = str(exc)
+    return (
+        "Storage folder" in msg
+        and "already accessed by another instance of Qdrant client" in msg
+    )
 
+def _print_response(response, show_sources: bool, show_debug: bool) -> None:
+    typer.echo("")
+    typer.echo("Svar")
+    typer.echo("----")
+    typer.echo(response.answer)
+
+    if show_sources and response.sources:
+        typer.echo("")
+        typer.echo("Källor")
+        typer.echo("------")
+        for i, src in enumerate(response.sources, start=1):
+            meta = src.metadata
+            typer.echo(f"[{i}] {meta.file_name}")
+            if meta.document_title:
+                typer.echo(f"    titel: {meta.document_title}")
+            if meta.category:
+                typer.echo(f"    kategori: {meta.category}")
+            if meta.section_title:
+                typer.echo(f"    rubrik: {meta.section_title}")
+            if meta.section_level is not None:
+                typer.echo(f"    nivå: {meta.section_level}")
+            if meta.document_type:
+                typer.echo(f"    dokumenttyp: {meta.document_type}")
+            if meta.document_date:
+                typer.echo(f"    datum: {meta.document_date}")
+            typer.echo(f"    score: {src.score:.3f}")
+            typer.echo(f"    chunk: {meta.chunk_index}")
+            typer.echo(f"    väg: {meta.source_path}")
+
+    if show_debug and response.debug:
+        typer.echo("")
+        typer.echo("Debug")
+        typer.echo("-----")
+        typer.echo(json.dumps(response.debug, ensure_ascii=False, indent=2))
+        
 @app.command("serve")
 def serve(
     host: str = typer.Option("127.0.0.1", help="Host för webbservern."),
@@ -378,43 +440,25 @@ def ask(
     question: str = typer.Argument(...),
     show_sources: bool = typer.Option(True, "--sources/--no-sources"),
     show_debug: bool = typer.Option(False, "--debug"),
+    via_server: bool = typer.Option(False, "--via-server", help="Skicka frågan till körande docchat-server."),
+    server_url: str = typer.Option("http://127.0.0.1:8000", "--server-url", help="Bas-URL till docchat-servern."),
 ) -> None:
-    rag = RagService()
-    response = rag.answer(question)
+    response = None
 
-    typer.echo("")
-    typer.echo("Svar")
-    typer.echo("----")
-    typer.echo(response.answer)
+    use_server = via_server or _server_is_available(server_url)
 
-    if show_sources and response.sources:
-        typer.echo("")
-        typer.echo("Källor")
-        typer.echo("------")
-        for i, src in enumerate(response.sources, start=1):
-            meta = src.metadata
-            typer.echo(f"[{i}] {meta.file_name}")
-            if meta.document_title:
-                typer.echo(f"    titel: {meta.document_title}")
-            if meta.category:
-                typer.echo(f"    kategori: {meta.category}")
-            if meta.section_title:
-                typer.echo(f"    rubrik: {meta.section_title}")
-            if meta.section_level is not None:
-                typer.echo(f"    nivå: {meta.section_level}")
-            if meta.document_type:
-                typer.echo(f"    dokumenttyp: {meta.document_type}")
-            if meta.document_date:
-                typer.echo(f"    datum: {meta.document_date}")
-            typer.echo(f"    score: {src.score:.3f}")
-            typer.echo(f"    chunk: {meta.chunk_index}")
-            typer.echo(f"    väg: {meta.source_path}")
+    if use_server:
+        if show_debug:
+            typer.echo(f"Backend: server ({server_url})")
+        payload = _ask_via_server(question, server_url)
+        response = ChatResponse.model_validate(payload)
+    else:
+        if show_debug:
+            typer.echo("Backend: local")
+        rag = RagService()
+        response = rag.answer(question)
 
-    if show_debug and response.debug:
-        typer.echo("")
-        typer.echo("Debug")
-        typer.echo("-----")
-        typer.echo(json.dumps(response.debug, ensure_ascii=False, indent=2))
+    _print_response(response, show_sources=show_sources, show_debug=show_debug)
 
 
 def main() -> None:
