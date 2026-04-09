@@ -7,6 +7,7 @@ class ChunkMetadata(BaseModel):
     document_title: str | None = None
     category: str | None = None
     section_title: str | None = None
+    section_level: int | None = None
     page_number: int | None = None
     document_date: str | None = None
     chunk_index: int = 0
