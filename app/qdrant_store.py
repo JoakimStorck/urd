@@ -5,6 +5,7 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 from app.config import settings
 from app.schemas import DocumentChunk, SourceHit, ChunkMetadata
 
+
 class QdrantStore:
     def __init__(self, vector_size: int) -> None:
         self.client = QdrantClient(path=str(settings.qdrant_path))
@@ -30,6 +31,7 @@ class QdrantStore:
                 "document_title": chunk.metadata.document_title,
                 "category": chunk.metadata.category,
                 "section_title": chunk.metadata.section_title,
+                "section_level": chunk.metadata.section_level,
                 "page_number": chunk.metadata.page_number,
                 "document_date": chunk.metadata.document_date,
                 "chunk_index": chunk.metadata.chunk_index,
@@ -71,6 +73,7 @@ class QdrantStore:
                         document_title=payload.get("document_title"),
                         category=payload.get("category"),
                         section_title=payload.get("section_title"),
+                        section_level=payload.get("section_level"),
                         page_number=payload.get("page_number"),
                         document_date=payload.get("document_date"),
                         chunk_index=payload.get("chunk_index", 0),
@@ -87,4 +90,4 @@ class QdrantStore:
         self.client.create_collection(
             collection_name=self.collection_name,
             vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
-        )        
+        )

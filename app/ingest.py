@@ -3,10 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from dataclasses import dataclass
 import hashlib
+import re
 
 from docling.document_converter import DocumentConverter
 
 from app.schemas import DocumentChunk, ChunkMetadata
+from app.config import settings
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".xlsx"}
 _converter = DocumentConverter()
@@ -17,6 +19,14 @@ class RawDocument:
     path: Path
     text: str
     title: str | None = None
+
+
+@dataclass
+class StructuredSection:
+    title: str | None
+    level: int | None
+    text: str
+    order: int
 
 
 def iter_document_paths(root: Path) -> list[Path]:
@@ -45,8 +55,16 @@ def extract_text_with_fallback(path: Path) -> RawDocument:
         return RawDocument(path=path, text=text, title=path.stem)
 
 
+def normalize_chunk_text(text: str) -> str:
+    lines = [line.rstrip() for line in text.splitlines()]
+    # Behåll radbrytningar men städa bort upprepade tomrader
+    cleaned = "\n".join(lines)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 150) -> list[str]:
-    text = " ".join(text.split())
+    text = normalize_chunk_text(text)
     if not text:
         return []
 
@@ -55,17 +73,97 @@ def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 150) -> list[st
     n = len(text)
     while start < n:
         end = min(start + chunk_size, n)
-        chunks.append(text[start:end])
+        piece = text[start:end].strip()
+        if piece:
+            chunks.append(piece)
         if end == n:
             break
         start = max(end - overlap, start + 1)
     return chunks
 
 
+def split_markdown_sections(md: str) -> list[StructuredSection]:
+    md = md.strip()
+    if not md:
+        return []
+
+    heading_re = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
+    lines = md.splitlines()
+
+    sections: list[StructuredSection] = []
+    current_title: str | None = None
+    current_level: int | None = None
+    current_lines: list[str] = []
+    order = 0
+
+    def flush_current() -> None:
+        nonlocal order, current_lines, current_title, current_level
+        text = "\n".join(current_lines).strip()
+        if text:
+            sections.append(
+                StructuredSection(
+                    title=current_title,
+                    level=current_level,
+                    text=text,
+                    order=order,
+                )
+            )
+            order += 1
+        current_lines = []
+
+    for line in lines:
+        m = heading_re.match(line)
+        if m:
+            flush_current()
+            current_level = len(m.group(1))
+            current_title = m.group(2).strip()
+        else:
+            current_lines.append(line)
+
+    flush_current()
+
+    if sections:
+        return sections
+
+    # Fallback: dela på dubbla radbrytningar om markdownrubriker saknas
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", md) if b.strip()]
+    return [
+        StructuredSection(
+            title=None,
+            level=None,
+            text=block,
+            order=i,
+        )
+        for i, block in enumerate(blocks)
+    ]
+
+
+def infer_document_title(raw: RawDocument) -> str | None:
+    md = raw.text or ""
+    for line in md.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("# "):
+            return line[2:].strip()
+        break
+    return raw.title
+
+
 def infer_category(path: Path, docs_root: Path) -> str | None:
     try:
         rel = path.relative_to(docs_root)
-        return rel.parts[0] if len(rel.parts) > 1 else None
+        parts = rel.parts
+
+        # docs / IIT-lokala regler och rutiner / Forskarutbildning / fil.pdf
+        if len(parts) >= 3 and parts[0] == "IIT-lokala regler och rutiner":
+            return parts[1]
+
+        # fallback
+        if len(parts) > 1:
+            return parts[0]
+
+        return None
     except Exception:
         return None
 
@@ -77,25 +175,46 @@ def make_chunk_id(path: Path, idx: int, text: str) -> str:
 
 def ingest_path(path: Path, docs_root: Path) -> list[DocumentChunk]:
     raw = extract_text_with_fallback(path)
-    pieces = chunk_text(raw.text)
+
+    # Behåll nuvarande enkla beteende här i fas 1;
+    # extraktionsfel hanteras senare i fas 1.5/2.
+    if not raw.text.strip():
+        return []
+
+    document_title = infer_document_title(raw)
+    category = infer_category(path, docs_root)
+
+    sections = split_markdown_sections(raw.text)
 
     chunks: list[DocumentChunk] = []
-    for idx, piece in enumerate(pieces):
-        meta = ChunkMetadata(
-            source_path=str(path),
-            file_name=path.name,
-            document_title=raw.title,
-            category=infer_category(path, docs_root),
-            section_title=None,
-            page_number=None,
-            document_date=None,
-            chunk_index=idx,
+    global_idx = 0
+
+    for section in sections:
+        pieces = chunk_text(
+            section.text,
+            chunk_size=settings.chunk_size,
+            overlap=settings.chunk_overlap,
         )
-        chunks.append(
-            DocumentChunk(
-                chunk_id=make_chunk_id(path, idx, piece),
-                text=piece,
-                metadata=meta,
+
+        for piece in pieces:
+            meta = ChunkMetadata(
+                source_path=str(path),
+                file_name=path.name,
+                document_title=document_title,
+                category=category,
+                section_title=section.title,
+                section_level=section.level,
+                page_number=None,
+                document_date=None,
+                chunk_index=global_idx,
             )
-        )
+            chunks.append(
+                DocumentChunk(
+                    chunk_id=make_chunk_id(path, global_idx, piece),
+                    text=piece,
+                    metadata=meta,
+                )
+            )
+            global_idx += 1
+
     return chunks

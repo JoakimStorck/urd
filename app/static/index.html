@@ -201,6 +201,8 @@
               meta.textContent =
                 `score=${Number(s.score).toFixed(3)} | ` +
                 `chunk=${s.metadata.chunk_index}` +
+                (s.metadata.section_title ? ` | rubrik=${s.metadata.section_title}` : "") +
+                (s.metadata.section_level != null ? ` | nivå=${s.metadata.section_level}` : "") +
                 (s.metadata.page_number != null ? ` | sida=${s.metadata.page_number}` : "");
               d.appendChild(meta);
     
