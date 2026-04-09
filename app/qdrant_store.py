@@ -1,8 +1,9 @@
+import uuid
+
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from app.config import settings
 from app.schemas import DocumentChunk, SourceHit, ChunkMetadata
-
 
 class QdrantStore:
     def __init__(self, vector_size: int) -> None:
@@ -33,9 +34,12 @@ class QdrantStore:
                 "document_date": chunk.metadata.document_date,
                 "chunk_index": chunk.metadata.chunk_index,
             }
+
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, chunk.chunk_id))
+
             points.append(
                 PointStruct(
-                    id=chunk.chunk_id,
+                    id=point_id,
                     vector=vector,
                     payload=payload,
                 )
