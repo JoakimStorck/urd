@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "docchat"
+version = "0.1.0"
+description = "Lokal dokumentchat för IIT"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi",
+  "uvicorn",
+  "typer",
+  "python-dotenv",
+  "pydantic",
+  "ollama",
+  "sentence-transformers",
+  "qdrant-client",
+  "docling",
+]
+
+[project.scripts]
+docchat = "app.cli:main"
+
+[tool.setuptools]
+packages = ["app"]

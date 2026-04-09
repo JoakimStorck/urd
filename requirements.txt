@@ -8,3 +8,4 @@ pydantic
 docling
 python-multipart
 ollama
+typer

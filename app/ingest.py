@@ -7,8 +7,7 @@ import re
 
 from docling.document_converter import DocumentConverter
 
-from app.schemas import DocumentChunk, ChunkMetadata
-from app.config import settings
+from app.schemas import DocumentChunk, ChunkMetadata, SectionSemanticMetadata
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".xlsx"}
 _converter = DocumentConverter()
@@ -27,6 +26,7 @@ class StructuredSection:
     level: int | None
     text: str
     order: int
+    semantic: SectionSemanticMetadata | None = None
 
 
 def iter_document_paths(root: Path) -> list[Path]:
@@ -34,6 +34,12 @@ def iter_document_paths(root: Path) -> list[Path]:
         p for p in root.rglob("*")
         if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
     ]
+
+
+def compute_source_fingerprint(path: Path) -> str:
+    st = path.stat()
+    raw = f"{path}:{st.st_size}:{st.st_mtime_ns}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
 def extract_text_with_fallback(path: Path) -> RawDocument:
@@ -57,7 +63,6 @@ def extract_text_with_fallback(path: Path) -> RawDocument:
 
 def normalize_chunk_text(text: str) -> str:
     lines = [line.rstrip() for line in text.splitlines()]
-    # Behåll radbrytningar men städa bort upprepade tomrader
     cleaned = "\n".join(lines)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
@@ -125,7 +130,6 @@ def split_markdown_sections(md: str) -> list[StructuredSection]:
     if sections:
         return sections
 
-    # Fallback: dela på dubbla radbrytningar om markdownrubriker saknas
     blocks = [b.strip() for b in re.split(r"\n\s*\n", md) if b.strip()]
     return [
         StructuredSection(
@@ -155,11 +159,9 @@ def infer_category(path: Path, docs_root: Path) -> str | None:
         rel = path.relative_to(docs_root)
         parts = rel.parts
 
-        # docs / IIT-lokala regler och rutiner / Forskarutbildning / fil.pdf
-        if len(parts) >= 3 and parts[0] == "IIT-lokala regler och rutiner":
+        if len(parts) >= 3 and parts[0] in {"IIT-lokala regler och rutiner", "IIT-lokala-regler-och-rutiner"}:
             return parts[1]
 
-        # fallback
         if len(parts) > 1:
             return parts[0]
 
@@ -173,30 +175,22 @@ def make_chunk_id(path: Path, idx: int, text: str) -> str:
     return h
 
 
-def ingest_path(path: Path, docs_root: Path) -> list[DocumentChunk]:
-    raw = extract_text_with_fallback(path)
-
-    # Behåll nuvarande enkla beteende här i fas 1;
-    # extraktionsfel hanteras senare i fas 1.5/2.
-    if not raw.text.strip():
-        return []
-
-    document_title = infer_document_title(raw)
-    category = infer_category(path, docs_root)
-
-    sections = split_markdown_sections(raw.text)
-
+def build_chunks_from_sections(
+    path: Path,
+    document_title: str | None,
+    category: str | None,
+    sections: list[StructuredSection],
+    source_fingerprint: str,
+) -> list[DocumentChunk]:
     chunks: list[DocumentChunk] = []
     global_idx = 0
 
     for section in sections:
-        pieces = chunk_text(
-            section.text,
-            chunk_size=settings.chunk_size,
-            overlap=settings.chunk_overlap,
-        )
+        pieces = chunk_text(section.text)
 
         for piece in pieces:
+            semantic = section.semantic or SectionSemanticMetadata()
+
             meta = ChunkMetadata(
                 source_path=str(path),
                 file_name=path.name,
@@ -206,6 +200,18 @@ def ingest_path(path: Path, docs_root: Path) -> list[DocumentChunk]:
                 section_level=section.level,
                 page_number=None,
                 document_date=None,
+                document_type=semantic.document_type,
+                keywords=semantic.keywords,
+                roles=semantic.roles,
+                actions=semantic.actions,
+                time_markers=semantic.time_markers,
+                applies_to=semantic.applies_to,
+                section_summary=semantic.summary,
+                source_fingerprint=source_fingerprint,
+                semantic_enriched=False,
+                semantic_model=None,
+                semantic_version=None,
+                semantic_source_hash=None,
                 chunk_index=global_idx,
             )
             chunks.append(
@@ -218,3 +224,27 @@ def ingest_path(path: Path, docs_root: Path) -> list[DocumentChunk]:
             global_idx += 1
 
     return chunks
+
+
+def ingest_path(
+    path: Path,
+    docs_root: Path,
+) -> list[DocumentChunk]:
+    raw = extract_text_with_fallback(path)
+
+    if not raw.text.strip():
+        return []
+
+    document_title = infer_document_title(raw)
+    category = infer_category(path, docs_root)
+    source_fingerprint = compute_source_fingerprint(path)
+
+    sections = split_markdown_sections(raw.text)
+
+    return build_chunks_from_sections(
+        path=path,
+        document_title=document_title,
+        category=category,
+        sections=sections,
+        source_fingerprint=source_fingerprint,
+    )
