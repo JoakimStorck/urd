@@ -18,6 +18,7 @@ dependencies = [
   "sentence-transformers",
   "qdrant-client",
   "docling",
+  "rank-bm25",
 ]
 
 [project.scripts]
@@ -25,3 +26,7 @@ docchat = "app.cli:main"
 
 [tool.setuptools]
 packages = ["app"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+app = ["static/*"]
