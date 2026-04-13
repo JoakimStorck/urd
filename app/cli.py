@@ -1,28 +1,36 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import json
+import os
+
+# Försök tvinga Typer till enkel text-help utan Rich-paneler.
+# Måste sättas före import av typer.
+os.environ["TYPER_USE_RICH"] = "0"
+
 import hashlib
+import json
 from collections import defaultdict
 from pathlib import Path
-import requests
 
+import requests
 import typer
 import uvicorn
 
 from app.config import settings
 from app.embeddings import Embedder
-from app.ingest import iter_document_paths, ingest_path, compute_source_fingerprint
+from app.ingest import compute_source_fingerprint, ingest_path, iter_document_paths
 from app.preprocess_llm import SectionMetadataExtractor
 from app.qdrant_store import QdrantStore
 from app.retrieval import RagService
-from app.schemas import SourceHit, ChatResponse
+from app.schemas import ChatResponse, SourceHit
 
 app = typer.Typer(
     help="Lokal dokumentchat för IIT-dokument.",
     no_args_is_help=True,
     add_completion=False,
+    rich_markup_mode=None,
 )
+
 
 def _ask_via_server(question: str, base_url: str) -> dict:
     url = base_url.rstrip("/") + "/chat"
@@ -37,6 +45,7 @@ def _ask_via_server(question: str, base_url: str) -> dict:
         )
     return resp.json()
 
+
 def _server_is_available(base_url: str) -> bool:
     try:
         url = base_url.rstrip("/") + "/health"
@@ -44,7 +53,8 @@ def _server_is_available(base_url: str) -> bool:
         return resp.ok
     except Exception:
         return False
-        
+
+
 def _build_store_and_embedder() -> tuple[QdrantStore, Embedder]:
     embedder = Embedder()
     dim = len(embedder.embed_query("test"))
@@ -54,8 +64,10 @@ def _build_store_and_embedder() -> tuple[QdrantStore, Embedder]:
 
 def _build_store_only() -> QdrantStore:
     # Samlingen finns redan efter ingest/reset-index.
-    # Dummy-dimension används bara för init; _ensure_collection skapar inget nytt om samlingen finns.
+    # Dummy-dimension används bara för init; _ensure_collection skapar inget nytt
+    # om samlingen redan finns.
     return QdrantStore(vector_size=1024)
+
 
 def _is_qdrant_lock_error(exc: Exception) -> bool:
     msg = str(exc)
@@ -64,7 +76,12 @@ def _is_qdrant_lock_error(exc: Exception) -> bool:
         and "already accessed by another instance of Qdrant client" in msg
     )
 
-def _print_response(response, show_sources: bool, show_debug: bool) -> None:
+
+def _print_response(
+    response: ChatResponse,
+    show_sources: bool,
+    show_debug: bool,
+) -> None:
     typer.echo("")
     typer.echo("Svar")
     typer.echo("----")
@@ -98,34 +115,92 @@ def _print_response(response, show_sources: bool, show_debug: bool) -> None:
         typer.echo("Debug")
         typer.echo("-----")
         typer.echo(json.dumps(response.debug, ensure_ascii=False, indent=2))
-        
-@app.command("serve")
+
+
+@app.command(
+    "serve",
+    help="Starta lokal API-server för dokumentchatten.",
+)
 def serve(
     host: str = typer.Option("127.0.0.1", help="Host för webbservern."),
     port: int = typer.Option(8000, help="Port för webbservern."),
-    reload: bool = typer.Option(True, help="Kör med autoreload."),
+    autoreload: bool = typer.Option(
+        True,
+        "--autoreload/--no-autoreload",
+        help="Ladda om servern automatiskt vid kodändringar.",
+    ),
 ) -> None:
-    uvicorn.run("app.api:app", host=host, port=port, reload=reload)
+    """
+    Starta den lokala backend-servern för API och webbgränssnitt.
+    """
+    uvicorn.run("app.api:app", host=host, port=port, reload=autoreload)
 
 
-@app.command("reset-index")
+@app.command(
+    "reset-index",
+    help="Återskapa sökindexet i Qdrant från grunden.",
+)
 def reset_index() -> None:
-    store, _ = _build_store_and_embedder()
-    store.recreate_collection()
-    typer.echo(f"Återskapade samlingen '{settings.collection_name}' i {settings.qdrant_path}")
+    """
+    Ta bort nuvarande samling och skapa om indexet.
+    """
+    try:
+        store, _ = _build_store_and_embedder()
+        store.recreate_collection()
+    except Exception as exc:
+        if _is_qdrant_lock_error(exc):
+            raise typer.Exit(
+                typer.echo(
+                    "Qdrant-lagringen är låst av en annan process. "
+                    "Stäng eventuell körande server eller annan process som använder indexet."
+                )
+            )
+        raise
+
+    typer.echo(
+        f"Återskapade samlingen '{settings.collection_name}' i {settings.qdrant_path}"
+    )
 
 
-@app.command("ingest")
+@app.command(
+    "ingest",
+    help="Läs in dokument från disk och indexera nya eller ändrade filer.",
+)
 def ingest(
-    docs_path: Path | None = typer.Option(None, "--docs-path"),
-    force: bool = typer.Option(False, "--force", help="Kör om alla dokument oavsett fingerprint."),
-    sync_delete: bool = typer.Option(False, "--sync-delete", help="Ta bort indexerade dokument som inte längre finns på disk."),
+    docs_path: Path | None = typer.Option(
+        None,
+        "--docs-path",
+        help="Alternativ dokumentkatalog att läsa från.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Kör om alla dokument oavsett fingerprint.",
+    ),
+    sync_delete: bool = typer.Option(
+        False,
+        "--sync-delete",
+        help="Ta bort indexerade dokument som inte längre finns på disk.",
+    ),
 ) -> None:
+    """
+    Läs dokument från disk, extrahera innehåll och indexera chunkar i Qdrant.
+    """
     root = docs_path or settings.docs_path
     if not root.exists():
         raise typer.BadParameter(f"Dokumentkatalog finns inte: {root}")
 
-    store, embedder = _build_store_and_embedder()
+    try:
+        store, embedder = _build_store_and_embedder()
+    except Exception as exc:
+        if _is_qdrant_lock_error(exc):
+            typer.echo(
+                "Qdrant-lagringen är låst av en annan process. "
+                "Stäng eventuell körande server eller annan process som använder indexet."
+            )
+            raise typer.Exit(code=1)
+        raise
+
     indexed_docs = store.get_indexed_documents()
     fs_paths = iter_document_paths(root)
     fs_map = {str(p): compute_source_fingerprint(p) for p in fs_paths}
@@ -185,10 +260,20 @@ def ingest(
     )
 
 
-@app.command("reindex")
+@app.command(
+    "reindex",
+    help="Nollställ indexet och bygg upp det igen från dokument på disk.",
+)
 def reindex(
-    docs_path: Path | None = typer.Option(None, "--docs-path"),
+    docs_path: Path | None = typer.Option(
+        None,
+        "--docs-path",
+        help="Alternativ dokumentkatalog att läsa från.",
+    ),
 ) -> None:
+    """
+    Kör reset-index följt av ingest.
+    """
     reset_index()
     ingest(docs_path=docs_path, force=False, sync_delete=False)
 
@@ -202,13 +287,42 @@ def _section_text_hash(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
 
-@app.command("enrich")
+@app.command(
+    "enrich",
+    help="Berika sektioner i indexet med semantisk metadata.",
+)
 def enrich(
-    batch_size: int = typer.Option(256),
-    limit_sections: int | None = typer.Option(None, "--limit-sections"),
-    force: bool = typer.Option(False, "--force", help="Annotera alla sektioner igen."),
+    batch_size: int = typer.Option(
+        256,
+        help="Antal chunkar att läsa per batch från indexet.",
+    ),
+    limit_sections: int | None = typer.Option(
+        None,
+        "--limit-sections",
+        help="Begränsa antal sektioner som analyseras.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Annotera alla sektioner igen.",
+    ),
 ) -> None:
-    store = _build_store_only()
+    """
+    Läs indexerade sektioner och skriv tillbaka semantisk metadata till Qdrant.
+    """
+    import time
+
+    try:
+        store = _build_store_only()
+    except Exception as exc:
+        if _is_qdrant_lock_error(exc):
+            typer.echo(
+                "Qdrant-lagringen är låst av en annan process. "
+                "Stäng eventuell körande server eller annan process som använder indexet."
+            )
+            raise typer.Exit(code=1)
+        raise
+
     extractor = SectionMetadataExtractor()
 
     typer.echo("Läser indexerade chunkar från Qdrant ...")
@@ -220,10 +334,12 @@ def enrich(
         grouped[_section_key(hit)].append(hit)
 
     section_items = list(grouped.items())
-    section_items.sort(key=lambda item: (
-        item[0][0],
-        item[1][0].metadata.chunk_index if item[1] else 0,
-    ))
+    section_items.sort(
+        key=lambda item: (
+            item[0][0],
+            item[1][0].metadata.chunk_index if item[1] else 0,
+        )
+    )
 
     if limit_sections is not None:
         section_items = section_items[:limit_sections]
@@ -232,9 +348,15 @@ def enrich(
     skipped = 0
     processed = 0
 
-    typer.echo(f"Antal sektioner att pröva: {len(section_items)}")
+    total_sections = len(section_items)
+    typer.echo(f"Antal sektioner att pröva: {total_sections}")
 
-    for idx, ((source_path, section_title, section_level), group_hits) in enumerate(section_items, start=1):
+    t_start = time.perf_counter()
+
+    for idx, ((source_path, section_title, _section_level), group_hits) in enumerate(
+        section_items,
+        start=1,
+    ):
         group_hits.sort(key=lambda h: h.metadata.chunk_index)
         section_text = "\n\n".join(h.text for h in group_hits if h.text.strip())
         if not section_text.strip():
@@ -255,11 +377,28 @@ def enrich(
             skipped += 1
             continue
 
+        t_section = time.perf_counter()
+
         semantic = extractor.extract(
             document_title=first_meta.document_title,
             section_title=section_title,
             text=section_text,
         )
+
+        dt_section = time.perf_counter() - t_section
+        elapsed = time.perf_counter() - t_start
+
+        # Uppskatta återstående tid baserat på genomsnitt per processad sektion
+        avg_per_section = elapsed / processed if processed > 0 else dt_section
+        remaining_to_check = total_sections - idx
+        eta_seconds = remaining_to_check * avg_per_section
+
+        if eta_seconds >= 3600:
+            eta_str = f"{eta_seconds / 3600:.1f}h"
+        elif eta_seconds >= 60:
+            eta_str = f"{eta_seconds / 60:.0f}min"
+        else:
+            eta_str = f"{eta_seconds:.0f}s"
 
         payload_updates = {
             "document_type": semantic.document_type,
@@ -280,27 +419,55 @@ def enrich(
 
         processed += 1
         typer.echo(
-            f"[{idx}/{len(section_items)}] "
-            f"{Path(source_path).name} | rubrik={section_title!r} | chunkar={len(group_hits)}"
+            f"[{idx}/{total_sections}] "
+            f"{Path(source_path).name} | rubrik={section_title!r} | "
+            f"chunkar={len(group_hits)} | {dt_section:.1f}s | ETA {eta_str}"
         )
+
+    t_total = time.perf_counter() - t_start
 
     typer.echo("Skriver tillbaka metadata till Qdrant ...")
     store.bulk_update_chunk_metadata(updates)
 
+    if t_total >= 3600:
+        total_str = f"{t_total / 3600:.1f}h"
+    elif t_total >= 60:
+        total_str = f"{t_total / 60:.1f}min"
+    else:
+        total_str = f"{t_total:.0f}s"
+
     typer.echo("")
     typer.echo(
         f"Klart. Annoterade sektioner: {processed}, hoppade över: {skipped}, "
-        f"uppdaterade chunkar: {len(updates)}"
+        f"uppdaterade chunkar: {len(updates)}, total tid: {total_str}"
     )
 
 
-@app.command("backfill-enrich-status")
+@app.command(
+    "backfill-enrich-status",
+    help="Återskapa enrich-status utifrån befintlig semantisk metadata.",
+)
 def backfill_enrich_status(
-    batch_size: int = typer.Option(256),
+    batch_size: int = typer.Option(
+        256,
+        help="Antal chunkar att läsa per batch från indexet.",
+    ),
 ) -> None:
-    store = _build_store_only()
-    hits = store.iter_all_chunks(batch_size=batch_size)
+    """
+    Sätt semantic_enriched på redan indexerade chunkar utifrån befintliga fält.
+    """
+    try:
+        store = _build_store_only()
+    except Exception as exc:
+        if _is_qdrant_lock_error(exc):
+            typer.echo(
+                "Qdrant-lagringen är låst av en annan process. "
+                "Stäng eventuell körande server eller annan process som använder indexet."
+            )
+            raise typer.Exit(code=1)
+        raise
 
+    hits = store.iter_all_chunks(batch_size=batch_size)
     updates: list[tuple[str, dict]] = []
 
     for hit in hits:
@@ -315,31 +482,52 @@ def backfill_enrich_status(
             or m.section_summary
         )
 
-        updates.append((
-            hit.chunk_id,
-            {
-                "semantic_enriched": has_semantic,
-            },
-        ))
+        updates.append(
+            (
+                hit.chunk_id,
+                {
+                    "semantic_enriched": has_semantic,
+                },
+            )
+        )
 
     typer.echo("Skriver enrich-status till Qdrant ...")
     store.bulk_update_chunk_metadata(updates)
     typer.echo(f"Klart. Uppdaterade chunkar: {len(updates)}")
 
-@app.command("stats")
+
+@app.command(
+    "stats",
+    help="Visa översikt över dokument på disk, indexerade chunkar, sektioner och enrich-status.",
+)
 def stats(
-    docs_path: Path | None = typer.Option(None, "--docs-path"),
-    batch_size: int = typer.Option(256),
+    docs_path: Path | None = typer.Option(
+        None,
+        "--docs-path",
+        help="Alternativ dokumentkatalog att jämföra mot.",
+    ),
+    batch_size: int = typer.Option(
+        256,
+        help="Antal chunkar att läsa per batch från indexet.",
+    ),
 ) -> None:
     """
-    Visa översikt över dokument på disk, indexerade chunkar/sektioner
-    och enrich-status.
+    Visa status för dokument på disk och innehåll i indexet.
     """
     root = docs_path or settings.docs_path
     if not root.exists():
         raise typer.BadParameter(f"Dokumentkatalog finns inte: {root}")
 
-    store = _build_store_only()
+    try:
+        store = _build_store_only()
+    except Exception as exc:
+        if _is_qdrant_lock_error(exc):
+            typer.echo(
+                "Qdrant-lagringen är låst av en annan process. "
+                "Stäng eventuell körande server eller annan process som använder indexet."
+            )
+            raise typer.Exit(code=1)
+        raise
 
     fs_paths = iter_document_paths(root)
     fs_map = {str(p): compute_source_fingerprint(p) for p in fs_paths}
@@ -435,19 +623,44 @@ def stats(
         if len(missing_docs) > 20:
             typer.echo(f"... och {len(missing_docs) - 20} till")
 
-@app.command("ask")
+
+@app.command(
+    "ask",
+    help="Ställ en fråga till dokumentchatten och visa svar med källor.",
+)
 def ask(
-    question: str = typer.Argument(...),
-    show_sources: bool = typer.Option(True, "--sources/--no-sources"),
-    show_debug: bool = typer.Option(False, "--debug"),
-    via_server: bool = typer.Option(False, "--via-server", help="Skicka frågan till körande docchat-server."),
-    server_url: str = typer.Option("http://127.0.0.1:8000", "--server-url", help="Bas-URL till docchat-servern."),
+    question: str = typer.Argument(
+        ...,
+        help="Frågan som ska ställas till dokumentchatten.",
+    ),
+    show_sources: bool = typer.Option(
+        True,
+        "--sources/--no-sources",
+        help="Visa eller dölj källor i svaret.",
+    ),
+    show_debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="Visa debug-information om retrieval och backend.",
+    ),
+    via_server: bool = typer.Option(
+        False,
+        "--via-server",
+        help="Skicka frågan till körande docchat-server.",
+    ),
+    server_url: str = typer.Option(
+        "http://127.0.0.1:8000",
+        "--server-url",
+        help="Bas-URL till docchat-servern.",
+    ),
 ) -> None:
-    response = None
+    """
+    Ställ en fråga till dokumentchatten.
 
-    use_server = via_server or _server_is_available(server_url)
-
-    if use_server:
+    Frågan skickas till en körande server om sådan finns eller om --via-server
+    används. Annars körs retrieval och svarsgenerering lokalt i processen.
+    """
+    if via_server or _server_is_available(server_url):
         if show_debug:
             typer.echo(f"Backend: server ({server_url})")
         payload = _ask_via_server(question, server_url)

@@ -68,6 +68,29 @@ def normalize_chunk_text(text: str) -> str:
     return cleaned.strip()
 
 
+def _build_context_prefix(
+    document_title: str | None,
+    section_title: str | None,
+) -> str:
+    """
+    Bygg ett kontextuellt prefix som bäddas in i chunk-texten.
+
+    Detta gör att embeddings fångar dokumentets kontext, inte bara
+    den isolerade textbiten. En chunk som säger "detta gäller" får
+    nu med sig *vad* och *var* i sin vektorrepresentation.
+    """
+    parts = []
+    if document_title:
+        parts.append(f"Dokument: {document_title}")
+    if section_title:
+        parts.append(f"Avsnitt: {section_title}")
+
+    if not parts:
+        return ""
+
+    return "\n".join(parts) + "\n---\n"
+
+
 def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 150) -> list[str]:
     text = normalize_chunk_text(text)
     if not text:
@@ -187,9 +210,13 @@ def build_chunks_from_sections(
 
     for section in sections:
         pieces = chunk_text(section.text)
+        context_prefix = _build_context_prefix(document_title, section.title)
 
         for piece in pieces:
             semantic = section.semantic or SectionSemanticMetadata()
+
+            # Bädda in kontextuellt prefix i den text som indexeras
+            contextualized_text = context_prefix + piece
 
             meta = ChunkMetadata(
                 source_path=str(path),
@@ -217,7 +244,7 @@ def build_chunks_from_sections(
             chunks.append(
                 DocumentChunk(
                     chunk_id=make_chunk_id(path, global_idx, piece),
-                    text=piece,
+                    text=contextualized_text,
                     metadata=meta,
                 )
             )

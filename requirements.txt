@@ -9,3 +9,4 @@ docling
 python-multipart
 ollama
 typer
+rank-bm25
