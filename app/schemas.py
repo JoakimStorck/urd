@@ -54,9 +54,11 @@ class SourceHit(BaseModel):
 
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=3)
+    session_id: str | None = None
 
 
 class ChatResponse(BaseModel):
     answer: str
     sources: list[SourceHit]
+    session_id: str | None = None
     debug: dict[str, Any] | None = None

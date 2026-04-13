@@ -624,6 +624,18 @@ def stats(
             typer.echo(f"... och {len(missing_docs) - 20} till")
 
 
+"""
+Uppdatering av ask-kommandot i cli.py.
+
+Ersätt den befintliga ask-funktionen med denna version.
+Lägg till modulvariabel efter app = typer.Typer(...):
+_cli_active_session_id: str | None = None
+"""
+
+
+_cli_active_session_id: str | None = None
+
+
 @app.command(
     "ask",
     help="Ställ en fråga till dokumentchatten och visa svar med källor.",
@@ -646,25 +658,62 @@ def ask(
     via_server: bool = typer.Option(
         False,
         "--via-server",
-        help="Skicka frågan till körande docchat-server.",
+        help="Skicka frågan till en docchat-server.",
     ),
     server_url: str = typer.Option(
         "http://127.0.0.1:8000",
         "--server-url",
-        help="Bas-URL till docchat-servern.",
+        help="URL till docchat-servern. Aktiverar server-läge automatiskt.",
+    ),
+    new_session: bool = typer.Option(
+        False,
+        "--new-session",
+        help="Starta en ny session (glöm samtalshistorik).",
     ),
 ) -> None:
     """
     Ställ en fråga till dokumentchatten.
 
-    Frågan skickas till en körande server om sådan finns eller om --via-server
-    används. Annars körs retrieval och svarsgenerering lokalt i processen.
+    Följdfrågor fungerar automatiskt inom samma session via servern.
+    Använd --new-session för att börja om.
+
+    Exempel:
+      docchat ask "Vad gäller för externa forskningsansökningar?"
+      docchat ask "Berätta mer om beslutsmötet" --via-server
+      docchat ask "Ny fråga" --via-server --server-url http://100.96.76.110:8000
+      docchat ask "Annat ämne" --new-session --via-server
     """
-    if via_server or _server_is_available(server_url):
+    global _cli_active_session_id
+
+    default_url = "http://127.0.0.1:8000"
+
+    if new_session:
+        _cli_active_session_id = None
+
+    # --server-url med icke-default värde aktiverar server-läge
+    use_server = via_server or server_url != default_url or _server_is_available(default_url)
+
+    if use_server:
         if show_debug:
             typer.echo(f"Backend: server ({server_url})")
-        payload = _ask_via_server(question, server_url)
-        response = ChatResponse.model_validate(payload)
+
+        request_payload = {"question": question}
+        if _cli_active_session_id:
+            request_payload["session_id"] = _cli_active_session_id
+
+        resp = requests.post(
+            server_url.rstrip("/") + "/chat",
+            json=request_payload,
+            timeout=300,
+        )
+        if not resp.ok:
+            raise RuntimeError(f"Serverfel {resp.status_code}: {resp.text}")
+
+        data = resp.json()
+        response = ChatResponse.model_validate(data)
+
+        if response.session_id:
+            _cli_active_session_id = response.session_id
     else:
         if show_debug:
             typer.echo("Backend: local")
