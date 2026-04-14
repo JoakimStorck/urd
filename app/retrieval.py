@@ -17,6 +17,7 @@ from app.embeddings import Embedder
 from app.qdrant_store import QdrantStore
 from app.llm import LocalLLM
 from app.prompting import build_prompt
+from app.synthesis import synthesize
 from app.schemas import ChatResponse, SourceHit
 
 
@@ -75,8 +76,6 @@ class BM25Index:
 
     def __init__(self, hits: list[SourceHit]) -> None:
         self.hits = hits
-        corpus = [_tokenize_bm25(h.text) for h in hits]
-        self.bm25 = BM25Okapi(corpus)
         self._id_to_idx = {h.chunk_id: i for i, h in enumerate(hits)}
 
         # Dokumentindex för snabb expansion
@@ -84,8 +83,17 @@ class BM25Index:
         for h in hits:
             self._by_source.setdefault(h.metadata.source_path, []).append(h)
 
+        # BM25 kraschar på tomt corpus — skjut upp skapandet
+        if hits:
+            corpus = [_tokenize_bm25(h.text) for h in hits]
+            self.bm25 = BM25Okapi(corpus)
+        else:
+            self.bm25 = None
+
     def top_k(self, question: str, k: int = 10) -> list[SourceHit]:
         """Returnera de k bästa BM25-träffarna som SourceHit."""
+        if self.bm25 is None:
+            return []
         tokens = _tokenize_bm25(question)
         if not tokens:
             return []
@@ -310,15 +318,28 @@ class RagService:
                 },
             )
 
-        # 7. Generera svar
-        prompt = build_prompt(question, hits)
+        # 7. Tvåstegssyntes: evidensextraktion → svarsformulering
         t6 = time.perf_counter()
 
-        answer = self.llm.generate(prompt)
+        synthesis_result = synthesize(question, hits, self.llm)
         t7 = time.perf_counter()
 
+        # Bygg debug-info för syntesen
+        synthesis_debug = {
+            "used_fallback": synthesis_result.used_fallback,
+        }
+        if synthesis_result.fallback_reason:
+            synthesis_debug["fallback_reason"] = synthesis_result.fallback_reason
+        if synthesis_result.evidence is not None:
+            synthesis_debug["num_extracted"] = len(synthesis_result.evidence.extracted)
+            synthesis_debug["not_found"] = synthesis_result.evidence.not_found
+            if synthesis_result.evidence.raw_json:
+                synthesis_debug["evidence_json"] = synthesis_result.evidence.raw_json
+        if synthesis_result.timing_s:
+            synthesis_debug["timing_s"] = synthesis_result.timing_s
+
         return ChatResponse(
-            answer=answer,
+            answer=synthesis_result.answer,
             sources=hits,
             debug={
                 "top_k": settings.top_k,
@@ -329,17 +350,16 @@ class RagService:
                 "num_reranked": len(all_reranked),
                 "num_hits": len(hits),
                 "abstained": False,
+                "synthesis": synthesis_debug,
                 "timing_s": {
                     "embed_query": round(t1 - t0, 3),
                     "search": round(t2 - t1, 3),
                     "bm25_and_merge": round(t3 - t2, 3),
                     "rerank_1": round(t4 - t3, 3),
                     "expand_and_rerank_2": round(t5 - t4, 3),
-                    "build_prompt": round(t6 - t5, 3),
-                    "generate": round(t7 - t6, 3),
+                    "synthesize": round(t7 - t6, 3),
                     "total": round(t7 - t0, 3),
                 },
-                "prompt_chars": len(prompt),
                 "rerank_top": sorted(
                     rerank_debug,
                     key=lambda d: d.get("cross_encoder_score", -999),
