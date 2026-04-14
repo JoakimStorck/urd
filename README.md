@@ -1,258 +1,224 @@
-# docchat
+# URD
 
-Lokal AI-baserad dokumentchat för interna styrdokument.
+Local AI-powered document assistant for internal governance documents.
 
-`docchat` är en tunn lokal RAG-lösning för att läsa interna dokument, indexera dem och besvara frågor med tydlig källvisning. Fokus ligger på administrativa styrdokument, rutiner, beslut och instruktioner. Systemet är byggt för lokal körning på en enskild maskin och använder lokala modeller och lokal lagring.
+URD reads internal policy documents, indexes their content, and answers questions with source references. It is built for local operation on a single machine using open models and local storage. No data leaves the machine.
 
-Projektet försöker inte vara en allmän chattassistent. Det är en avgränsad dokumentassistent med källnära svar.
-
----
-
-## Innehåll
-
-- [Syfte](#syfte)
-- [Arkitektur](#arkitektur)
-- [Dokumentflöde](#dokumentflöde)
-- [Installation](#installation)
-- [Konfiguration](#konfiguration)
-- [CLI](#cli)
-- [Köra tjänsten manuellt](#köra-tjänsten-manuellt)
-- [Status](#status)
-- [Avgränsningar](#avgränsningar)
-- [Frågesvarspolicy](#frågesvarspolicy)
-- [Nästa steg](#nästa-steg)
+The name refers to the Norse Norn who held knowledge of all that has happened. It resembles "ord" (Swedish for "word") and has a Unix-like quality: `urd ask "..."`. It could also be an acronym for Unified Retrieval and Deliberation.
 
 ---
 
-## Syfte
+## What it does
 
-Målet är att demonstrera hur en lokal AI-baserad dokumentassistent kan användas för att läsa interna styrdokument, hitta relevanta avsnitt, sammanställa svar på svenska och visa vilka källor svaret bygger på.
+You point URD at a folder of internal documents — policies, procedures, delegation orders, meeting minutes. It extracts text, indexes it, and lets you ask questions in plain language. Answers cite specific sources so you can verify them.
+
+URD is not a general-purpose chat assistant. It is a document assistant that stays close to its sources.
 
 ---
 
-## Arkitektur
+## How it works
 
-Systemet består av en lättviktig lokal kedja:
+URD uses a retrieval-augmented generation (RAG) architecture with several layers designed to handle the real difficulty of internal documents: users ask in their own everyday language, not in the terminology the documents happen to use.
 
-| Komponent | Roll |
+**Ingestion.** Documents (PDF, DOCX, XLSX) are extracted via Docling, split into sections by heading structure, and chunked. Each chunk is prefixed with its document title and section heading before embedding, so the vector representation carries context — a chunk that says "this applies" knows what "this" refers to.
+
+**Hybrid retrieval.** Questions are matched against the index using both semantic search (multilingual-e5-large via Qdrant) and BM25 keyword search. BM25 catches exact terminology that semantic search misses. The two candidate pools are merged.
+
+**Cross-encoder reranking.** A multilingual cross-encoder (mmarco-mMiniLMv2) scores each candidate against the question. Candidates with negative scores are filtered out. This replaced 550 lines of hand-written heuristic reranking that could not generalise across question types.
+
+**Document expansion.** For top-scoring documents, remaining chunks from the same document are retrieved and reranked. This ensures that when a document is relevant as a whole — a complete procedure with delegation rules, process flows and meeting formats — the system finds the practical details, not just the chunk that happened to match.
+
+**Two-stage synthesis.** The LLM generates answers in two steps. First, it extracts evidence: short paraphrases tied to specific sources, with a confidence marker. Second, it formulates the answer from the extracted evidence only. This reduces inverted logic, fabrication and half-translation compared to single-step generation. If evidence extraction fails, the system falls back to single-step generation so the user always gets an answer.
+
+**Conversation memory.** Follow-up questions are rewritten into standalone questions using conversation context, so "tell me more about the decision meeting" works after asking about research applications.
+
+---
+
+## Architecture
+
+| Component | Role |
 |---|---|
-| [Docling](https://github.com/DS4SD/docling) | Dokumentextraktion (PDF, DOCX, XLSX) |
-| [Sentence Transformers](https://www.sbert.net/) | Lokala embeddings |
-| [Qdrant](https://qdrant.tech/) | Lokal vektordatabas |
-| [Ollama](https://ollama.com/) | Lokal modellkörning |
-| FastAPI | Lokal API-tjänst |
-| Webbgränssnitt | Chat och källvisning |
+| [Docling](https://github.com/DS4SD/docling) | Document extraction (PDF, DOCX, XLSX) |
+| [Sentence Transformers](https://www.sbert.net/) | Local embeddings and cross-encoder reranking |
+| [Qdrant](https://qdrant.tech/) | Local vector database |
+| [Ollama](https://ollama.com/) | Local LLM inference |
+| FastAPI | API server |
+| Web UI | Chat interface with source display |
 
-### Utvecklingslinje
+### Models
 
-Projektet följer en tydlig ordning:
+The system uses four models, each chosen for its specific role:
 
-1. **Deterministisk strukturutvinning** — dokument exporteras till markdown, delas i sektioner utifrån rubriker, chunkas inom sektion.
-2. **Semantisk metadataextraktion** — lokal LLM annoterar varje sektion med strukturerad metadata (dokumenttyp, roller, begrepp, tidsmarkörer, sammanfattning).
-3. **Retrieval och svarsgenerering** — relevanta segment hämtas ur Qdrant, lokal modell genererar svar utifrån återfunna källor.
+| Function | Model | Why |
+|---|---|---|
+| Embeddings | intfloat/multilingual-e5-large | Multilingual model that handles Swedish well. Encodes both queries and chunks for semantic search. |
+| Reranking | jeffwan/mmarco-mMiniLMv2-L12-H384-v1 | Multilingual cross-encoder. Chosen after the English-only model (ms-marco-MiniLM) failed to distinguish Swedish compounds like "kursansvar" and "kursutbud". |
+| Answer generation | Mistral-Nemo 12B (via Ollama) | Replaced Mistral 7B which distorted logic in delegation rules and mixed terms inconsistently. Nemo handles synthesis from English sources to Swedish answers better, though not perfectly. |
+| Metadata extraction | Mistral 7B (via Ollama) | Structured metadata extraction (keywords, roles, document type) is a simpler task that does not require the synthesis ability of a larger model. |
 
-### Katalogstruktur
-
-```text
-app/
-  api.py
-  cli.py
-  config.py
-  embeddings.py
-  ingest.py
-  llm.py
-  preprocess_llm.py
-  prompting.py
-  qdrant_store.py
-  retrieval.py
-  schemas.py
-  static/
-    index.html
-docs/
-  IIT-lokala regler och rutiner/
-    ...
-scripts/
-  ingest_docs.py
-```
-
----
-
-## Dokumentflöde
-
-```
-docs/          →  Docling      →  Markdown
-Markdown       →  Sektioner    →  Rubrikbaserad uppdelning
-Sektioner      →  LLM          →  Semantisk metadata per sektion
-Sektioner      →  Chunkning    →  Segment (vid behov)
-Segment        →  Embeddings   →  Qdrant
-Fråga          →  Retrieval    →  Relevanta segment
-Segment        →  LLM          →  Svar med källhänvisningar
-```
-
-**Ingest** — dokument under `docs/` läses in och extraheras med Docling.
-
-**Struktur** — dokumentet exporteras till markdown och delas i sektioner utifrån rubriker. Chunkning sker bara om en sektion är för lång; kortare sektioner hålls ihop.
-
-**Annotering** — varje sektion kan annoteras med semantisk metadata via lokal LLM: dokumenttyp, nyckelbegrepp, roller, handlingar, tidsmarkörer och en kort sammanfattning.
-
-**Indexering** — segment embeddas och lagras i Qdrant med tillhörande metadata i payload.
-
-**Fråga/svar** — frågan embeddas, relevanta segment hämtas, en prompt byggs från källorna, lokal modell genererar svar, källor visas tillsammans med svaret.
+Using different models per role reflects a deliberate trade-off: each task has different requirements for language understanding, reasoning and speed. The reranker and embedding model run as local inference with sentence-transformers; the generative models run through Ollama. See the white paper for detailed discussion of model choices and observed limitations.
 
 ---
 
 ## Installation
 
-### Förutsättningar
+### Prerequisites
 
 - Python 3.10+
-- [Ollama](https://ollama.com/) installerat och körande lokalt
-- Vald modell nedladdad i Ollama (t.ex. `ollama pull mistral`)
+- [Ollama](https://ollama.com/) installed and running
+- Models pulled: `ollama pull mistral-nemo` and `ollama pull mistral`
 
-### Installera beroenden
+### Install
 
 ```bash
-pip install -r requirements.txt
+pipx install .
 ```
 
-### Installera CLI via pipx
+### Verify
 
 ```bash
-pipx install --editable .
-```
-
-```bash
-docchat --help
+urd --help
 ```
 
 ---
 
-## Konfiguration
+## Quick start
 
-Konfiguration hämtas från miljövariabler via `.env` eller från defaultvärden i `app/config.py`.
+```bash
+# Index documents
+urd ingest
 
-| Variabel | Beskrivning |
-|---|---|
-| `DOCS_PATH` | Sökväg till dokumentkatalogen |
-| `QDRANT_PATH` | Lokal sökväg för Qdrant-data |
-| `QDRANT_COLLECTION` | Namn på Qdrant-kollektionen |
-| `EMBEDDING_MODEL` | Embeddingmodell (default: `intfloat/multilingual-e5-large`) |
-| `OLLAMA_MODEL` | Modell för frågesvar (default: `mistral`) |
-| `PREPROCESS_OLLAMA_MODEL` | Modell för semantisk annotering |
-| `TOP_K` | Antal segment som hämtas per fråga |
-| `CHUNK_SIZE` | Max tecken per chunk |
-| `CHUNK_OVERLAP` | Överlapp i tecken mellan chunkar |
-| `PREPROCESS_ENABLED` | Aktivera LLM-baserad annotering (`true`/`false`) |
+# Start the server
+urd serve
+
+# Ask a question
+urd ask "What rules apply when hiring a doctoral student?"
+```
+
+Open `http://127.0.0.1:8000` for the web interface.
 
 ---
 
-## CLI
+## Configuration
 
-### Visa hjälp
+Configuration is resolved with the following priority:
+
+1. CLI flags (e.g. `urd serve --top-k 5`)
+2. Environment variables (`.env` file)
+3. `.urd/config.json` (created automatically with defaults)
+4. Hard-coded defaults
+
+### View and change configuration
 
 ```bash
-docchat --help
+urd config                    # Show all values and their source
+urd config get top_k          # Show a specific value
+urd config set top_k 5        # Set a value
+urd config reset              # Reset to defaults
 ```
 
-### Starta webbservern
+### Key settings
+
+| Setting | Default | Description |
+|---|---|---|
+| `docs_path` | `./docs` | Document folder |
+| `ollama_model` | `mistral-nemo` | Model for answer generation |
+| `top_k` | `3` | Number of sources used per answer |
+| `chunk_size` | `1200` | Max characters per chunk |
+| `embedding_model` | `intfloat/multilingual-e5-large` | Embedding model |
+| `reranker_model` | `jeffwan/mmarco-mMiniLMv2-...` | Cross-encoder model |
+
+---
+
+## CLI reference
 
 ```bash
-docchat serve
-```
-
-### Läs in dokument
-
-```bash
-docchat ingest
-```
-
-### Återskapa index
-
-```bash
-docchat reset-index
-```
-
-### Återskapa index och kör ingest
-
-```bash
-docchat reindex
-```
-
-### Ställ en fråga direkt från terminalen
-
-```bash
-docchat ask "Vad gäller för halvtidsseminarium?"
-```
-
-```bash
-docchat ask "Vad gäller för halvtidsseminarium?" --debug
-```
-
-```bash
-docchat ask "Vad gäller för halvtidsseminarium?" --no-sources
+urd serve                     # Start API server and web UI
+urd serve --top-k 5           # Start with custom top_k
+urd ask "question"            # Ask a question (auto-detects server)
+urd ask "question" --debug    # Show timing and retrieval details
+urd ask "question" --via-server  # Force server mode
+urd ask "follow-up" --new-session  # Start fresh session
+urd ingest                    # Index new and changed documents
+urd ingest --force            # Re-index all documents
+urd reindex                   # Reset index and re-ingest everything
+urd enrich                    # Run LLM metadata extraction
+urd stats                     # Show index and document status
+urd config                    # Show configuration
+urd config set key value      # Change a setting
+urd test                      # Run test battery
+urd test --no-answers         # Run tests, show only timing
+urd reset-index               # Delete and recreate the index
 ```
 
 ---
 
-## Köra tjänsten manuellt
+## Testing
+
+URD includes a test harness for evaluating answer quality and timing.
 
 ```bash
-uvicorn app.api:app --reload
+# Create test questions
+cat > .urd/questions.json << 'EOF'
+[
+  {"question": "What rules apply when hiring a doctoral student?",
+   "notes": "Should mention employment duration, 20% teaching"},
+  {"question": "What is required for a successful dissertation?",
+   "notes": "Should mention examination requirements, public defence"}
+]
+EOF
+
+# Run tests
+urd test
+
+# Results saved to .urd/results/
 ```
 
-Öppna sedan `http://127.0.0.1:8000/` i en webbläsare.
+Each test run records answers, sources, timing breakdown (evidence extraction vs answer generation) and synthesis diagnostics.
 
 ---
 
-## Status
+## Project structure
 
-### Genomfört
-
-- Lokal end-to-end-kedja
-- Dokumentingest för PDF, DOCX och XLSX
-- Lokal embedding med `multilingual-e5-large`
-- Lokal vektorsökning via Qdrant
-- Lokal LLM för frågesvar via Ollama
-- FastAPI-tjänst med `/chat`-endpoint
-- Enkelt webbgränssnitt
-- Sektionsbaserad chunkning från markdown
-- Metadatafält för sektionsrubrik och rubriknivå
-
-### Pågående
-
-- LLM-baserad semantisk annotering per sektion (`preprocess_llm.py`)
-- Utökade semantiska metadatafält i indexet
-- Förbättrad retrieval med metadata och lätt omrankning
-
----
-
-## Avgränsningar
-
-Projektet prioriterar för närvarande inte:
-
-- Finjustering av modellen
-- Avancerad agentlogik
-- Fleranvändarstöd
-- Nätverksexponering
-- Full produktionssäkerhet
-- Tung ramverksorkestrering
-
-De största tekniska riskerna ligger i dokumentbehandlingen. PDF-struktur kan vara svårtolkad, tabeller kan extraheras dåligt och rubriker kan gå förlorade om texten plattas till för tidigt. Semantisk metadata från LLM kan bli övergenererad om prompt och validering är för svaga. Projektet hanterar detta genom deterministisk strukturutvinning i första steget, strikt JSON-schema för LLM-extraktion, låg temperatur och validering av strukturerad output.
+```
+app/
+  api.py              # FastAPI server
+  cli.py              # CLI commands
+  config.py           # Configuration with .urd/config.json support
+  embeddings.py       # Embedding model wrapper
+  followup.py         # Follow-up question rewriting
+  ingest.py           # Document extraction and chunking
+  llm.py              # Ollama LLM wrapper
+  preprocess_llm.py   # LLM-based metadata extraction
+  prompting.py        # Single-step prompt (fallback)
+  qdrant_store.py     # Qdrant vector store
+  retrieval.py        # Hybrid retrieval pipeline
+  schemas.py          # Data models
+  session_state.py    # Conversation state
+  synthesis.py        # Two-stage evidence extraction + answer generation
+  static/
+    index.html        # Web interface
+```
 
 ---
 
-## Frågesvarspolicy
+## Constraints
 
-Systemet ska svara endast utifrån återfunna källor, inte fylla i luckor med gissningar, markera osäkerhet när underlaget inte räcker och alltid visa vilka källor svaret bygger på.
-
-Det viktigaste är inte att systemet låter allvetande, utan att det på ett kontrollerat sätt hittar och sammanställer relevant innehåll ur verkliga dokument.
+- **Local operation is a hard requirement.** No cloud APIs, no data leaving the machine.
+- **European-origin models preferred** for the generative model.
+- **The system does not speculate.** Answers are based on retrieved sources. Uncertainty is communicated. Sources are a verification mechanism, not a convenience.
 
 ---
 
-## Nästa steg
+## Known limitations
 
-- Färdigställa preprocess-LLM per sektion
-- Lagra semantiska metadatafält i Qdrant
-- Använda metadata i retrieval och enkel omrankning
-- Förbättra källpanelen med rikare metadata
-- Lägga till enkel intern utvärdering av retrieval-kvalitet
+- Terminology gaps: questions using different words than the documents (e.g. "employment" vs "admission") may miss relevant content. A claims layer (planned) would address this.
+- Synthesis errors: the LLM can invert logic in complex delegation structures, mix Swedish and English terms, or add information not present in sources. Two-stage synthesis reduces but does not eliminate this.
+- Documents mixing languages, table-based rules and process diagrams as images are harder for the system to interpret correctly.
+
+---
+
+## Licence
+
+Open source. See LICENSE for details.
+
