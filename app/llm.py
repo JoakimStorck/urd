@@ -10,17 +10,21 @@ class LocalLLM:
     def __init__(self) -> None:
         self.model = settings.ollama_model
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, format: str | None = None) -> str:
         try:
-            response = ollama.chat(
-                model=self.model,
-                messages=[
+            kwargs = {
+                "model": self.model,
+                "messages": [
                     {"role": "user", "content": prompt},
                 ],
-                options={
+                "options": {
                     "temperature": 0.1,
                 },
-            )
+            }
+            if format is not None:
+                kwargs["format"] = format
+
+            response = ollama.chat(**kwargs)
             return response["message"]["content"].strip()
         except Exception as e:
             raise LLMUnavailableError(
