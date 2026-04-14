@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-docchat = "app.cli:main"
+urd = "app.cli:main"
 
 [tool.setuptools]
 packages = ["app"]
