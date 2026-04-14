@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "docchat"
+name = "urd"
 version = "0.1.0"
-description = "Lokal dokumentchat för IIT"
+description = "URD -- Unified Retrieval and Deliberation for Documents"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
