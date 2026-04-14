@@ -10,7 +10,7 @@ from app.session_state import SessionStore
 from app.followup import rewrite_followup
 from app.llm import LLMUnavailableError
 
-app = FastAPI(title="Local IIT DocChat")
+app = FastAPI(title="Local IIT URD")
 rag = RagService()
 sessions = SessionStore()
 

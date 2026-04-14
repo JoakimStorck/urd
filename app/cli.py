@@ -25,7 +25,7 @@ from app.retrieval import RagService
 from app.schemas import ChatResponse, SourceHit
 
 app = typer.Typer(
-    help="Lokal dokumentchat för IIT-dokument.",
+    help="URD Local source of knowledge about document content.",
     no_args_is_help=True,
     add_completion=False,
     rich_markup_mode=None,
@@ -658,12 +658,12 @@ def ask(
     via_server: bool = typer.Option(
         False,
         "--via-server",
-        help="Skicka frågan till en docchat-server.",
+        help="Skicka frågan till en urd-server.",
     ),
     server_url: str = typer.Option(
         "http://127.0.0.1:8000",
         "--server-url",
-        help="URL till docchat-servern. Aktiverar server-läge automatiskt.",
+        help="URL till urd-servern. Aktiverar server-läge automatiskt.",
     ),
     new_session: bool = typer.Option(
         False,
@@ -678,10 +678,10 @@ def ask(
     Använd --new-session för att börja om.
 
     Exempel:
-      docchat ask "Vad gäller för externa forskningsansökningar?"
-      docchat ask "Berätta mer om beslutsmötet" --via-server
-      docchat ask "Ny fråga" --via-server --server-url http://100.96.76.110:8000
-      docchat ask "Annat ämne" --new-session --via-server
+      urd ask "Vad gäller för externa forskningsansökningar?"
+      urd ask "Berätta mer om beslutsmötet" --via-server
+      urd ask "Ny fråga" --via-server --server-url http://100.96.76.110:8000
+      urd ask "Annat ämne" --new-session --via-server
     """
     global _cli_active_session_id
 
