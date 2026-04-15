@@ -268,6 +268,18 @@ def ingest(
         f"skapade: {created}, uppdaterade: {updated}, hoppade över: {skipped}"
     )
 
+    # Om servern körs, uppdatera BM25-indexet
+    if total_docs > 0 and _server_is_available("http://127.0.0.1:8000"):
+        try:
+            resp = requests.post("http://127.0.0.1:8000/refresh", timeout=30)
+            if resp.ok:
+                data = resp.json()
+                typer.echo(f"Serverns sökindex uppdaterat ({data.get('num_chunks', '?')} chunkar).")
+            else:
+                typer.echo("Varning: kunde inte uppdatera serverns sökindex.")
+        except Exception:
+            typer.echo("Varning: kunde inte nå servern för indexuppdatering.")
+
 
 @app.command(
     "reindex",

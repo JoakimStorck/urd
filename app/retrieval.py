@@ -250,8 +250,21 @@ class RagService:
         self.reranker = Reranker()
 
         # Bygg BM25-index från alla chunks i Qdrant
+        self._build_bm25_index()
+
+    def _build_bm25_index(self) -> None:
+        """Bygg eller återbygg BM25-indexet från Qdrant."""
         all_chunks = self.store.iter_all_chunks()
         self.bm25_index = BM25Index(all_chunks)
+
+    def refresh_index(self) -> int:
+        """
+        Återbygg BM25-indexet från Qdrant.
+        Anropas efter ingest för att synka retrieval med nytt innehåll.
+        Returnerar antal chunks i det nya indexet.
+        """
+        self._build_bm25_index()
+        return len(self.bm25_index.hits)
 
     def answer(self, question: str) -> ChatResponse:
         t0 = time.perf_counter()

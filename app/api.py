@@ -1,9 +1,10 @@
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.config import settings
 from app.schemas import ChatRequest, ChatResponse
 from app.retrieval import RagService
 from app.session_state import SessionStore
@@ -17,6 +18,9 @@ sessions = SessionStore()
 static_dir = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+# Resolve docs root en gång vid uppstart
+_docs_root = settings.docs_path.resolve()
+
 
 @app.get("/")
 def index():
@@ -26,6 +30,30 @@ def index():
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/refresh")
+def refresh() -> dict[str, int]:
+    """Återbygg BM25-index efter ingest. Anropas av CLI."""
+    num_chunks = rag.refresh_index()
+    return {"status": "ok", "num_chunks": num_chunks}
+
+
+@app.get("/document")
+def get_document(path: str = Query(..., description="Relativ sökväg under docs/")):
+    """
+    Servera ett originaldokument. Validerar att sökvägen pekar
+    in i docs-katalogen för att förhindra path traversal.
+    """
+    resolved = (_docs_root / path).resolve()
+
+    if not resolved.is_relative_to(_docs_root):
+        raise HTTPException(status_code=404, detail="Dokumentet hittades inte.")
+
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="Dokumentet hittades inte.")
+
+    return FileResponse(resolved, filename=resolved.name)
 
 
 @app.post("/chat", response_model=ChatResponse)
