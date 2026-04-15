@@ -158,7 +158,7 @@ def connect(
     host: str = typer.Option("127.0.0.1", help="Host för den lokala klienten."),
     port: int = typer.Option(8765, help="Port för den lokala klienten."),
     autoreload: bool = typer.Option(
-        True,
+        False,
         "--autoreload/--no-autoreload",
         help="Ladda om klienten automatiskt vid kodändringar.",
     ),
@@ -192,7 +192,14 @@ def connect(
     typer.echo(f"Ansluter till URD-server: {upstream}")
     typer.echo(f"Lokal klient startas på: http://{host}:{port}")
 
-    uvicorn.run("app.connect_api:app", host=host, port=port, reload=autoreload)
+    uvicorn.run(
+        "app.connect_api:app",
+        host=host,
+        port=port,
+        reload=autoreload,
+        log_level="info",
+        access_log=False,
+    )
 
 
 @app.command(
@@ -459,7 +466,6 @@ def enrich(
         dt_section = time.perf_counter() - t_section
         elapsed = time.perf_counter() - t_start
 
-        # Uppskatta återstående tid baserat på genomsnitt per processad sektion
         avg_per_section = elapsed / processed if processed > 0 else dt_section
         remaining_to_check = total_sections - idx
         eta_seconds = remaining_to_check * avg_per_section
@@ -715,14 +721,6 @@ def config_cmd(
 ) -> None:
     """
     Visa eller ändra konfiguration.
-
-    Exempel:
-      urd config              Visa alla värden
-      urd config show         Visa alla värden
-      urd config get top_k    Visa ett värde
-      urd config set top_k 5  Sätt ett värde
-      urd config set server pop-os:8000
-      urd config reset        Återställ till defaults
     """
     from app.config import DEFAULTS, CONFIG_FILE, _load_file_config, save_config_file, _ENV_KEYS
 
@@ -737,7 +735,6 @@ def config_cmd(
 
             current = getattr(settings, k, default)
 
-            # Visa källa
             if env_val is not None:
                 source = f"env ({env_key})"
             elif file_val is not None and file_val != default:
@@ -768,8 +765,6 @@ def config_cmd(
             raise typer.Exit(code=1)
 
         file_config = _load_file_config()
-
-        # Konvertera till rätt typ baserat på default
         default = DEFAULTS[key]
         try:
             if isinstance(default, int):
@@ -836,15 +831,6 @@ def ask(
 ) -> None:
     """
     Ställ en fråga till dokumentchatten.
-
-    Följdfrågor fungerar automatiskt inom samma session via servern.
-    Använd --new-session för att börja om.
-
-    Exempel:
-      urd ask "Vad gäller för externa forskningsansökningar?"
-      urd ask "Berätta mer om beslutsmötet" --via-server
-      urd ask "Ny fråga" --via-server --server-url http://100.96.76.110:8000
-      urd ask "Annat ämne" --new-session --via-server
     """
     global _cli_active_session_id
 
@@ -853,7 +839,6 @@ def ask(
     if new_session:
         _cli_active_session_id = None
 
-    # --server-url med icke-default värde aktiverar server-läge
     use_server = via_server or server_url != default_url or _server_is_available(default_url)
 
     if use_server:

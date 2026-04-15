@@ -4,6 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>IIT Dokumentassistent</title>
+  <link rel="icon" href="/static/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+  <link rel="shortcut icon" href="/static/favicon.ico">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
@@ -422,6 +426,15 @@
       letter-spacing: 0.02em;
     }
 
+    .powered-by a {
+      color: inherit;
+      text-decoration: none;
+    }
+    
+    .powered-by a:hover {
+      text-decoration: underline;
+    }
+      
     @media (max-width: 640px) {
       header { padding: 16px 16px 12px; }
       header h1 { font-size: 1.25rem; }
@@ -458,7 +471,9 @@
         </svg>
       </button>
     </form>
-    <div class="powered-by">Drivs av URD</div>
+    <div class="powered-by">Drivs av 
+      <a href="https://github.com/JoakimStorck/urd" target="_blank" rel="noopener noreferrer">URD</a>
+    </div>
   </div>
 
   <script>
