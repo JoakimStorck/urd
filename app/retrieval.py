@@ -7,8 +7,6 @@ generaliserar över frågetyper utan handskrivna bonusar.
 
 import re
 import time
-from collections import Counter
-
 from rank_bm25 import BM25Okapi
 from sentence_transformers import CrossEncoder
 
@@ -137,34 +135,30 @@ def _merge_candidates(
 
 
 # ---------------------------------------------------------------------------
-# Dedup – behåll dokumentvariation i topp-K
+# Dedup – undvik dubbletter från samma sektion
 # ---------------------------------------------------------------------------
 
 def _dedup_and_select(
     ranked: list[SourceHit],
     top_k: int,
-    max_per_doc: int = 2,
 ) -> list[SourceHit]:
     """
-    Välj topp-K med dedup:
-    1. Högst en träff per (source_path, section_title) – undvik dubbletter
-       från samma sektion.
-    2. Högst max_per_doc träffar per dokument – tillåt flera sektioner
-       från samma dokument om de rankas högt, men begränsa dominans.
+    Välj topp-K med dedup per (source_path, section_title).
+
+    Flera sektioner från samma dokument tillåts — cross-encoderns
+    ranking avgör vilka som når topp-K. Ingen godtycklig gräns per
+    dokument: om ett dokument har 6 relevanta sektioner och top_k=5
+    får det 5 av dem.
     """
     selected: list[SourceHit] = []
     seen_keys: set[tuple[str, str | None]] = set()
-    doc_counter: Counter[str] = Counter()
 
     for hit in ranked:
         key = (hit.metadata.source_path, hit.metadata.section_title)
         if key in seen_keys:
             continue
-        if doc_counter[hit.metadata.source_path] >= max_per_doc:
-            continue
 
         seen_keys.add(key)
-        doc_counter[hit.metadata.source_path] += 1
         selected.append(hit)
 
         if len(selected) >= top_k:
@@ -179,8 +173,15 @@ def _dedup_and_select(
 
 class Reranker:
     def __init__(self) -> None:
-        self.model = CrossEncoder(settings.reranker_model)
-
+        try:
+            self.model = CrossEncoder(settings.reranker_model)
+        except Exception as e:
+            raise RuntimeError(
+                f"Kunde inte ladda reranker-modellen '{settings.reranker_model}'. "
+                f"URD använder endast standardladdning utan remote code. "
+                f"Ursprungligt fel: {type(e).__name__}: {e}"
+            ) from e
+            
     def rerank(
         self,
         question: str,
