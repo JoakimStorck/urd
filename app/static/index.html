@@ -266,6 +266,15 @@
       color: var(--text);
     }
 
+    .source-filename a {
+      color: var(--ref-color);
+      text-decoration: none;
+    }
+
+    .source-filename a:hover {
+      text-decoration: underline;
+    }
+
     .source-meta {
       font-size: 0.78rem;
       color: var(--text-tertiary);
@@ -485,6 +494,23 @@
       questionInput.focus();
     });
 
+    function buildDocumentUrl(sourcePath) {
+      if (!sourcePath) return null;
+      // source_path kan vara absolut eller relativ.
+      // Hitta "docs/" i sökvägen och ta allt efter det.
+      const docsIdx = sourcePath.indexOf("/docs/");
+      if (docsIdx >= 0) {
+        const relPath = sourcePath.slice(docsIdx + 6); // efter "/docs/"
+        return "/document?path=" + encodeURIComponent(relPath);
+      }
+      // Om sökvägen börjar med "docs/"
+      if (sourcePath.startsWith("docs/")) {
+        const relPath = sourcePath.slice(5);
+        return "/document?path=" + encodeURIComponent(relPath);
+      }
+      return null;
+    }
+
     function linkSourceRefs(text) {
       // Replace [Källa N] with clickable spans
       return text.replace(
@@ -576,7 +602,20 @@
 
           const filename = document.createElement("span");
           filename.className = "source-filename";
-          filename.textContent = s.metadata.file_name || "(okänd fil)";
+
+          // Bygg dokumentlänk från source_path
+          const docUrl = buildDocumentUrl(s.metadata.source_path);
+          if (docUrl) {
+            const link = document.createElement("a");
+            link.href = docUrl;
+            link.target = "_blank";
+            link.rel = "noopener";
+            link.title = "Öppna originaldokument";
+            link.textContent = s.metadata.file_name || "(okänd fil)";
+            filename.appendChild(link);
+          } else {
+            filename.textContent = s.metadata.file_name || "(okänd fil)";
+          }
           cardHeader.appendChild(filename);
 
           card.appendChild(cardHeader);

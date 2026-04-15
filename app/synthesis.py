@@ -78,6 +78,11 @@ beskriver "antagning", "handledning" eller "utbildningstid" för samma roll,
 är det relevant. Användare formulerar sig ofta i vardagsspråk — leta efter
 innehåll som handlar om samma sakområde, inte bara exakt samma ord.
 
+Men kontrollera att varje källa faktiskt handlar om det frågan gäller.
+Om frågan gäller doktorander, inkludera inte information om docenter,
+postdoktorer eller andra roller bara för att de nämns i samma dokument.
+Om en källa handlar om en annan roll eller ett annat ämne, hoppa över den.
+
 För varje relevant textstycke:
 - Parafrasera det nära originalet. Bevara konkreta detaljer: belopp,
   beloppsgränser, roller, tidsfrister, villkor och beslutsordning.

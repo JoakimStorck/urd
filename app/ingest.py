@@ -57,8 +57,11 @@ def extract_text_with_fallback(path: Path) -> RawDocument:
             title=path.stem,
         )
     except Exception as e:
-        text = f"[EXTRACTION_FAILED: {path.name}: {type(e).__name__}: {e}]"
-        return RawDocument(path=path, text=text, title=path.stem)
+        import logging
+        logging.getLogger(__name__).warning(
+            "Extraction failed for %s: %s: %s", path.name, type(e).__name__, e
+        )
+        return RawDocument(path=path, text="", title=path.stem)
 
 
 def normalize_chunk_text(text: str) -> str:
