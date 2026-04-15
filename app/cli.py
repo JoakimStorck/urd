@@ -146,6 +146,56 @@ def serve(
 
 
 @app.command(
+    "connect",
+    help="Starta lokal klient som servar webben lokalt och kopplar upp sig mot en urd-server.",
+)
+def connect(
+    server: str | None = typer.Option(
+        None,
+        "--server",
+        help="Upstream-server, t.ex. pop-os:8000 eller http://100.96.76.110:8000",
+    ),
+    host: str = typer.Option("127.0.0.1", help="Host för den lokala klienten."),
+    port: int = typer.Option(8765, help="Port för den lokala klienten."),
+    autoreload: bool = typer.Option(
+        True,
+        "--autoreload/--no-autoreload",
+        help="Ladda om klienten automatiskt vid kodändringar.",
+    ),
+) -> None:
+    """
+    Starta ett lokalt URD-gränssnitt som proxar /chat och /document till en fjärrserver.
+
+    Server väljs i denna ordning:
+    1. --server
+    2. config-nyckeln 'server'
+
+    Exempel:
+      urd connect --server pop-os:8000
+      urd config set server pop-os:8000
+      urd connect
+    """
+    upstream = (server or settings.server or "").strip()
+    if not upstream:
+        typer.echo(
+            "Ingen server är angiven.\n"
+            "Ange --server HOST:PORT eller sätt config-värdet 'server', t.ex.:\n"
+            "  urd config set server pop-os:8000"
+        )
+        raise typer.Exit(code=1)
+
+    if "://" not in upstream:
+        upstream = "http://" + upstream
+
+    os.environ["URD_UPSTREAM_SERVER"] = upstream
+
+    typer.echo(f"Ansluter till URD-server: {upstream}")
+    typer.echo(f"Lokal klient startas på: http://{host}:{port}")
+
+    uvicorn.run("app.connect_api:app", host=host, port=port, reload=autoreload)
+
+
+@app.command(
     "reset-index",
     help="Återskapa sökindexet i Qdrant från grunden.",
 )
@@ -645,15 +695,6 @@ def stats(
             typer.echo(f"... och {len(missing_docs) - 20} till")
 
 
-"""
-Uppdatering av ask-kommandot i cli.py.
-
-Ersätt den befintliga ask-funktionen med denna version.
-Lägg till modulvariabel efter app = typer.Typer(...):
-_cli_active_session_id: str | None = None
-"""
-
-
 @app.command(
     "config",
     help="Visa eller ändra konfiguration i .urd/config.json.",
@@ -680,6 +721,7 @@ def config_cmd(
       urd config show         Visa alla värden
       urd config get top_k    Visa ett värde
       urd config set top_k 5  Sätt ett värde
+      urd config set server pop-os:8000
       urd config reset        Återställ till defaults
     """
     from app.config import DEFAULTS, CONFIG_FILE, _load_file_config, save_config_file, _ENV_KEYS
@@ -887,20 +929,6 @@ def test(
 ) -> None:
     """
     Kör ett batteri av testfrågor mot servern och samla resultat.
-
-    Testfilen är en JSON-fil med en lista av objekt:
-    [
-      {"question": "Vilka regler gäller vid anställning av en doktorand?"},
-      {"question": "Vad krävs för disputation?", "notes": "Bör nämna betygsnämnd"}
-    ]
-
-    Varje fråga körs mot servern. Resultat sparas till en JSON-fil
-    för jämförelse mellan körningar.
-
-    Exempel:
-      urd test
-      urd test --file my_questions.json
-      urd test --no-answers -o results.json
     """
     if not test_file.exists():
         typer.echo(f"Testfil saknas: {test_file}")
@@ -927,7 +955,6 @@ def test(
         typer.echo("Testfilen ska vara en JSON-lista med minst en fråga.")
         raise typer.Exit(code=1)
 
-    # Kontrollera att servern är igång
     if not _server_is_available(server_url):
         typer.echo(
             f"Kunde inte ansluta till servern på {server_url}. "
@@ -984,7 +1011,6 @@ def test(
             })
             continue
 
-        # Samla resultat
         timing = (response.debug or {}).get("timing_s", {})
         synthesis = (response.debug or {}).get("synthesis", {})
 
@@ -1010,7 +1036,6 @@ def test(
         }
         results.append(result)
 
-        # Visa i terminalen
         total_time = timing.get("total", 0)
         synth_timing = synthesis.get("timing_s", {})
         evidence_time = synth_timing.get("evidence_extraction", 0)
@@ -1026,7 +1051,6 @@ def test(
             typer.echo(f"  ⚠ Fallback: {synthesis.get('fallback_reason', '?')}")
 
         if show_answers:
-            # Visa svaret indraget
             for line in response.answer.splitlines():
                 typer.echo(f"  {line}")
 
@@ -1040,7 +1064,8 @@ def test(
 
         typer.echo("")
 
-    # Sammanfattning
+    from datetime import datetime
+
     successful = [r for r in results if "error" not in r]
     failed = [r for r in results if "error" in r]
     times = [r["timing_s"].get("total", 0) for r in successful if r.get("timing_s")]
@@ -1059,9 +1084,6 @@ def test(
     fallbacks = sum(1 for r in successful if r.get("synthesis", {}).get("used_fallback"))
     if fallbacks:
         typer.echo(f"Fallbacks:       {fallbacks}")
-
-    # Spara resultat
-    from datetime import datetime
 
     if output_file is None:
         results_dir = Path(".urd/results")

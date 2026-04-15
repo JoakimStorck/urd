@@ -23,6 +23,7 @@ DEFAULTS = {
     "chunk_size": 1200,
     "chunk_overlap": 150,
     "preprocess_max_section_chars": 6000,
+    "server": "",
 }
 
 # Mapping: config-nyckel → miljövariabel
@@ -39,6 +40,7 @@ _ENV_KEYS = {
     "chunk_size": "CHUNK_SIZE",
     "chunk_overlap": "CHUNK_OVERLAP",
     "preprocess_max_section_chars": "PREPROCESS_MAX_SECTION_CHARS",
+    "server": "URD_SERVER",
 }
 
 
@@ -98,6 +100,8 @@ def _build_settings() -> "Settings":
     def i(key: str) -> int:
         return int(_resolve_value(key, file_config))
 
+    server = s("server").strip() or None
+
     return Settings(
         docs_path=Path(s("docs_path")),
         qdrant_path=Path(s("qdrant_path")),
@@ -111,6 +115,7 @@ def _build_settings() -> "Settings":
         chunk_size=i("chunk_size"),
         chunk_overlap=i("chunk_overlap"),
         preprocess_max_section_chars=i("preprocess_max_section_chars"),
+        server=server,
     )
 
 
@@ -133,6 +138,7 @@ class Settings(BaseModel):
     chunk_overlap: int = 150
 
     preprocess_max_section_chars: int = 6000
+    server: str | None = None
 
 
 settings = _build_settings()
