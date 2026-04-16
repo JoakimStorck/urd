@@ -15,7 +15,7 @@ from app.embeddings import Embedder
 from app.qdrant_store import QdrantStore
 from app.llm import LocalLLM
 from app.prompting import build_prompt
-from app.synthesis import synthesize
+from app.synthesis import synthesize, rework as synthesis_rework
 from app.schemas import ChatResponse, SourceHit
 
 
@@ -419,6 +419,65 @@ class RagService:
                     key=lambda d: d.get("cross_encoder_score", -999),
                     reverse=True,
                 )[: settings.top_k + 5],
+            },
+        )
+
+    def rework(
+        self,
+        question: str,
+        hits: list[SourceHit],
+        previous_answer: str,
+        mode: str,
+    ) -> ChatResponse:
+        """
+        Arbeta mot föregående turs källor utan ny retrieval.
+
+        Används av elaboration och verification. mode är en av:
+        - "elaboration": lyft fram vad som prioriterades bort
+        - "verification": strikt granskning av tidigare svar
+
+        Returnerar en ChatResponse där sources är samma hits som
+        bar det tidigare svaret (så UI:t fortfarande visar dem som
+        källor och debug är sammanhängande).
+        """
+        t0 = time.perf_counter()
+
+        synthesis_result = synthesis_rework(
+            question,
+            hits,
+            previous_answer,
+            self.llm,
+            mode=mode,
+        )
+
+        t1 = time.perf_counter()
+
+        synthesis_debug = {
+            "used_fallback": synthesis_result.used_fallback,
+            "mode": mode,
+        }
+        if synthesis_result.fallback_reason:
+            synthesis_debug["fallback_reason"] = synthesis_result.fallback_reason
+        if synthesis_result.evidence is not None:
+            synthesis_debug["num_extracted"] = len(synthesis_result.evidence.extracted)
+            synthesis_debug["not_found"] = synthesis_result.evidence.not_found
+            if synthesis_result.evidence.raw_json:
+                synthesis_debug["evidence_json"] = synthesis_result.evidence.raw_json
+        if synthesis_result.timing_s:
+            synthesis_debug["timing_s"] = synthesis_result.timing_s
+
+        return ChatResponse(
+            answer=synthesis_result.answer,
+            sources=hits,
+            debug={
+                "rework_mode": mode,
+                "num_hits_reused": len(hits),
+                "abstained": not (synthesis_result.evidence and synthesis_result.evidence.extracted),
+                "synthesis": synthesis_debug,
+                "timing_s": {
+                    "rework": round(t1 - t0, 3),
+                    "total": round(t1 - t0, 3),
+                },
             },
         )
 

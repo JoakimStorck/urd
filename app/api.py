@@ -97,18 +97,48 @@ def chat(req: ChatRequest) -> ChatResponse:
                 },
             )
 
-        # 2b. Ny huvudfråga: sätt QUD till ordagrann originaltext FÖRE
+        # 2b. Elaboration och verification: inget nytt retrieval,
+        # arbeta mot active_hits. Skyddsregeln i intent.py har
+        # redan garanterat att active_hits inte är tom här.
+        if classification.intent in ("elaboration", "verification_or_challenge"):
+            mode = (
+                "elaboration"
+                if classification.intent == "elaboration"
+                else "verification"
+            )
+            previous_answer = state.last_answer or ""
+
+            response = rag.rework(
+                req.question,
+                hits=state.active_hits,
+                previous_answer=previous_answer,
+                mode=mode,
+            )
+
+            # Rework-tur: ersätt INTE active_hits — samma material bär
+            # fortfarande tråden. Bara last_answer och snippets uppdateras.
+            state.add_rework_turn(req.question, response.answer)
+
+            if response.debug is None:
+                response.debug = {}
+            response.debug.update(base_debug)
+            response.debug["path"] = classification.intent
+
+            response.session_id = state.session_id
+            return response
+
+        # 2c. Ny huvudfråga: sätt QUD till ordagrann originaltext FÖRE
         # retrieval, så att den registreras även om den här turen
-        # inte använder QUD-ankaret. add_turn körs senare när svar finns.
+        # inte använder QUD-ankaret.
         if classification.intent == "new_main_question":
             state.set_qud(req.question)
-            # QUD-info uppdateras i debug efter att set_qud körts
             base_debug["qud"] = {
                 "text": state.current_qud_text,
                 "age_turns": state.qud_age_turns,
             }
 
-        # 2c. Bestäm retrieval- och syntesparametrar baserat på klass.
+        # 2d. Bestäm retrieval- och syntesparametrar för de två
+        # kvarvarande klasserna (new_main_question, related_to_qud).
         qud_anchor: str | None = None
         background_turns = None
         background_max_turns = 0
@@ -126,16 +156,8 @@ def chat(req: ChatRequest) -> ChatResponse:
             style = classification.substyle  # subquestion | broadening | narrowing_or_repair
             path_label = "related_to_qud"
 
-        elif classification.intent == "verification_or_challenge":
-            # Ingen QUD-ankare (v1), men bakgrund + verifieringsstil
-            background_turns = list(state.turns)
-            background_max_turns = settings.qud_background_turns
-            style = "verification"
-            path_label = "verification_or_challenge"
-
         else:
-            # Skulle inte hända — klassificeraren garanterar en av
-            # de fyra kategorierna. Konservativ fallback om det sker.
+            # Skulle inte hända — alla klasser är hanterade ovan.
             path_label = "new_main_question"
 
         response = rag.answer(
@@ -146,12 +168,19 @@ def chat(req: ChatRequest) -> ChatResponse:
             style=style,
         )
 
-        # Uppdatera sessionsstate med dokumentkällorna
+        # Uppdatera sessionsstate med dokumentkällorna OCH de faktiska
+        # hits som bar svaret — så att nästa elaboration/verification
+        # kan återanvända dem.
         doc_paths = list({
             hit.metadata.source_path
             for hit in response.sources
         })
-        state.add_turn(req.question, response.answer, doc_paths)
+        state.add_turn(
+            req.question,
+            response.answer,
+            doc_paths,
+            hits=response.sources,
+        )
 
         # Merga debug-info från retrieval/syntes med vår dispatch-info
         if response.debug is None:

@@ -21,6 +21,13 @@ QUD-klassificeringen i api-lagret:
 - "verification": striktare stöd krävs, tydligare abstention när
   källorna inte räcker.
 
+Utöver synthesize() finns rework() som används för elaboration och
+verification. Den gör INGEN ny retrieval utan opererar på föregående
+turs källor (session.active_hits) och föregående svar. Evidens-
+extraktionen instrueras att fokusera på material som INTE kom med i
+föregående svar, eller — för verification — att strikt kontrollera
+att tidigare påståenden faktiskt har källstöd.
+
 Om JSON-parsningen i steg 1 misslyckas faller systemet tillbaka på
 enstegsflödet (build_prompt + generate) så att användaren alltid
 får ett svar. Fallback loggas i debug-objektet.
@@ -456,6 +463,317 @@ def synthesize(
 
     # Steg 2: formulera svar från evidens
     answer = generate_answer(question, evidence, llm, style=style)
+    t2 = time.perf_counter()
+
+    return SynthesisResult(
+        answer=answer,
+        evidence=evidence,
+        used_fallback=False,
+        timing_s={
+            "evidence_extraction": round(t1 - t0, 3),
+            "answer_generation": round(t2 - t1, 3),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Rework: elaboration och verification på föregående källor
+#
+# Dessa vägar opererar INTE på ny retrieval utan på föregående turs
+# active_hits. Målet är att arbeta med samma material som bar förra
+# svaret, men med ett annat fokus:
+# - elaboration: lyft fram vad som prioriterades bort
+# - verification: strikt granskning av vad som redan sagts
+# ---------------------------------------------------------------------------
+
+ELABORATION_EVIDENCE_PROMPT_TEMPLATE = """Ditt tidigare svar till användaren var
+komprimerat och kan ha utelämnat detaljer. Användaren ber dig nu
+utveckla svaret genom att gå tillbaka till SAMMA källor som bar
+det tidigare svaret, och lyfta fram sådant som INTE kom med.
+
+TIDIGARE SVAR TILL ANVÄNDAREN:
+{previous_answer}
+
+Läs källorna på nytt och identifiera textstycken som är relevanta
+för frågan men som INTE redan redovisades i det tidigare svaret.
+Om en detalj redan nämndes i tidigare svar — utelämna den eller
+markera den som redan given.
+
+För varje NY textstycke:
+- Parafrasera det nära originalet. Bevara konkreta detaljer:
+  belopp, tidsfrister, roller, villkor, beslutsordning.
+- Ange exakt vilken källa (Källa N).
+- Markera om du behövde tolka eller om det står uttryckligen.
+
+Om källorna INTE innehåller mer relevant material än vad som redan
+redovisats, returnera en tom extracted-lista. Var ärlig — det är
+bättre att säga "tidigare svar uttömde källorna" än att återupprepa.
+
+Svara ENBART med JSON, utan förklaringar eller markdown:
+{{
+  "extracted": [
+    {{
+      "text": "parafras nära originalet med konkreta detaljer bevarade",
+      "source": "Källa N",
+      "confidence": "explicit"
+    }}
+  ],
+  "not_found": ["aspekter som inte täcks i källorna alls"]
+}}
+
+Fråga:
+{question}
+
+Källmaterial (samma som bar det tidigare svaret):
+{sources}"""
+
+
+VERIFICATION_EVIDENCE_PROMPT_TEMPLATE = """Användaren ifrågasätter eller prövar ditt
+tidigare svar. Du ska nu strikt granska vad som faktiskt har källstöd
+i samma källor som bar det tidigare svaret.
+
+TIDIGARE SVAR TILL ANVÄNDAREN:
+{previous_answer}
+
+Granska källorna och identifiera, för varje påstående som är
+relevant för användarens prövning:
+- Om det står uttryckligen i källan (confidence: "explicit")
+- Om det krävs tolkning för att nå slutsatsen (confidence: "tolkning_krävdes")
+
+Var strikt: ett påstående som i tidigare svar framställdes som
+säkert men som egentligen bygger på tolkning ska markeras som
+"tolkning_krävdes" här.
+
+För påståenden som INTE har stöd i källorna alls — lägg dem i
+not_found som "saknar stöd: [påstående]".
+
+Om det tidigare svaret innehöll påståenden utan källstöd, är det
+viktigt att notera det. Trogenhet mot källorna är här viktigare
+än att försvara det tidigare svaret.
+
+Svara ENBART med JSON, utan förklaringar eller markdown:
+{{
+  "extracted": [
+    {{
+      "text": "parafras av det påstående som har stöd",
+      "source": "Källa N",
+      "confidence": "explicit|tolkning_krävdes"
+    }}
+  ],
+  "not_found": ["påståenden utan stöd, eller aspekter utan täckning"]
+}}
+
+Fråga:
+{question}
+
+Källmaterial (samma som bar det tidigare svaret):
+{sources}"""
+
+
+ELABORATION_ANSWER_PROMPT_TEMPLATE = """Du är en lokal dokumentassistent för interna
+styrdokument. Användaren har bett dig utveckla ditt tidigare svar.
+Följande är NYA textstycken ur samma källor som bar det tidigare svaret.
+
+Formulera ett svar som BYGGER VIDARE på det tidigare utan att
+upprepa det. Nämn gärna inledningsvis att du lägger till detaljer.
+
+Regler:
+- Använd bara den extraherade evidensen.
+- Hänvisa med [Källa N] direkt efter påståenden.
+- Upprepa inte det som redan sades i tidigare svar.
+- Om ett påstående är markerat "tolkning_krävdes", formulera med
+  reservation.
+- Svara på svenska.
+
+TIDIGARE SVAR (för att undvika upprepning):
+{previous_answer}
+
+Nya textstycken:
+{evidence_json}
+
+Aktuell yttring:
+{question}"""
+
+
+VERIFICATION_ANSWER_PROMPT_TEMPLATE = """Du är en lokal dokumentassistent för interna
+styrdokument. Användaren prövar eller ifrågasätter ditt tidigare svar.
+
+Formulera ett svar som ÄRLIGT redogör för vad källorna faktiskt stöder:
+- Lyft fram det som har tydligt ("explicit") källstöd och citera [Källa N].
+- Markera påståenden som krävde tolkning som osäkra — använd
+  formuleringar som "detta tycks innebära" eller "troligen" och
+  förklara vad tolkningen bygger på.
+- Om det tidigare svaret innehöll påståenden UTAN källstöd, säg det
+  rakt ut: "Jag kan inte hitta stöd i källorna för X" — använd inte
+  omskrivningar.
+- Om källorna inte räcker för att bekräfta eller avfärda det
+  användaren prövar, abstäng tydligt: säg vad som skulle behövas.
+
+Regler:
+- Trogenhet mot källorna är viktigare än att försvara det tidigare svaret.
+- Om det tidigare svaret var för säkert på vissa punkter, medge det.
+- Hänvisa med [Källa N] direkt efter påståenden.
+- Svara på svenska.
+
+TIDIGARE SVAR (som användaren prövar):
+{previous_answer}
+
+Granskad evidens:
+{evidence_json}
+
+Aktuell yttring:
+{question}"""
+
+
+def _extract_rework_evidence(
+    question: str,
+    hits: list[SourceHit],
+    previous_answer: str,
+    llm: LocalLLM,
+    mode: str,
+) -> EvidenceResult | None:
+    """
+    Extrahera evidens från föregående källor, med en prompt som
+    beror på rework-läget (elaboration eller verification).
+    """
+    sources_text = _format_sources_for_evidence(hits)
+
+    if mode == "elaboration":
+        template = ELABORATION_EVIDENCE_PROMPT_TEMPLATE
+    elif mode == "verification":
+        template = VERIFICATION_EVIDENCE_PROMPT_TEMPLATE
+    else:
+        logger.warning("Okänt rework-läge: %r. Använder elaboration.", mode)
+        template = ELABORATION_EVIDENCE_PROMPT_TEMPLATE
+
+    prompt = template.format(
+        question=question,
+        sources=sources_text,
+        previous_answer=previous_answer,
+    )
+
+    raw = llm.generate(prompt)
+    return _parse_evidence_json(raw)
+
+
+def _generate_rework_answer(
+    question: str,
+    evidence: EvidenceResult,
+    previous_answer: str,
+    llm: LocalLLM,
+    mode: str,
+) -> str:
+    """Formulera rework-svar baserat på evidens och tidigare svar."""
+    evidence_entries = []
+    for item in evidence.extracted:
+        conf_marker = ""
+        if item.confidence == "tolkning_krävdes":
+            conf_marker = " [tolkning krävdes]"
+        evidence_entries.append(f"- {item.source}: {item.text}{conf_marker}")
+
+    if evidence.not_found:
+        evidence_entries.append("")
+        evidence_entries.append("Saknar stöd eller täckning:")
+        for gap in evidence.not_found:
+            evidence_entries.append(f"- {gap}")
+
+    evidence_text = "\n".join(evidence_entries)
+
+    if mode == "verification":
+        template = VERIFICATION_ANSWER_PROMPT_TEMPLATE
+    else:
+        template = ELABORATION_ANSWER_PROMPT_TEMPLATE
+
+    prompt = template.format(
+        question=question,
+        evidence_json=evidence_text,
+        previous_answer=previous_answer,
+    )
+
+    return llm.generate(prompt)
+
+
+def rework(
+    question: str,
+    hits: list[SourceHit],
+    previous_answer: str,
+    llm: LocalLLM,
+    mode: str,
+) -> SynthesisResult:
+    """
+    Arbeta mot föregående turs källor utan ny retrieval.
+
+    mode styr syftet:
+    - "elaboration": lyft fram det som prioriterades bort i tidigare svar
+    - "verification": strikt granskning av vad som faktiskt har källstöd
+
+    Returnerar alltid ett SynthesisResult. Om evidens-JSON inte går
+    att parsa används enstegsflöde som fallback. Om ingen ny evidens
+    kan extraheras för elaboration abstainar rework ärligt snarare
+    än att upprepa tidigare svar.
+    """
+    t0 = time.perf_counter()
+    evidence = _extract_rework_evidence(question, hits, previous_answer, llm, mode)
+    t1 = time.perf_counter()
+
+    if evidence is None:
+        # JSON-parsningsfel — för rework gör vi ingen ny retrieval.
+        # Returnera en ärlig abstain.
+        logger.warning(
+            "Rework (%s) evidens-JSON kunde inte parsas — abstainar.", mode,
+        )
+        if mode == "verification":
+            answer = (
+                "Jag kunde inte genomföra granskningen av mitt tidigare "
+                "svar just nu. Försök gärna omformulera frågan."
+            )
+        else:
+            answer = (
+                "Jag kunde inte utveckla mitt tidigare svar just nu. "
+                "Försök gärna omformulera frågan, eller ställ den "
+                "annorlunda."
+            )
+        return SynthesisResult(
+            answer=answer,
+            evidence=None,
+            used_fallback=True,
+            fallback_reason=f"rework_{mode}_parse_failed",
+            timing_s={"evidence_extraction": round(t1 - t0, 3)},
+        )
+
+    if not evidence.extracted:
+        # För elaboration: om inget nytt fanns att lägga till, var ärlig.
+        # För verification: om inget hade stöd, var ännu ärligare.
+        if mode == "verification":
+            if evidence.not_found:
+                gaps = "; ".join(evidence.not_found)
+                answer = (
+                    f"Vid granskning saknar följande tydligt stöd i "
+                    f"källorna: {gaps}. Det kan betyda att det tidigare "
+                    f"svaret gick längre än källorna medger på dessa "
+                    f"punkter."
+                )
+            else:
+                answer = (
+                    "Jag hittar inget som ifrågasätter eller bekräftar "
+                    "det tidigare svaret i de källor som bar det. För "
+                    "en tydligare prövning behövs ytterligare dokument."
+                )
+        else:
+            answer = (
+                "Det tidigare svaret redovisade i huvudsak det som står "
+                "i de återfunna källorna. För ytterligare detaljer "
+                "behövs andra dokument — du kan ställa en ny fråga "
+                "med mer specifik inriktning."
+            )
+        return SynthesisResult(
+            answer=answer,
+            evidence=evidence,
+            used_fallback=False,
+            timing_s={"evidence_extraction": round(t1 - t0, 3)},
+        )
+
+    answer = _generate_rework_answer(question, evidence, previous_answer, llm, mode)
     t2 = time.perf_counter()
 
     return SynthesisResult(
