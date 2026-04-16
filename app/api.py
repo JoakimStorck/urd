@@ -62,7 +62,7 @@ def chat(req: ChatRequest) -> ChatResponse:
     try:
         state = sessions.get_or_create(req.session_id)
 
-        # 1. Klassificera yttringen för att avgöra vilken väg som tas.
+        # 1. Klassificera yttringen inom QUD-modellen.
         classification = classify_utterance(req.question, state, rag.llm)
 
         # Grund-debug som alla vägar lägger till
@@ -70,12 +70,19 @@ def chat(req: ChatRequest) -> ChatResponse:
             "session_id": state.session_id,
             "classification": {
                 "intent": classification.intent,
+                "substyle": classification.substyle,
                 "reason": classification.reason,
                 "used_fallback": classification.used_fallback,
+            },
+            "qud": {
+                "text": state.current_qud_text,
+                "age_turns": state.qud_age_turns,
             },
         }
 
         # 2. Dispatcha baserat på intent.
+
+        # 2a. Social/meta: inget retrieval, inget QUD-påverkan.
         if classification.intent == "social_or_meta":
             answer_text = handle_social(req.question, state, rag.llm)
             state.add_social_turn(req.question, answer_text)
@@ -90,21 +97,53 @@ def chat(req: ChatRequest) -> ChatResponse:
                 },
             )
 
-        # Från och med här är det document_question eller followup —
-        # båda går via retrieval + syntes, men followup får bakgrund.
-        if classification.intent == "followup":
+        # 2b. Ny huvudfråga: sätt QUD till ordagrann originaltext FÖRE
+        # retrieval, så att den registreras även om den här turen
+        # inte använder QUD-ankaret. add_turn körs senare när svar finns.
+        if classification.intent == "new_main_question":
+            state.set_qud(req.question)
+            # QUD-info uppdateras i debug efter att set_qud körts
+            base_debug["qud"] = {
+                "text": state.current_qud_text,
+                "age_turns": state.qud_age_turns,
+            }
+
+        # 2c. Bestäm retrieval- och syntesparametrar baserat på klass.
+        qud_anchor: str | None = None
+        background_turns = None
+        background_max_turns = 0
+        style: str | None = None
+
+        if classification.intent == "new_main_question":
+            # Standard retrieval, ingen bakgrund, standardstil.
+            path_label = "new_main_question"
+
+        elif classification.intent == "related_to_qud":
+            # QUD-ankare i retrieval + bakgrund i syntes + stil
+            qud_anchor = state.current_qud_text
             background_turns = list(state.turns)
-            background_max_turns = settings.followup_background_turns
-            path_label = "followup"
+            background_max_turns = settings.qud_background_turns
+            style = classification.substyle  # subquestion | broadening | narrowing_or_repair
+            path_label = "related_to_qud"
+
+        elif classification.intent == "verification_or_challenge":
+            # Ingen QUD-ankare (v1), men bakgrund + verifieringsstil
+            background_turns = list(state.turns)
+            background_max_turns = settings.qud_background_turns
+            style = "verification"
+            path_label = "verification_or_challenge"
+
         else:
-            background_turns = None
-            background_max_turns = 0
-            path_label = "document_question"
+            # Skulle inte hända — klassificeraren garanterar en av
+            # de fyra kategorierna. Konservativ fallback om det sker.
+            path_label = "new_main_question"
 
         response = rag.answer(
             req.question,
+            qud_anchor=qud_anchor,
             background_turns=background_turns,
             background_max_turns=background_max_turns,
+            style=style,
         )
 
         # Uppdatera sessionsstate med dokumentkällorna
@@ -119,8 +158,10 @@ def chat(req: ChatRequest) -> ChatResponse:
             response.debug = {}
         response.debug.update(base_debug)
         response.debug["path"] = path_label
-        if path_label == "followup":
+        if background_max_turns > 0:
             response.debug["background_max_turns"] = background_max_turns
+        if style is not None:
+            response.debug["synthesis_style"] = style
 
         response.session_id = state.session_id
 

@@ -9,6 +9,18 @@ och markera om tolkning krävdes.
 Steg 2 (generate_answer) formulerar svaret enbart utifrån den
 extraherade evidensen. Aspekter utan stöd kommuniceras explicit.
 
+Svarsformuleringen kan styras av en stilparameter som kommer från
+QUD-klassificeringen i api-lagret:
+- None: standardstil (default, fungerar för new_main_question).
+- "subquestion": fokuserat svar på en delfråga inom etablerad
+  huvudfråga — kort och avgränsat.
+- "broadening": breddande svar som lyfter fram vad mer som finns
+  i området runt huvudfrågan.
+- "narrowing_or_repair": preciserande svar efter att föregående svar
+  varit för grovt eller missförstått.
+- "verification": striktare stöd krävs, tydligare abstention när
+  källorna inte räcker.
+
 Om JSON-parsningen i steg 1 misslyckas faller systemet tillbaka på
 enstegsflödet (build_prompt + generate) så att användaren alltid
 får ett svar. Fallback loggas i debug-objektet.
@@ -155,12 +167,50 @@ Om det finns aspekter av frågan som extrakten inte täcker alls,
 nämn det kort i slutet av svaret.
 
 Svara på svenska, även om extrakten innehåller engelska termer.
-
+{style_block}
 Extraherade textstycken:
 {evidence_json}
 
 Fråga:
 {question}"""
+
+
+# Stilspecifika instruktioner som sätts in i ANSWER_PROMPT_TEMPLATE
+# via {style_block}. Tom sträng för standardstil (new_main_question).
+STYLE_BLOCKS = {
+    None: "",
+    "subquestion": """
+Stil: Detta är en delfråga inom en pågående huvudtråd. Användaren vill
+ha ett fokuserat svar på just denna delaspekt — utgå från att
+helhetskontexten redan är etablerad. Upprepa inte bakgrund som
+användaren redan fått. Håll svaret kort och avgränsat till delfrågan.
+""",
+    "broadening": """
+Stil: Användaren vidgar sin huvudfråga och vill se vad mer som finns
+i området. Lyft fram de relevanta aspekterna som källorna täcker,
+även sådana som inte direkt besvarar frågan men är närliggande och
+användbara. Strukturera gärna svaret som en översikt.
+""",
+    "narrowing_or_repair": """
+Stil: Användaren preciserar eller rättar efter att föregående svar
+varit för grovt, otydligt, eller missförstått deras avsikt. Fokusera
+specifikt på den preciserade aspekten. Om tidigare svar byggde på
+fel tolkning, var tydlig med att det nu handlar om något mer
+avgränsat eller specifikt.
+""",
+    "verification": """
+Stil: Användaren prövar eller ifrågasätter ett tidigare påstående.
+Var därför särskilt noggrann med källstöd:
+- Påståenden ska bygga på "explicit"-markerad evidens där det går.
+- Om ett tidigare påstående (i samtalsbakgrunden eller i källorna)
+  bara har "tolkning_krävdes"-stöd eller saknar stöd helt, säg det
+  rakt ut.
+- Om källorna INTE räcker för att bekräfta det användaren prövar,
+  abstäng tydligt: säg vad som skulle behövas och att det inte finns
+  tillräckligt stöd i återfunna källor.
+- Ge inga nya påståenden utan tydligt källstöd.
+""",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -293,9 +343,13 @@ def generate_answer(
     question: str,
     evidence: EvidenceResult,
     llm: LocalLLM,
+    style: str | None = None,
 ) -> str:
     """
     Steg 2: Formulera svar enbart utifrån extraherad evidens.
+
+    style styr svarsformuleringen — se STYLE_BLOCKS. Okända
+    stilmarkörer behandlas som None (standardstil).
     """
     # Bygg en läsbar representation av evidensen för prompten
     evidence_entries = []
@@ -315,9 +369,12 @@ def generate_answer(
 
     evidence_text = "\n".join(evidence_entries)
 
+    style_block = STYLE_BLOCKS.get(style, "")
+
     prompt = ANSWER_PROMPT_TEMPLATE.format(
         question=question,
         evidence_json=evidence_text,
+        style_block=style_block,
     )
 
     return llm.generate(prompt)
@@ -329,6 +386,7 @@ def synthesize(
     llm: LocalLLM,
     background_turns: list[dict] | None = None,
     background_max_turns: int = 0,
+    style: str | None = None,
 ) -> SynthesisResult:
     """
     Kör tvåstegssyntes med fallback till enstegsflödet.
@@ -336,6 +394,8 @@ def synthesize(
     Om background_turns och background_max_turns > 0 får evidens-
     extraktionen se tidigare turer som bakgrund för att bättre
     förstå följdfrågor. Bakgrunden bidrar inte till extracted-listan.
+
+    style styr svarsformuleringens ton (se STYLE_BLOCKS).
 
     Returnerar alltid ett SynthesisResult med svar. Om tvåstegs-
     syntesen misslyckas (JSON-parsningsfel) används enstegsflödet
@@ -395,7 +455,7 @@ def synthesize(
         )
 
     # Steg 2: formulera svar från evidens
-    answer = generate_answer(question, evidence, llm)
+    answer = generate_answer(question, evidence, llm, style=style)
     t2 = time.perf_counter()
 
     return SynthesisResult(

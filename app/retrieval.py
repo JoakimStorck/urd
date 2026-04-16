@@ -270,27 +270,53 @@ class RagService:
     def answer(
         self,
         question: str,
+        qud_anchor: str | None = None,
         background_turns: list[dict] | None = None,
         background_max_turns: int = 0,
+        style: str | None = None,
     ) -> ChatResponse:
+        """
+        Kör retrieval och syntes.
+
+        Parametrar:
+        - question: originalfrågan som användaren ställde. Det är den
+          som syntesen refererar till.
+        - qud_anchor: om satt, en QUD-text som konkateneras med question
+          för att bilda söktexten som används i semantisk sökning, BM25
+          och cross-encoder-reranking. Används för related_to_qud-fall
+          där den aktiva huvudfrågan ska påverka retrieval utan att
+          förvränga originalfrågan i syntesen.
+        - background_turns, background_max_turns: samtalsbakgrund som
+          skickas med till evidensextraktionen.
+        - style: valfri stilmarkör som styr svarsformuleringen. Giltiga
+          värden hanteras i synthesis.py. None = standardstil.
+        """
         t0 = time.perf_counter()
 
+        # Bygg söktexten. Om QUD-ankare finns konkateneras det med
+        # originalfrågan så att både embedding-modell, BM25 och
+        # cross-encoder får samma utökade kontext.
+        if qud_anchor:
+            search_text = f"{question}\n\n(Huvudfråga i samtalet: {qud_anchor})"
+        else:
+            search_text = question
+
         # 1. Semantisk sökning via Qdrant
-        query_vector = self.embedder.embed_query(question)
+        query_vector = self.embedder.embed_query(search_text)
         t1 = time.perf_counter()
 
         semantic_hits = self.store.search(query_vector, limit=15)
         t2 = time.perf_counter()
 
         # 2. BM25-sökning – tillför kandidater med exakt ordmatchning
-        bm25_hits = self.bm25_index.top_k(question, k=10)
+        bm25_hits = self.bm25_index.top_k(search_text, k=10)
 
         # 3. Slå ihop till en unik kandidatpool
         candidates = _merge_candidates(semantic_hits, bm25_hits)
         t3 = time.perf_counter()
 
         # 4. Första reranking
-        reranked, rerank_debug = self.reranker.rerank(question, candidates)
+        reranked, rerank_debug = self.reranker.rerank(search_text, candidates)
         t4 = time.perf_counter()
 
         # 5. Dokumentexpansion: för dokument med högt rankade chunkar,
@@ -299,7 +325,7 @@ class RagService:
         num_expanded = len(expanded_new)
 
         if expanded_new:
-            exp_reranked, exp_debug = self.reranker.rerank(question, expanded_new)
+            exp_reranked, exp_debug = self.reranker.rerank(search_text, expanded_new)
             # Slå ihop med första rankingen och sortera om
             all_reranked = reranked + exp_reranked
             all_reranked.sort(key=lambda h: h.score, reverse=True)
@@ -326,6 +352,7 @@ class RagService:
                     "num_candidates": len(candidates),
                     "num_expanded": num_expanded,
                     "abstained": True,
+                    "qud_anchor_used": qud_anchor is not None,
                     "timing_s": {
                         "embed_query": round(t1 - t0, 3),
                         "search": round(t2 - t1, 3),
@@ -346,6 +373,7 @@ class RagService:
             self.llm,
             background_turns=background_turns,
             background_max_turns=background_max_turns,
+            style=style,
         )
         t7 = time.perf_counter()
 
@@ -375,6 +403,7 @@ class RagService:
                 "num_reranked": len(all_reranked),
                 "num_hits": len(hits),
                 "abstained": False,
+                "qud_anchor_used": qud_anchor is not None,
                 "synthesis": synthesis_debug,
                 "timing_s": {
                     "embed_query": round(t1 - t0, 3),
