@@ -333,6 +333,10 @@ class RagService:
         else:
             all_reranked = reranked
 
+        expanded_doc_paths = sorted({
+            hit.metadata.source_path for hit in expanded_new
+        })        
+        
         t5 = time.perf_counter()
 
         # 6. Dedup och välj topp-K
@@ -351,6 +355,7 @@ class RagService:
                     "num_bm25": len(bm25_hits),
                     "num_candidates": len(candidates),
                     "num_expanded": num_expanded,
+                    "expanded_docs": expanded_doc_paths,
                     "abstained": True,
                     "qud_anchor_used": qud_anchor is not None,
                     "timing_s": {
@@ -486,34 +491,42 @@ class RagService:
         reranked: list[SourceHit],
         already_seen: list[SourceHit],
         score_threshold: float = 0.5,
-        max_expand_docs: int = 2,
     ) -> list[SourceHit]:
         """
-        För de högst rankade dokumenten, hämta övriga chunkar som
-        inte redan finns i kandidatpoolen.
+        Expandera alla dokument som redan visat tydlig relevans.
+    
+        Om ett dokument har minst en chunk med score >= score_threshold,
+        hämtas övriga chunkar från samma dokument som ännu inte finns i
+        kandidatpoolen. Dessa får sedan bedömas i en andra rerankingrunda.
+    
+        Detta gör expansionen dokumentdriven i stället för att begränsa
+        den till ett fast antal toppdokument.
         """
         if not reranked:
             return []
-
+    
         seen_ids = {h.chunk_id for h in already_seen} | {h.chunk_id for h in reranked}
-
-        # Hitta dokument med minst en chunk över tröskeln
-        top_docs: list[str] = []
+    
+        # Alla dokument som visat tydlig relevans får expanderas
+        docs_to_expand: list[str] = []
         seen_docs: set[str] = set()
+    
         for hit in reranked:
-            if hit.score >= score_threshold and hit.metadata.source_path not in seen_docs:
-                top_docs.append(hit.metadata.source_path)
-                seen_docs.add(hit.metadata.source_path)
-            if len(top_docs) >= max_expand_docs:
-                break
-
-        # Hämta nya chunkar från dessa dokument
+            source_path = hit.metadata.source_path
+            if hit.score >= score_threshold and source_path not in seen_docs:
+                docs_to_expand.append(source_path)
+                seen_docs.add(source_path)
+    
+        if not docs_to_expand:
+            return []
+    
         new_candidates: list[SourceHit] = []
-        for source_path in top_docs:
+    
+        for source_path in docs_to_expand:
             doc_chunks = self.bm25_index.get_chunks_by_source(source_path)
             for chunk in doc_chunks:
                 if chunk.chunk_id not in seen_ids:
                     new_candidates.append(chunk)
                     seen_ids.add(chunk.chunk_id)
-
+    
         return new_candidates
