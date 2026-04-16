@@ -24,7 +24,7 @@ DEFAULTS = {
     "chunk_overlap": 150,
     "preprocess_max_section_chars": 6000,
     "server": "",
-    "followup_background_turns": 1,
+    "qud_background_turns": 1,
     "social_history_turns": 4,
     "classification_history_turns": 2,
 }
@@ -44,7 +44,7 @@ _ENV_KEYS = {
     "chunk_overlap": "CHUNK_OVERLAP",
     "preprocess_max_section_chars": "PREPROCESS_MAX_SECTION_CHARS",
     "server": "URD_SERVER",
-    "followup_background_turns": "FOLLOWUP_BACKGROUND_TURNS",
+    "qud_background_turns": "QUD_BACKGROUND_TURNS",
     "social_history_turns": "SOCIAL_HISTORY_TURNS",
     "classification_history_turns": "CLASSIFICATION_HISTORY_TURNS",
 }
@@ -122,7 +122,7 @@ def _build_settings() -> "Settings":
         chunk_overlap=i("chunk_overlap"),
         preprocess_max_section_chars=i("preprocess_max_section_chars"),
         server=server,
-        followup_background_turns=i("followup_background_turns"),
+        qud_background_turns=i("qud_background_turns"),
         social_history_turns=i("social_history_turns"),
         classification_history_turns=i("classification_history_turns"),
     )
@@ -151,7 +151,10 @@ class Settings(BaseModel):
 
     # Samtalskontext — hur mycket historik som skickas med i olika steg.
     # Varje värde räknas i "turer" där en tur = ett fråga-svar-par.
-    followup_background_turns: int = 1
+    # qud_background_turns används för related_to_qud och
+    # verification_or_challenge, där föregående turer ges som bakgrund
+    # i evidensextraktionen.
+    qud_background_turns: int = 1
     social_history_turns: int = 4
     classification_history_turns: int = 2
 
