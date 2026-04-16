@@ -110,12 +110,26 @@ eller "tolkning_krävdes" om du behövde tolka eller dra en slutsats.
 
 Om källorna inte innehåller relevant information, returnera en tom
 extracted-lista och beskriv vad som saknas i not_found.
-
+{background_block}
 Fråga:
 {question}
 
 Källmaterial:
 {sources}"""
+
+
+BACKGROUND_BLOCK_TEMPLATE = """
+SAMTALSBAKGRUND (endast som kontext för att förstå frågan):
+{background_text}
+
+VIKTIGT om samtalsbakgrunden:
+- Den är INTE en källa. Påståenden i "extracted" får ENDAST komma
+  från källmaterialet nedan, aldrig från samtalsbakgrunden.
+- Den hjälper dig tolka vad frågan syftar på (t.ex. vad "andra regler"
+  eller "det" refererar till), men den är inte faktamaterial.
+- Även om samtalsbakgrunden innehåller påståenden som verkar relevanta,
+  ska de inte upprepas i extracted om de inte också stöds av källmaterialet.
+"""
 
 
 ANSWER_PROMPT_TEMPLATE = """Du är en lokal dokumentassistent för interna styrdokument.
@@ -211,20 +225,63 @@ def _parse_evidence_json(raw: str) -> EvidenceResult | None:
 # Tvåstegssyntes
 # ---------------------------------------------------------------------------
 
+def _format_background(turns: list[dict], max_turns: int) -> str:
+    """
+    Formatera de senaste turerna som bakgrundstext för evidensprompten.
+
+    Varje "tur" i config-bemärkelse är ett fråga-svar-par (2 entries i
+    turns-listan). Returnerar tom sträng om ingen historik eller om
+    max_turns <= 0.
+    """
+    if not turns or max_turns <= 0:
+        return ""
+
+    entries = turns[-(max_turns * 2):]
+    if not entries:
+        return ""
+
+    lines = []
+    for entry in entries:
+        role = "Användare" if entry["role"] == "user" else "Assistent"
+        content = entry["content"]
+        # Korta ned långa svar för att hålla prefill-kostnaden nere
+        if len(content) > 600:
+            content = content[:600] + "..."
+        lines.append(f"{role}: {content}")
+
+    return "\n".join(lines)
+
+
 def extract_evidence(
     question: str,
     hits: list[SourceHit],
     llm: LocalLLM,
+    background_turns: list[dict] | None = None,
+    background_max_turns: int = 0,
 ) -> EvidenceResult | None:
     """
     Steg 1: Be LLM:en identifiera relevanta textstycken nära källan.
     Returnerar None om parsningen misslyckas.
+
+    Om background_turns och background_max_turns > 0 läggs ett
+    samtalsbakgrunds-block in i prompten. Bakgrunden används ENDAST för
+    att hjälpa modellen förstå vad frågan syftar på — den får inte
+    bidra med påståenden i extracted-listan.
     """
     sources_text = _format_sources_for_evidence(hits)
+
+    background_block = ""
+    if background_turns and background_max_turns > 0:
+        background_text = _format_background(background_turns, background_max_turns)
+        if background_text:
+            background_block = BACKGROUND_BLOCK_TEMPLATE.format(
+                background_text=background_text,
+            )
 
     prompt = EVIDENCE_PROMPT_TEMPLATE.format(
         question=question,
         sources=sources_text,
+        background_block=background_block,
     )
 
     raw = llm.generate(prompt)
@@ -270,9 +327,15 @@ def synthesize(
     question: str,
     hits: list[SourceHit],
     llm: LocalLLM,
+    background_turns: list[dict] | None = None,
+    background_max_turns: int = 0,
 ) -> SynthesisResult:
     """
     Kör tvåstegssyntes med fallback till enstegsflödet.
+
+    Om background_turns och background_max_turns > 0 får evidens-
+    extraktionen se tidigare turer som bakgrund för att bättre
+    förstå följdfrågor. Bakgrunden bidrar inte till extracted-listan.
 
     Returnerar alltid ett SynthesisResult med svar. Om tvåstegs-
     syntesen misslyckas (JSON-parsningsfel) används enstegsflödet
@@ -280,7 +343,13 @@ def synthesize(
     """
     # Steg 1: evidensextraktion
     t0 = time.perf_counter()
-    evidence = extract_evidence(question, hits, llm)
+    evidence = extract_evidence(
+        question,
+        hits,
+        llm,
+        background_turns=background_turns,
+        background_max_turns=background_max_turns,
+    )
     t1 = time.perf_counter()
 
     if evidence is None:

@@ -267,7 +267,12 @@ class RagService:
         self._build_bm25_index()
         return len(self.bm25_index.hits)
 
-    def answer(self, question: str) -> ChatResponse:
+    def answer(
+        self,
+        question: str,
+        background_turns: list[dict] | None = None,
+        background_max_turns: int = 0,
+    ) -> ChatResponse:
         t0 = time.perf_counter()
 
         # 1. Semantisk sökning via Qdrant
@@ -335,7 +340,13 @@ class RagService:
         # 7. Tvåstegssyntes: evidensextraktion → svarsformulering
         t6 = time.perf_counter()
 
-        synthesis_result = synthesize(question, hits, self.llm)
+        synthesis_result = synthesize(
+            question,
+            hits,
+            self.llm,
+            background_turns=background_turns,
+            background_max_turns=background_max_turns,
+        )
         t7 = time.perf_counter()
 
         # Bygg debug-info för syntesen

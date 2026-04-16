@@ -1,15 +1,36 @@
 """
-Samtalsminne för docchat.
+Samtalsminne för URD.
 
 Håller ett litet tillståndsobjekt per session. State:t är medvetet
 smalt: det minns vilka källor och vilka svarsstycken som bar senaste
 svaret, inte mer.
+
+Turfönstret (hur många turer som behålls) skalar med de tre
+context-parametrarna i config. Eftersom varje tur = fråga-svar-par
+= 2 entries, är det faktiska taket 2 * max(history-parametrarna).
 """
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+
+from app.config import settings
+
+
+def _max_turns_window() -> int:
+    """
+    Räkna ut hur många entries (fråga+svar = 2 entries per tur) som
+    behövs i turhistoriken för att alla context-steg ska få vad de
+    begär, med ett minimum på 6 entries (3 turer).
+    """
+    max_context_turns = max(
+        settings.followup_background_turns,
+        settings.social_history_turns,
+        settings.classification_history_turns,
+        3,  # minsta rimliga fönster även om alla config-värden är 0
+    )
+    return max_context_turns * 2
 
 
 @dataclass
@@ -28,14 +49,35 @@ class ConversationState:
         self.turns.append({"role": "user", "content": question})
         self.turns.append({"role": "assistant", "content": answer})
 
-        # Behåll bara de senaste 6 turerna (3 fråga-svar-par)
-        if len(self.turns) > 6:
-            self.turns = self.turns[-6:]
+        self._trim_turns()
 
         self.active_doc_paths = doc_paths
 
         # Extrahera korta utdrag från svaret (första meningen per stycke)
         self.active_answer_snippets = _extract_snippets(answer, max_snippets=3)
+
+    def add_social_turn(
+        self,
+        question: str,
+        answer: str,
+    ) -> None:
+        """
+        Registrera en social eller meta-tur i samtalet.
+
+        Till skillnad från add_turn uppdateras INTE active_doc_paths eller
+        active_answer_snippets. Dessa ska spegla vad som senast bars av
+        källor, så att en följdfråga efter en social tur anknyter till
+        den senaste dokumentturen, inte till det sociala svaret.
+        """
+        self.turns.append({"role": "user", "content": question})
+        self.turns.append({"role": "assistant", "content": answer})
+
+        self._trim_turns()
+
+    def _trim_turns(self) -> None:
+        window = _max_turns_window()
+        if len(self.turns) > window:
+            self.turns = self.turns[-window:]
 
     @property
     def has_history(self) -> bool:
