@@ -186,12 +186,21 @@ class Reranker:
         self,
         question: str,
         hits: list[SourceHit],
+        filter_floor: float = 0.0,
     ) -> tuple[list[SourceHit], list[dict]]:
         """
         Rerankar kandidater med cross-encoder.
-        Returnerar (sorterade hits, debug-info).
-        Kandidater med negativ score filtreras bort – cross-encodern
-        bedömer dem som irrelevanta.
+
+        Returnerar (sorterade hits, debug-info). Kandidater med score
+        under filter_floor filtreras bort.
+
+        filter_floor default är 0.0: cross-encodern bedömer chunkar
+        med negativ score som irrelevanta. För chunkar som kommer
+        från dokument som redan visat sig starkt relevanta (via
+        expansion) kan en lägre floor användas — t.ex. -1.0 — så
+        att borderline-relevanta sektioner från ett relevant dokument
+        inte filtreras bort trots att cross-encodern är osäker på dem
+        individuellt.
         """
         if not hits:
             return [], []
@@ -222,10 +231,10 @@ class Reranker:
                 "document_title": hit.metadata.document_title,
                 "cross_encoder_score": round(float(ce_score), 4),
                 "document_type": hit.metadata.document_type,
-                "filtered": float(ce_score) < 0,
+                "filtered": float(ce_score) < filter_floor,
             })
 
-            if float(ce_score) < 0:
+            if float(ce_score) < filter_floor:
                 continue
 
             reranked.append(SourceHit(
@@ -325,7 +334,14 @@ class RagService:
         num_expanded = len(expanded_new)
 
         if expanded_new:
-            exp_reranked, exp_debug = self.reranker.rerank(search_text, expanded_new)
+            # Andra rerankingpasset använder en lägre filtreringströskel
+            # eftersom chunkarna kommer från dokument som redan visat
+            # sig starkt relevanta. Se expanded_filter_floor i config.
+            exp_reranked, exp_debug = self.reranker.rerank(
+                search_text,
+                expanded_new,
+                filter_floor=settings.expanded_filter_floor,
+            )
             # Slå ihop med första rankingen och sortera om
             all_reranked = reranked + exp_reranked
             all_reranked.sort(key=lambda h: h.score, reverse=True)
@@ -490,7 +506,7 @@ class RagService:
         self,
         reranked: list[SourceHit],
         already_seen: list[SourceHit],
-        score_threshold: float = 0.5,
+        score_threshold: float | None = None,
     ) -> list[SourceHit]:
         """
         Expandera alla dokument som redan visat tydlig relevans.
@@ -501,9 +517,14 @@ class RagService:
     
         Detta gör expansionen dokumentdriven i stället för att begränsa
         den till ett fast antal toppdokument.
+
+        score_threshold default läses från settings.expansion_score_threshold.
         """
         if not reranked:
             return []
+
+        if score_threshold is None:
+            score_threshold = settings.expansion_score_threshold
     
         seen_ids = {h.chunk_id for h in already_seen} | {h.chunk_id for h in reranked}
     

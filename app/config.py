@@ -27,6 +27,9 @@ DEFAULTS = {
     "qud_background_turns": 1,
     "social_history_turns": 4,
     "classification_history_turns": 2,
+    "expansion_score_threshold": 0.2,
+    "expanded_filter_floor": -1.0,
+    "qud_drift_threshold": 0.55,
 }
 
 # Mapping: config-nyckel → miljövariabel
@@ -47,6 +50,9 @@ _ENV_KEYS = {
     "qud_background_turns": "QUD_BACKGROUND_TURNS",
     "social_history_turns": "SOCIAL_HISTORY_TURNS",
     "classification_history_turns": "CLASSIFICATION_HISTORY_TURNS",
+    "expansion_score_threshold": "EXPANSION_SCORE_THRESHOLD",
+    "expanded_filter_floor": "EXPANDED_FILTER_FLOOR",
+    "qud_drift_threshold": "QUD_DRIFT_THRESHOLD",
 }
 
 
@@ -106,6 +112,9 @@ def _build_settings() -> "Settings":
     def i(key: str) -> int:
         return int(_resolve_value(key, file_config))
 
+    def f(key: str) -> float:
+        return float(_resolve_value(key, file_config))
+
     server = s("server").strip() or None
 
     return Settings(
@@ -125,6 +134,9 @@ def _build_settings() -> "Settings":
         qud_background_turns=i("qud_background_turns"),
         social_history_turns=i("social_history_turns"),
         classification_history_turns=i("classification_history_turns"),
+        expansion_score_threshold=f("expansion_score_threshold"),
+        expanded_filter_floor=f("expanded_filter_floor"),
+        qud_drift_threshold=f("qud_drift_threshold"),
     )
 
 
@@ -157,6 +169,23 @@ class Settings(BaseModel):
     qud_background_turns: int = 1
     social_history_turns: int = 4
     classification_history_turns: int = 2
+
+    # Retrieval-trösklar.
+    # expansion_score_threshold: minsta cross-encoder-score som krävs
+    #   för att ett dokument ska expanderas. Sänk för att vara mer
+    #   generös med borderline-relevanta dokument.
+    # expanded_filter_floor: lägsta score som tillåts för chunkar som
+    #   kommer från expanderade dokument. Negativt värde betyder att
+    #   även chunkar cross-encodern är osäker på släpps igenom,
+    #   eftersom dokumentet som helhet redan visat sig relevant.
+    expansion_score_threshold: float = 0.2
+    expanded_filter_floor: float = -1.0
+
+    # QUD-drift-skydd. Om embedding-likhet mellan aktuell fråga och
+    # current_qud_text understiger detta värde, överrids en
+    # related_to_qud-klassificering till new_main_question.
+    # Värdet är kalibrerat för multilingual-e5-large.
+    qud_drift_threshold: float = 0.55
 
 
 settings = _build_settings()

@@ -8,8 +8,9 @@ from app.config import settings
 from app.schemas import ChatRequest, ChatResponse
 from app.retrieval import RagService
 from app.session_state import SessionStore
-from app.intent import classify_utterance
+from app.intent import classify_utterance, Classification
 from app.social import handle_social
+from app.qud_drift import measure_drift
 from app.llm import LLMUnavailableError
 
 app = FastAPI(title="Local IIT URD")
@@ -65,6 +66,32 @@ def chat(req: ChatRequest) -> ChatResponse:
         # 1. Klassificera yttringen inom QUD-modellen.
         classification = classify_utterance(req.question, state, rag.llm)
 
+        # 1b. QUD-drift-skydd: om klassificeraren säger related_to_qud
+        # men aktuell yttring ligger semantiskt långt från aktiv QUD,
+        # tolka om till new_main_question. Detta fångar fall där
+        # samtalet bytt ämne utan att klassificeraren märkt det, vilket
+        # annars skulle leda till kontaminerad retrieval (QUD-ankare mot
+        # fel ämne) och typiskt till abstain.
+        drift: object | None = None
+        if classification.intent == "related_to_qud" and state.current_qud_text:
+            drift = measure_drift(
+                req.question,
+                state.current_qud_text,
+                rag.embedder,
+                threshold=settings.qud_drift_threshold,
+            )
+            if drift is not None and drift.drift_detected:
+                classification = Classification(
+                    intent="new_main_question",
+                    substyle=None,
+                    reason=(
+                        f"qud_drift_detected (similarity={drift.similarity} "
+                        f"< threshold={drift.threshold})"
+                    ),
+                    raw=classification.raw,
+                    used_fallback=False,
+                )
+
         # Grund-debug som alla vägar lägger till
         base_debug = {
             "session_id": state.session_id,
@@ -79,6 +106,13 @@ def chat(req: ChatRequest) -> ChatResponse:
                 "age_turns": state.qud_age_turns,
             },
         }
+
+        if drift is not None:
+            base_debug["qud_drift"] = {
+                "similarity": drift.similarity,
+                "threshold": drift.threshold,
+                "drift_detected": drift.drift_detected,
+            }
 
         # 2. Dispatcha baserat på intent.
 
