@@ -89,6 +89,62 @@ def _format_sources_for_evidence(hits: list[SourceHit]) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
+def _format_sources_for_direct(hits: list[SourceHit]) -> str:
+    """
+    Formatera källor för den direkta enstegsprompten (B1-stil).
+
+    Skillnad mot _format_sources_for_evidence: här används en något
+    luftigare layout som underlättar för modellen att se sektioner
+    och deras innehåll tydligt åtskilda.
+    """
+    blocks = []
+    for i, hit in enumerate(hits, start=1):
+        meta = hit.metadata
+        header = f"[Källa {i}] {meta.file_name} — {meta.section_title}"
+        blocks.append(f"{header}\n{hit.text}")
+    return "\n\n".join(blocks)
+
+
+# Direct-prompten (motsvarar B1 från experimentskriptet).
+# Enstegssyntes med strikta strukturregler: återge numrerade listor
+# i sin helhet, tabeller i sin helhet, använd källans exakta termer.
+DIRECT_SYNTHESIS_PROMPT = """Du är en lokal dokumentassistent för interna styrdokument.
+Svara på frågan enbart utifrån källorna nedan.
+
+KRITISKT för svarets användbarhet:
+- BEVARA ALLA KONKRETA DETALJER från källorna: belopp, gränsvärden
+  (t.ex. "500 tkr"), roller ("prefekt", "rektor", "Head of School"),
+  tidsfrister, procedurer, villkor, undantag.
+
+- OM EN KÄLLA INNEHÅLLER EN NUMRERAD LISTA: återge ALLA poster i
+  listan, i samma ordning. Utelämna inga steg, även om de verkar
+  triviala eller liknar varandra. En process med 16 steg ska
+  återges med 16 steg, inte sammanfattas till 8.
+
+- OM EN KÄLLA INNEHÅLLER EN TABELL eller strukturerad uppställning
+  (till exempel tidsramar, roller, belopp): återge den i sin helhet
+  som tabell eller strukturerad lista. Komprimera inte tabeller till
+  löptext.
+
+- ANVÄND KÄLLORNAS EXAKTA TERMER för formella moment, roller och
+  procedurer. Om källan säger "intervju" — säg "intervju", inte
+  "samtal". Om källan säger "öppen nominering och ansökningsförfarande"
+  — använd den termen, inte "ansökning och validering".
+
+- Ange källa efter varje påstående med [Källa N].
+- Inled direkt med det mest specifika svaret på frågan. Inga
+  inledande "inramningar" eller "för att besvara frågan om...".
+- Om källorna täcker aspekter bortom frågan, nämn INTE att de saknas.
+  Bara besvara det som faktiskt frågades.
+
+{background_block}Källor:
+{sources_block}
+
+Fråga: {question}
+
+Svar:"""
+
+
 EVIDENCE_PROMPT_TEMPLATE = """Läs källorna noggrant. Identifiera de textställen
 som kan vara relevanta för frågan.
 
@@ -396,17 +452,63 @@ def synthesize(
     style: str | None = None,
 ) -> SynthesisResult:
     """
-    Kör tvåstegssyntes med fallback till enstegsflödet.
+    Enstegssyntes (direct) med B1-prompten: detaljbevarande och
+    strukturregler (numrerade listor i sin helhet, tabeller i sin
+    helhet, källans exakta termer).
 
-    Om background_turns och background_max_turns > 0 får evidens-
-    extraktionen se tidigare turer som bakgrund för att bättre
-    förstå följdfrågor. Bakgrunden bidrar inte till extracted-listan.
+    Ersätter tidigare tvåstegsflöde. Experimentet
+    scripts/synthesis_experiment.py visade att tvåstegsarkitekturen
+    komprimerade bort konkreta detaljer (belopp, roller, procedurer)
+    och att B1 på samma hits producerar märkbart fylligare svar.
+    Den gamla tvåstegsvarianten finns kvar som synthesize_twostep()
+    för jämförande experiment.
 
-    style styr svarsformuleringens ton (se STYLE_BLOCKS).
+    style-parametern behålls för API-kompatibilitet men ignoreras i
+    denna enstegsimplementation — stilvariationer hanteras redan av
+    prompten och av rework-vägens egna prompter.
+    """
+    sources_block = _format_sources_for_direct(hits)
 
-    Returnerar alltid ett SynthesisResult med svar. Om tvåstegs-
-    syntesen misslyckas (JSON-parsningsfel) används enstegsflödet
-    och detta markeras i resultatet.
+    background_block = ""
+    if background_turns and background_max_turns > 0:
+        background_text = _format_background(background_turns, background_max_turns)
+        if background_text:
+            background_block = BACKGROUND_BLOCK_TEMPLATE.format(
+                background_text=background_text,
+            )
+
+    prompt = DIRECT_SYNTHESIS_PROMPT.format(
+        background_block=background_block,
+        sources_block=sources_block,
+        question=question,
+    )
+
+    t0 = time.perf_counter()
+    answer = llm.generate(prompt)
+    t1 = time.perf_counter()
+
+    return SynthesisResult(
+        answer=answer,
+        evidence=None,  # ingen mellanrepresentation i enstegsflödet
+        used_fallback=False,
+        timing_s={
+            "direct_synthesis": round(t1 - t0, 3),
+        },
+    )
+
+
+def synthesize_twostep(
+    question: str,
+    hits: list[SourceHit],
+    llm: LocalLLM,
+    background_turns: list[dict] | None = None,
+    background_max_turns: int = 0,
+    style: str | None = None,
+) -> SynthesisResult:
+    """
+    Gammalt tvåstegsflöde. Bevaras för jämförande experiment men
+    används inte längre i den ordinarie syntesvägen. Se synthesize()
+    ovan för den nya enstegsvarianten.
     """
     # Steg 1: evidensextraktion
     t0 = time.perf_counter()

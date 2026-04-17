@@ -140,20 +140,43 @@ def _merge_candidates(
 
 def _dedup_and_select(
     ranked: list[SourceHit],
-    top_k: int,
+    top_k: int | None = None,
 ) -> list[SourceHit]:
     """
-    Välj topp-K med dedup per (source_path, section_title).
+    Välj hits baserat på relevans (cross-encoder-score), med dedup
+    per (source_path, section_title).
 
-    Flera sektioner från samma dokument tillåts — cross-encoderns
-    ranking avgör vilka som når topp-K. Ingen godtycklig gräns per
-    dokument: om ett dokument har 6 relevanta sektioner och top_k=5
-    får det 5 av dem.
+    Strategin: ta alla hits med score >= max(min_relevance_floor,
+    top_score * relevance_ratio), upp till max_hits. Detta ersätter
+    det tidigare hårdkodade top_k-taket med ett urval som skalar
+    efter hur relevansfördelningen faktiskt ser ut.
+
+    - Om toppen är hög (t.ex. 6.0) kommer allt ner till ~1.8 med
+      (ratio 0.3), så ett dokument med många starka sektioner får
+      alla med.
+    - Om toppen är låg (t.ex. 0.7) begränsas av min_relevance_floor
+      (0.5), så vi inte drar in bullriga borderline-hits.
+    - Max_hits skyddar prefill-tiden vid extremt generösa urval.
+
+    top_k-argumentet behålls för bakåtkompatibilitet men ignoreras
+    om det ges. Använd max_hits i config istället för att sätta tak.
     """
+    if not ranked:
+        return []
+
+    top_score = ranked[0].score
+    cutoff = max(
+        settings.min_relevance_floor,
+        top_score * settings.relevance_ratio,
+    )
+
     selected: list[SourceHit] = []
     seen_keys: set[tuple[str, str | None]] = set()
 
     for hit in ranked:
+        if hit.score < cutoff:
+            break  # listan är sorterad fallande; resten är också under
+
         key = (hit.metadata.source_path, hit.metadata.section_title)
         if key in seen_keys:
             continue
@@ -161,7 +184,7 @@ def _dedup_and_select(
         seen_keys.add(key)
         selected.append(hit)
 
-        if len(selected) >= top_k:
+        if len(selected) >= settings.max_hits:
             break
 
     return selected
@@ -355,8 +378,8 @@ class RagService:
         
         t5 = time.perf_counter()
 
-        # 6. Dedup och välj topp-K
-        hits = _dedup_and_select(all_reranked, settings.top_k)
+        # 6. Dedup och välj hits baserat på relevans
+        hits = _dedup_and_select(all_reranked)
 
         if not hits:
             return ChatResponse(
@@ -366,7 +389,12 @@ class RagService:
                 ),
                 sources=[],
                 debug={
-                    "top_k": settings.top_k,
+                    "selection": {
+                        "min_relevance_floor": settings.min_relevance_floor,
+                        "relevance_ratio": settings.relevance_ratio,
+                        "max_hits": settings.max_hits,
+                        "top_score": round(all_reranked[0].score, 3) if all_reranked else None,
+                    },
                     "num_semantic": len(semantic_hits),
                     "num_bm25": len(bm25_hits),
                     "num_candidates": len(candidates),
@@ -416,7 +444,19 @@ class RagService:
             answer=synthesis_result.answer,
             sources=hits,
             debug={
-                "top_k": settings.top_k,
+                "selection": {
+                    "min_relevance_floor": settings.min_relevance_floor,
+                    "relevance_ratio": settings.relevance_ratio,
+                    "max_hits": settings.max_hits,
+                    "top_score": round(all_reranked[0].score, 3) if all_reranked else None,
+                    "cutoff_used": round(
+                        max(
+                            settings.min_relevance_floor,
+                            all_reranked[0].score * settings.relevance_ratio,
+                        ),
+                        3,
+                    ) if all_reranked else None,
+                },
                 "num_semantic": len(semantic_hits),
                 "num_bm25": len(bm25_hits),
                 "num_candidates": len(candidates),
@@ -439,7 +479,7 @@ class RagService:
                     rerank_debug,
                     key=lambda d: d.get("cross_encoder_score", -999),
                     reverse=True,
-                )[: settings.top_k + 5],
+                )[: settings.max_hits + 5],
             },
         )
 

@@ -30,6 +30,9 @@ DEFAULTS = {
     "expansion_score_threshold": 0.2,
     "expanded_filter_floor": -1.0,
     "qud_drift_threshold": 0.55,
+    "min_relevance_floor": 0.5,
+    "relevance_ratio": 0.3,
+    "max_hits": 10,
 }
 
 # Mapping: config-nyckel → miljövariabel
@@ -53,6 +56,9 @@ _ENV_KEYS = {
     "expansion_score_threshold": "EXPANSION_SCORE_THRESHOLD",
     "expanded_filter_floor": "EXPANDED_FILTER_FLOOR",
     "qud_drift_threshold": "QUD_DRIFT_THRESHOLD",
+    "min_relevance_floor": "MIN_RELEVANCE_FLOOR",
+    "relevance_ratio": "RELEVANCE_RATIO",
+    "max_hits": "MAX_HITS",
 }
 
 
@@ -137,6 +143,9 @@ def _build_settings() -> "Settings":
         expansion_score_threshold=f("expansion_score_threshold"),
         expanded_filter_floor=f("expanded_filter_floor"),
         qud_drift_threshold=f("qud_drift_threshold"),
+        min_relevance_floor=f("min_relevance_floor"),
+        relevance_ratio=f("relevance_ratio"),
+        max_hits=i("max_hits"),
     )
 
 
@@ -186,6 +195,18 @@ class Settings(BaseModel):
     # related_to_qud-klassificering till new_main_question.
     # Värdet är kalibrerat för multilingual-e5-large.
     qud_drift_threshold: float = 0.55
+
+    # Relevansbaserat hit-urval (ersätter hårdkodat top_k).
+    # Vi behåller top_k för bakåtkompatibilitet i debug-utdata, men
+    # den är inte längre gränsen för vilka hits som når syntesen.
+    # Istället: alla hits med score ≥ max(min_relevance_floor,
+    # top_score × relevance_ratio) tas med, upp till max_hits.
+    # Detta gör urvalet dynamiskt efter faktisk relevansfördelning
+    # — ett dokument med 8 starkt relevanta sektioner får alla 8,
+    # en fråga där bara 2 sektioner är relevanta får 2.
+    min_relevance_floor: float = 0.5
+    relevance_ratio: float = 0.3
+    max_hits: int = 10
 
 
 settings = _build_settings()
