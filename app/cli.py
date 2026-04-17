@@ -881,14 +881,14 @@ def ask(
 
 @app.command(
     "test",
-    help="Kör ett testbatteri med frågor och samla svar, timing och debug-info.",
+    help="Kör ett sekvensbaserat testbatteri och rapportera utfall per sekvens och tur.",
 )
 def test(
     test_file: Path = typer.Option(
-        ".urd/questions.json",
+        "test/questions.json",
         "--file",
         "-f",
-        help="Sökväg till JSON-fil med testfrågor.",
+        help="Sökväg till JSON-fil med testsekvenser.",
     ),
     server_url: str = typer.Option(
         "http://127.0.0.1:8000",
@@ -901,6 +901,11 @@ def test(
         "-o",
         help="Spara resultat till JSON-fil. Default: .urd/results/results_<timestamp>.json",
     ),
+    only_sequence: str | None = typer.Option(
+        None,
+        "--only",
+        help="Kör bara sekvensen med detta namn (för snabbare iteration).",
+    ),
     show_answers: bool = typer.Option(
         True,
         "--answers/--no-answers",
@@ -911,34 +916,64 @@ def test(
         "--sources/--no-sources",
         help="Visa källor i terminalen.",
     ),
+    pause_ms: int = typer.Option(
+        500,
+        "--pause-ms",
+        help="Paus i millisekunder mellan turer i samma sekvens (skyddar servern).",
+    ),
 ) -> None:
     """
-    Kör ett batteri av testfrågor mot servern och samla resultat.
+    Kör testsekvenser mot servern och samla resultat.
+
+    Testfilen ska ha formatet:
+
+      {"version": 2, "sequences": [
+        {"name": "...", "description": "...", "turns": [
+          {"question": "...", "expect": {...}},
+          ...
+        ]}
+      ]}
+
+    Varje sekvens körs i en egen session (session_id delas mellan
+    sekvensens turer). Expect-fälten rapporteras bredvid faktiskt
+    utfall utan att betraktas som pass/fail — bara observationsbara
+    flaggor (should_find_sources, should_detect_drift) valideras
+    uttryckligen.
     """
+    import time as time_module
+    from datetime import datetime
+
     if not test_file.exists():
         typer.echo(f"Testfil saknas: {test_file}")
         typer.echo("")
-        typer.echo("Skapa filen med en lista av frågor, t.ex.:")
-        typer.echo("")
-        typer.echo(f"  mkdir -p {test_file.parent}")
-        typer.echo(f"  cat > {test_file} << 'EOF'")
-        typer.echo('  [')
-        typer.echo('    {"question": "Vilka regler gäller vid anställning av en doktorand?"},')
-        typer.echo('    {"question": "Vad krävs för disputation?"}')
-        typer.echo('  ]')
-        typer.echo("  EOF")
+        typer.echo("Filen ska vara i sekvensformat:")
+        typer.echo('  {"version": 2, "sequences": [...]}')
         raise typer.Exit(code=1)
 
     try:
         with open(test_file, encoding="utf-8") as f:
-            questions = json.load(f)
+            data = json.load(f)
     except (json.JSONDecodeError, ValueError) as e:
         typer.echo(f"Kunde inte läsa testfilen: {e}")
         raise typer.Exit(code=1)
 
-    if not isinstance(questions, list) or not questions:
-        typer.echo("Testfilen ska vara en JSON-lista med minst en fråga.")
+    if not isinstance(data, dict) or "sequences" not in data:
+        typer.echo(
+            "Testfilen måste vara ett objekt med nyckeln 'sequences'. "
+            "Se docs för formatet."
+        )
         raise typer.Exit(code=1)
+
+    sequences = data.get("sequences", [])
+    if not isinstance(sequences, list) or not sequences:
+        typer.echo("Inga sekvenser att köra.")
+        raise typer.Exit(code=1)
+
+    if only_sequence:
+        sequences = [s for s in sequences if s.get("name") == only_sequence]
+        if not sequences:
+            typer.echo(f"Ingen sekvens med namnet '{only_sequence}'.")
+            raise typer.Exit(code=1)
 
     if not _server_is_available(server_url):
         typer.echo(
@@ -948,128 +983,236 @@ def test(
         raise typer.Exit(code=1)
 
     typer.echo(f"Testfil: {test_file}")
-    typer.echo(f"Antal frågor: {len(questions)}")
+    typer.echo(f"Sekvenser: {len(sequences)}")
+    total_turns = sum(len(s.get("turns", [])) for s in sequences)
+    typer.echo(f"Totalt antal turer: {total_turns}")
     typer.echo(f"Server: {server_url}")
     typer.echo("")
 
-    results = []
+    # Resultat per sekvens
+    sequence_results: list[dict] = []
+    # Globala räknare
+    total_flags: list[dict] = []
+    all_times: list[float] = []
 
-    for i, item in enumerate(questions, start=1):
-        question = item.get("question", "").strip()
-        notes = item.get("notes", "")
+    for seq_idx, sequence in enumerate(sequences, start=1):
+        seq_name = sequence.get("name", f"sequence_{seq_idx}")
+        seq_description = sequence.get("description", "")
+        turns = sequence.get("turns", [])
 
-        if not question:
-            typer.echo(f"[{i}] Tom fråga — hoppar över")
-            continue
+        typer.echo(f"=== Sekvens {seq_idx}/{len(sequences)}: {seq_name} ===")
+        if seq_description:
+            typer.echo(f"    {seq_description}")
+        typer.echo("")
 
-        typer.echo(f"[{i}/{len(questions)}] {question}")
+        session_id: str | None = None
+        turn_results: list[dict] = []
+        seq_flags: list[dict] = []
 
-        try:
-            resp = requests.post(
-                server_url.rstrip("/") + "/chat",
-                json={"question": question},
-                timeout=300,
-            )
-            if not resp.ok:
-                typer.echo(f"  Serverfel {resp.status_code}")
-                results.append({
-                    "index": i,
+        for turn_idx, turn_spec in enumerate(turns, start=1):
+            question = turn_spec.get("question", "").strip()
+            expect = turn_spec.get("expect", {}) or {}
+
+            if not question:
+                typer.echo(f"  [{turn_idx}] Tom fråga — hoppar över")
+                continue
+
+            typer.echo(f"  [{turn_idx}/{len(turns)}] {question}")
+
+            # Paus mellan turer (ej före första)
+            if turn_idx > 1 and pause_ms > 0:
+                time_module.sleep(pause_ms / 1000.0)
+
+            payload = {"question": question}
+            if session_id:
+                payload["session_id"] = session_id
+
+            try:
+                resp = requests.post(
+                    server_url.rstrip("/") + "/chat",
+                    json=payload,
+                    timeout=300,
+                )
+            except requests.ConnectionError:
+                typer.echo("    Anslutningen bröts — avbryter.")
+                turn_results.append({
+                    "turn": turn_idx,
                     "question": question,
-                    "notes": notes,
+                    "expect": expect,
+                    "error": "connection_error",
+                })
+                break
+            except Exception as e:
+                typer.echo(f"    Fel: {e}")
+                turn_results.append({
+                    "turn": turn_idx,
+                    "question": question,
+                    "expect": expect,
+                    "error": str(e),
+                })
+                continue
+
+            if not resp.ok:
+                typer.echo(f"    Serverfel {resp.status_code}")
+                turn_results.append({
+                    "turn": turn_idx,
+                    "question": question,
+                    "expect": expect,
                     "error": f"HTTP {resp.status_code}",
                 })
                 continue
 
-            data = resp.json()
-            response = ChatResponse.model_validate(data)
+            try:
+                response = ChatResponse.model_validate(resp.json())
+            except Exception as e:
+                typer.echo(f"    Kunde inte tolka svaret: {e}")
+                turn_results.append({
+                    "turn": turn_idx,
+                    "question": question,
+                    "expect": expect,
+                    "error": f"parse_error: {e}",
+                })
+                continue
 
-        except requests.ConnectionError:
-            typer.echo("  Anslutningen bröts — avbryter.")
-            break
-        except Exception as e:
-            typer.echo(f"  Fel: {e}")
-            results.append({
-                "index": i,
-                "question": question,
-                "notes": notes,
-                "error": str(e),
-            })
-            continue
+            # Behåll session_id från första svaret
+            if response.session_id and not session_id:
+                session_id = response.session_id
 
-        timing = (response.debug or {}).get("timing_s", {})
-        synthesis = (response.debug or {}).get("synthesis", {})
+            debug = response.debug or {}
+            classification = debug.get("classification", {}) or {}
+            qud = debug.get("qud", {}) or {}
+            qud_drift = debug.get("qud_drift", {}) or {}
+            synthesis = debug.get("synthesis", {}) or {}
+            timing = debug.get("timing_s", {}) or {}
 
-        result = {
-            "index": i,
-            "question": question,
-            "notes": notes,
-            "answer": response.answer,
-            "num_sources": len(response.sources),
-            "sources": [
-                {
-                    "file_name": s.metadata.file_name,
-                    "section_title": s.metadata.section_title,
-                    "score": round(s.score, 3),
-                }
-                for s in response.sources
-            ],
-            "timing_s": timing,
-            "synthesis": {
-                k: v for k, v in synthesis.items()
-                if k != "evidence_json"
-            },
-        }
-        results.append(result)
+            total_time = timing.get("total", 0)
+            if isinstance(total_time, (int, float)) and total_time > 0:
+                all_times.append(float(total_time))
 
-        total_time = timing.get("total", 0)
-        synth_timing = synthesis.get("timing_s", {})
-        evidence_time = synth_timing.get("evidence_extraction", 0)
-        answer_time = synth_timing.get("answer_generation", 0)
+            # Bygg en kompakt resultatrepresentation
+            intent_str = classification.get("intent", "?")
+            substyle = classification.get("substyle")
+            if substyle:
+                intent_str = f"{intent_str}/{substyle}"
 
-        typer.echo(
-            f"  {total_time:.1f}s total "
-            f"(evidens: {evidence_time:.1f}s, svar: {answer_time:.1f}s) "
-            f"| {len(response.sources)} källor"
-        )
+            num_sources = len(response.sources)
+            path = debug.get("path", "?")
 
-        if synthesis.get("used_fallback"):
-            typer.echo(f"  ⚠ Fallback: {synthesis.get('fallback_reason', '?')}")
-
-        if show_answers:
-            for line in response.answer.splitlines():
-                typer.echo(f"  {line}")
-
-        if show_sources:
-            for j, src in enumerate(response.sources, start=1):
-                typer.echo(
-                    f"  [{j}] {src.metadata.file_name} "
-                    f"({src.metadata.section_title}) "
-                    f"score={src.score:.3f}"
+            # Sammanfattningsrad i terminalen
+            parts = [f"{total_time:.1f}s", f"intent={intent_str}", f"path={path}", f"hits={num_sources}"]
+            if qud_drift:
+                parts.append(
+                    f"drift={qud_drift.get('similarity', '?')}"
+                    f"{'*' if qud_drift.get('drift_detected') else ''}"
                 )
+            if synthesis.get("used_fallback"):
+                parts.append(f"FALLBACK={synthesis.get('fallback_reason', '?')}")
+            typer.echo(f"    {' | '.join(parts)}")
 
+            # Utvärdera expect-flaggor (valideras)
+            flags = _evaluate_expect(
+                expect=expect,
+                num_sources=num_sources,
+                intent=classification.get("intent", ""),
+                qud_drift_detected=qud_drift.get("drift_detected", False),
+                abstained=debug.get("abstained", False),
+            )
+            for flag in flags:
+                icon = "✓" if flag["ok"] else "✗"
+                typer.echo(f"    {icon} {flag['label']}")
+                if not flag["ok"]:
+                    seq_flags.append({
+                        "turn": turn_idx,
+                        "question": question,
+                        **flag,
+                    })
+                    total_flags.append({
+                        "sequence": seq_name,
+                        "turn": turn_idx,
+                        "question": question,
+                        **flag,
+                    })
+
+            # Notes från testfilen (informativt)
+            if expect.get("notes"):
+                typer.echo(f"      anteckning: {expect['notes']}")
+            if expect.get("known_issue"):
+                typer.echo(f"      känt problem: {expect['known_issue']}")
+
+            if show_answers:
+                for line in response.answer.splitlines():
+                    typer.echo(f"    | {line}")
+
+            if show_sources:
+                for j, src in enumerate(response.sources, start=1):
+                    typer.echo(
+                        f"    [{j}] {src.metadata.file_name} "
+                        f"({src.metadata.section_title}) "
+                        f"score={src.score:.3f}"
+                    )
+
+            turn_results.append({
+                "turn": turn_idx,
+                "question": question,
+                "expect": expect,
+                "answer": response.answer,
+                "num_sources": num_sources,
+                "sources": [
+                    {
+                        "file_name": s.metadata.file_name,
+                        "section_title": s.metadata.section_title,
+                        "score": round(s.score, 3),
+                    }
+                    for s in response.sources
+                ],
+                "classification": classification,
+                "path": path,
+                "qud": qud,
+                "qud_drift": qud_drift or None,
+                "synthesis": {
+                    k: v for k, v in synthesis.items()
+                    if k != "evidence_json"
+                },
+                "timing_s": timing,
+                "flags": flags,
+            })
+
+            typer.echo("")
+
+        sequence_results.append({
+            "name": seq_name,
+            "description": seq_description,
+            "session_id": session_id,
+            "turns": turn_results,
+            "failed_flags": seq_flags,
+        })
+
+        if seq_flags:
+            typer.echo(f"  Sekvensen '{seq_name}' hade {len(seq_flags)} avvikelse(r).")
         typer.echo("")
 
-    from datetime import datetime
-
-    successful = [r for r in results if "error" not in r]
-    failed = [r for r in results if "error" in r]
-    times = [r["timing_s"].get("total", 0) for r in successful if r.get("timing_s")]
-
+    # Sammanfattning
     typer.echo("Sammanfattning")
-    typer.echo("--------------")
-    typer.echo(f"Körda frågor:    {len(results)}")
-    typer.echo(f"Lyckade:         {len(successful)}")
-    typer.echo(f"Misslyckade:     {len(failed)}")
+    typer.echo("==============")
+    typer.echo(f"Sekvenser körda:    {len(sequence_results)}")
+    typer.echo(f"Turer körda:        {sum(len(s['turns']) for s in sequence_results)}")
+    typer.echo(f"Avvikande flaggor:  {len(total_flags)}")
 
-    if times:
-        typer.echo(f"Medeltid:        {sum(times) / len(times):.1f}s")
-        typer.echo(f"Min tid:         {min(times):.1f}s")
-        typer.echo(f"Max tid:         {max(times):.1f}s")
+    if all_times:
+        typer.echo(f"Medeltid per tur:   {sum(all_times) / len(all_times):.1f}s")
+        typer.echo(f"Min/max tid:        {min(all_times):.1f}s / {max(all_times):.1f}s")
 
-    fallbacks = sum(1 for r in successful if r.get("synthesis", {}).get("used_fallback"))
-    if fallbacks:
-        typer.echo(f"Fallbacks:       {fallbacks}")
+    if total_flags:
+        typer.echo("")
+        typer.echo("Avvikelser per sekvens")
+        typer.echo("----------------------")
+        for seq in sequence_results:
+            if seq["failed_flags"]:
+                typer.echo(f"  {seq['name']}:")
+                for f in seq["failed_flags"]:
+                    typer.echo(f"    tur {f['turn']}: {f['label']}")
 
+    # Spara resultat
     if output_file is None:
         results_dir = Path(".urd/results")
         results_dir.mkdir(parents=True, exist_ok=True)
@@ -1083,18 +1226,84 @@ def test(
                 "test_file": str(test_file),
                 "server_url": server_url,
                 "timestamp": datetime.now().isoformat(),
-                "num_questions": len(questions),
-                "num_successful": len(successful),
-                "num_failed": len(failed),
-                "mean_time_s": round(sum(times) / len(times), 3) if times else None,
-                "results": results,
+                "num_sequences": len(sequence_results),
+                "num_turns": sum(len(s["turns"]) for s in sequence_results),
+                "num_flag_failures": len(total_flags),
+                "mean_time_s": round(sum(all_times) / len(all_times), 3) if all_times else None,
+                "sequences": sequence_results,
             },
             f,
             ensure_ascii=False,
             indent=2,
         )
 
+    typer.echo("")
     typer.echo(f"Resultat sparade: {output_file}")
+
+
+def _evaluate_expect(
+    expect: dict,
+    num_sources: int,
+    intent: str,
+    qud_drift_detected: bool,
+    abstained: bool,
+) -> list[dict]:
+    """
+    Utvärdera observationsbara expect-flaggor.
+
+    Returnerar en lista av {label, ok, detail} för varje flagga som
+    faktiskt var angiven i expect. Kvalitativa fält (notes,
+    known_issue, sequence_role, same_topic_as_previous) valideras
+    INTE — de är rapportering, inte pass/fail.
+    """
+    flags: list[dict] = []
+
+    if "should_find_sources" in expect:
+        want = bool(expect["should_find_sources"])
+        got = num_sources > 0
+        ok = (got == want)
+        flags.append({
+            "label": f"should_find_sources={want} (faktiskt: {num_sources} källor)",
+            "ok": ok,
+            "field": "should_find_sources",
+            "expected": want,
+            "actual": got,
+        })
+
+    if "min_sources" in expect:
+        minimum = int(expect["min_sources"])
+        ok = num_sources >= minimum
+        flags.append({
+            "label": f"min_sources={minimum} (faktiskt: {num_sources})",
+            "ok": ok,
+            "field": "min_sources",
+            "expected": minimum,
+            "actual": num_sources,
+        })
+
+    if "should_abstain" in expect:
+        want = bool(expect["should_abstain"])
+        ok = (abstained == want)
+        flags.append({
+            "label": f"should_abstain={want} (faktiskt: {abstained})",
+            "ok": ok,
+            "field": "should_abstain",
+            "expected": want,
+            "actual": abstained,
+        })
+
+    if "should_detect_drift" in expect:
+        want = bool(expect["should_detect_drift"])
+        ok = (qud_drift_detected == want)
+        flags.append({
+            "label": f"should_detect_drift={want} (faktiskt: {qud_drift_detected})",
+            "ok": ok,
+            "field": "should_detect_drift",
+            "expected": want,
+            "actual": qud_drift_detected,
+        })
+
+    return flags
 
 
 def main() -> None:
