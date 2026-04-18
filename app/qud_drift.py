@@ -43,27 +43,14 @@ class DriftMeasurement:
 
 def _cosine(a: list[float], b: list[float]) -> float:
     """
-    Cosinuslikhet mellan två vektorer.
+    Cosinuslikhet mellan två normaliserade vektorer.
 
     Embedder.embed_query normaliserar vektorerna (normalize_embeddings=True
-    i embeddings.py), så skalärprodukten ÄR cosinuslikheten. Men för
-    säkerhets skull faller vi tillbaka på full beräkning om någon av
-    vektorerna inte skulle vara normaliserad.
+    i embeddings.py), så skalärprodukten ÄR cosinuslikheten.
     """
     if len(a) != len(b):
         raise ValueError(f"Olika dimensioner: {len(a)} vs {len(b)}")
-
-    dot = sum(x * y for x, y in zip(a, b))
-
-    # Snabb väg: om vektorerna är normaliserade är skalärprodukten
-    # redan cosinuslikheten. Men vi verifierar nedan i värsta fall.
-    norm_a = sum(x * x for x in a) ** 0.5
-    norm_b = sum(x * x for x in b) ** 0.5
-
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-
-    return dot / (norm_a * norm_b)
+    return sum(x * y for x, y in zip(a, b))
 
 
 def measure_drift(

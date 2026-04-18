@@ -324,6 +324,12 @@ class QdrantStore:
         )
 
     def bulk_update_chunk_metadata(self, updates: list[tuple[str, dict]]) -> None:
+        """
+        Uppdatera metadata för flera punkter. Inte en Qdrant-batch — varje
+        punkt uppdateras i ett eget anrop eftersom varje punkt typiskt har
+        unika payload-uppdateringar. Namnet "bulk" syftar på att flera
+        punkter hanteras i en anropssekvens, inte på Qdrant-batching.
+        """
         for point_id, metadata_updates in updates:
             self.update_chunk_metadata_by_point_id(point_id, metadata_updates)
 

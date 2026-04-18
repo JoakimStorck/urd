@@ -14,8 +14,8 @@ from app.config import settings
 from app.embeddings import Embedder
 from app.qdrant_store import QdrantStore
 from app.llm import LocalLLM
-from app.prompting import build_prompt
-from app.synthesis import synthesize, rework as synthesis_rework
+from app.synthesis import synthesize
+from app.rework import elaborate, verify
 from app.schemas import ChatResponse, SourceHit
 
 
@@ -324,10 +324,7 @@ def _merge_with_evidence_precedence(
 # Dedup – undvik dubbletter från samma sektion
 # ---------------------------------------------------------------------------
 
-def _dedup_and_select(
-    ranked: list[SourceHit],
-    top_k: int | None = None,
-) -> list[SourceHit]:
+def _dedup_and_select(ranked: list[SourceHit]) -> list[SourceHit]:
     """
     Välj hits baserat på relevans (cross-encoder-score), med dedup
     per (source_path, section_title).
@@ -344,8 +341,6 @@ def _dedup_and_select(
     ett godtyckligt absolut golv. Endast positiva scores används
     — vi vill inte släppa in chunkar som cross-encodern aktivt
     dömt ut.
-
-    top_k-argumentet behålls för bakåtkompatibilitet men ignoreras.
     """
     if not ranked:
         return []
@@ -559,7 +554,6 @@ class RagService:
         qud_anchor: str | None = None,
         background_turns: list[dict] | None = None,
         background_max_turns: int = 0,
-        style: str | None = None,
         retrieval_question: str | None = None,
         preferred_source_paths: list[str] | None = None,
     ) -> ChatResponse:
@@ -575,9 +569,7 @@ class RagService:
           där den aktiva huvudfrågan ska påverka retrieval utan att
           förvränga originalfrågan i syntesen.
         - background_turns, background_max_turns: samtalsbakgrund som
-          skickas med till evidensextraktionen.
-        - style: valfri stilmarkör som styr svarsformuleringen. Giltiga
-          värden hanteras i synthesis.py. None = standardstil.
+          skickas med till syntesen.
         - retrieval_question: omskriven fråga för retrieval. Om satt
           används den i embedding, BM25 och reranking, medan question
           fortfarande används i syntesen.
@@ -690,8 +682,6 @@ class RagService:
                     "evidence_docs": evidence_source_paths,
                     "abstained": True,
                     "qud_anchor_used": qud_anchor is not None,
-                "retrieval_question_used": retrieval_question is not None,
-                "preferred_source_paths": preferred_source_paths,
                     "retrieval_question_used": retrieval_question is not None,
                     "preferred_source_paths": preferred_source_paths,
                     "timing_s": {
@@ -705,7 +695,7 @@ class RagService:
                 },
             )
 
-        # 8. Tvåstegssyntes: evidensextraktion → svarsformulering
+        # 8. Syntes: enstegsformulering direkt från källorna
         t6 = time.perf_counter()
 
         synthesis_result = synthesize(
@@ -714,7 +704,6 @@ class RagService:
             self.llm,
             background_turns=background_turns,
             background_max_turns=background_max_turns,
-            style=style,
         )
         t7 = time.perf_counter()
 
@@ -724,11 +713,10 @@ class RagService:
         }
         if synthesis_result.fallback_reason:
             synthesis_debug["fallback_reason"] = synthesis_result.fallback_reason
-        if synthesis_result.evidence is not None:
-            synthesis_debug["num_extracted"] = len(synthesis_result.evidence.extracted)
-            synthesis_debug["not_found"] = synthesis_result.evidence.not_found
-            if synthesis_result.evidence.raw_json:
-                synthesis_debug["evidence_json"] = synthesis_result.evidence.raw_json
+        if synthesis_result.verification is not None:
+            synthesis_debug["num_findings"] = len(synthesis_result.verification.findings)
+            if synthesis_result.verification.raw_json:
+                synthesis_debug["verification_json"] = synthesis_result.verification.raw_json
         if synthesis_result.timing_s:
             synthesis_debug["timing_s"] = synthesis_result.timing_s
 
@@ -793,29 +781,57 @@ class RagService:
         hits: list[SourceHit],
         previous_answer: str,
         mode: str,
+        qud_question: str | None = None,
     ) -> ChatResponse:
         """
-        Arbeta mot föregående turs källor utan ny retrieval.
+        Arbeta mot föregående turs källor utan ny huvudretrieval.
 
-        Används av elaboration och verification. mode är en av:
-        - "elaboration": lyft fram vad som prioriterades bort
-        - "verification": strikt granskning av tidigare svar
+        mode styr vilken rework-funktion som används:
+        - "elaboration": hämta ny retrieval inom samma dokument som bar
+          föregående svar och formulera ett tillägg. Kräver qud_question
+          (originalfrågan) som söktext för den nya rankningen.
+        - "verification": strikt granskning av tidigare svar mot
+          föregående källor, ingen ny retrieval.
 
-        Returnerar en ChatResponse där sources är samma hits som
-        bar det tidigare svaret (så UI:t fortfarande visar dem som
-        källor och debug är sammanhängande).
+        För elaboration visas de NYA hits (de som faktiskt bar tillägget)
+        som sources i svaret, så att UI:ts källhänvisningar stämmer med
+        [Källa N] i svarstexten. För verification visas de ursprungliga
+        hits eftersom granskningen arbetar mot dem.
         """
         t0 = time.perf_counter()
 
-        synthesis_result = synthesis_rework(
-            question,
-            hits,
-            previous_answer,
-            self.llm,
-            mode=mode,
-        )
+        if mode == "elaboration":
+            search_question = qud_question or question
+            new_hits = self.retrieve_for_elaboration(search_question, hits)
 
-        t1 = time.perf_counter()
+            t1 = time.perf_counter()
+
+            synthesis_result = elaborate(
+                question,
+                new_hits,
+                previous_answer,
+                self.llm,
+            )
+            sources_to_show = new_hits if new_hits else hits
+            num_new = len(new_hits)
+
+        elif mode == "verification":
+            new_hits = []
+            t1 = time.perf_counter()
+
+            synthesis_result = verify(
+                question,
+                hits,
+                previous_answer,
+                self.llm,
+            )
+            sources_to_show = hits
+            num_new = 0
+
+        else:
+            raise ValueError(f"Okänt rework-läge: {mode!r}")
+
+        t2 = time.perf_counter()
 
         synthesis_debug = {
             "used_fallback": synthesis_result.used_fallback,
@@ -823,28 +839,109 @@ class RagService:
         }
         if synthesis_result.fallback_reason:
             synthesis_debug["fallback_reason"] = synthesis_result.fallback_reason
-        if synthesis_result.evidence is not None:
-            synthesis_debug["num_extracted"] = len(synthesis_result.evidence.extracted)
-            synthesis_debug["not_found"] = synthesis_result.evidence.not_found
-            if synthesis_result.evidence.raw_json:
-                synthesis_debug["evidence_json"] = synthesis_result.evidence.raw_json
+        if synthesis_result.verification is not None:
+            report = synthesis_result.verification
+            synthesis_debug["num_findings"] = len(report.findings)
+            synthesis_debug["status_counts"] = {
+                status: sum(1 for f in report.findings if f.status == status)
+                for status in ("supported", "unclear", "unsupported")
+            }
+            if report.raw_json:
+                synthesis_debug["verification_json"] = report.raw_json
         if synthesis_result.timing_s:
             synthesis_debug["timing_s"] = synthesis_result.timing_s
 
+        # Abstain-bedömning skiljer sig mellan elaboration och verification.
+        # Elaboration: om ingen ny retrieval gav något eller om elaborate()
+        #   själv returnerade den tomma-nya-hits-formuleringen.
+        # Verification: om parsningen misslyckades eller inga findings.
+        if mode == "elaboration":
+            abstained = not new_hits
+        else:
+            abstained = (
+                synthesis_result.used_fallback
+                or synthesis_result.verification is None
+                or not synthesis_result.verification.findings
+            )
+
         return ChatResponse(
             answer=synthesis_result.answer,
-            sources=hits,
+            sources=sources_to_show,
             debug={
                 "rework_mode": mode,
                 "num_hits_reused": len(hits),
-                "abstained": not (synthesis_result.evidence and synthesis_result.evidence.extracted),
+                "num_new_hits": num_new,
+                "abstained": abstained,
                 "synthesis": synthesis_debug,
                 "timing_s": {
-                    "rework": round(t1 - t0, 3),
-                    "total": round(t1 - t0, 3),
+                    "retrieve_for_elaboration": round(t1 - t0, 3) if mode == "elaboration" else 0.0,
+                    "rework": round(t2 - t1, 3),
+                    "total": round(t2 - t0, 3),
                 },
             },
         )
+
+    def retrieve_for_elaboration(
+        self,
+        question: str,
+        active_hits: list[SourceHit],
+    ) -> list[SourceHit]:
+        """
+        Hämta material som kan bära en elaboration av föregående svar.
+
+        Hämtar alla chunks från de dokument som bar föregående svar,
+        filtrerar bort de som redan finns i active_hits, och rerankar
+        resten mot original-frågan (typiskt state.current_qud_text).
+
+        Returnerar de rerankade hits som passerar cross-encoderns
+        standardfilter (positiv score, ej boilerplate). Returnerar
+        tom lista om inga nya relevanta chunks hittas — elaborate()
+        hanterar då tomfallet med en ärlig abstain.
+        """
+        if not active_hits:
+            return []
+
+        active_doc_paths = {
+            h.metadata.source_path for h in active_hits if h.metadata.source_path
+        }
+        if not active_doc_paths:
+            return []
+
+        active_ids = {h.chunk_id for h in active_hits}
+
+        # Samla alla chunks från aktiva dokument som inte redan användes.
+        # bm25_index innehåller bara textchunks, inte evidensobjekt.
+        # Om active_hits är rent evidensobjekt kommer active_ids inte att
+        # matcha något i candidates — då återanvänds ingen textchunk som
+        # aktivt filter, men det är OK: elaboration ska lyfta fram
+        # förklarande text omkring tabeller/listor som redan visades.
+        candidates: list[SourceHit] = []
+        for path in active_doc_paths:
+            for chunk in self.bm25_index.get_chunks_by_source(path):
+                if chunk.chunk_id in active_ids:
+                    continue
+                candidates.append(chunk)
+
+        if not candidates:
+            return []
+
+        # Reranka mot originalfrågan med cross-encoderns standardfilter.
+        reranked, _debug = self.reranker.rerank(question, candidates)
+
+        # Välj hits med samma relevansbaserade urval som huvudvägen,
+        # men utan sektionsdedup — elaboration ska lyfta fram just
+        # det som föll bort, så vi vill inte sålla på samma nyckel igen.
+        if not reranked:
+            return []
+
+        top_score = reranked[0].score
+        cutoff = max(
+            settings.min_relevance_floor,
+            top_score * settings.relevance_ratio,
+        )
+
+        selected = [h for h in reranked if h.score >= cutoff][: settings.max_hits]
+        return selected
 
     def _expand_from_top_docs(
         self,

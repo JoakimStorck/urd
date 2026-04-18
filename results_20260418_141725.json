@@ -1,0 +1,1384 @@
+{
+  "test_file": "test/questions.json",
+  "server_url": "http://127.0.0.1:8000",
+  "timestamp": "2026-04-18T14:17:25.349811",
+  "num_sequences": 7,
+  "num_turns": 19,
+  "num_flag_failures": 2,
+  "mean_time_s": 9.21,
+  "sequences": [
+    {
+      "name": "forskningsansokan_grund",
+      "description": "Grundflödet: öppna huvudfråga, utveckla, bredda. Prövar att första turen ger fyllig retrieval, att elaboration kan komma åt mer än första turen visade, och att broadening hanteras som ny retrieval inom samma tråd.",
+      "session_id": "45a30afc-4fdd-42a8-8810-8e6da8fedbc2",
+      "turns": [
+        {
+          "turn": 1,
+          "question": "God kväll. Vad behöver jag göra om jag ska skicka in en extern forskningsansökan?",
+          "expect": {
+            "sequence_role": "opening",
+            "should_find_sources": true,
+            "min_sources": 2,
+            "notes": "Baslinjefråga. Bör hitta forskningsansökan-dokumentet. Efter retrieval-ändringen (lägre expansionstösklar) förväntas fyllig info — fler chunkar än tidigare 2."
+          },
+          "answer": "Om du vill skicka in en extern forskningsansökan, måste du följa dessa steg:\n\n1. Upprätta budget och intern ekonomisk kalkyl för ansökan av projektledaren tillsammans med ekonom enligt finansiärens villkor och regler [Källa 1].\n2. Fylla i och skicka in ett beslutsunderlag via Högskolans mötes- och beslutshanteringsverktyg BeHDa i god tid före inskickande av ansökan till finansiär [Källa 1].\n3. Projektledaren kontaktas av rektors sekreterare eller institutionsadministratör för bokning av beslutsmöte i Rektors ledningsråd (RL) alternativt Institutionens ledningsråd (IL).\n4. Prefekt bereder ansökan inför beslut och godkänner då eventuell medfinansiering och intern ekonomisk kalkyl [Källa 1].\n5. Rektor eller prefekt beslutar om inskickande av ansökan till finansiär efter hörande i Rektors ledningsråd (RL) eller Institutionens ledningsråd (IL).\n6. Alla ansökningar ska förankras internt och alla ansökningar ska hålla god vetenskaplig kvalitet genom kollegiala granskningar [Källa 2].\n7. Eventuell medfinansiering och intern ekonomisk kalkyl ska godkännas av prefekt [Källa 2].\n8. Beslut om inskickande till finansiär fattas av rektor eller prefekt utifrån aktuella kriterier enligt Rektors och verksamhetschefers delegationer vid Högskolan Dalarna (C 2021/1036) [Källa 2].",
+          "num_sources": 2,
+          "sources": [
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "3.",
+              "score": 0.741
+            },
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "Intern kvalitetssäkringsprocess - i korthet",
+              "score": 0.074
+            }
+          ],
+          "classification": {
+            "intent": "new_main_question",
+            "substyle": null,
+            "reason": "Aktuell yttring är en ny fråga som inte kan kopplas till någon aktiv huvudfråga.",
+            "used_fallback": false
+          },
+          "path": "new_main_question",
+          "qud": {
+            "text": "God kväll. Vad behöver jag göra om jag ska skicka in en extern forskningsansökan?",
+            "age_turns": 0
+          },
+          "qud_drift": null,
+          "synthesis": {
+            "used_fallback": false,
+            "timing_s": {
+              "direct_synthesis": 7.615
+            }
+          },
+          "timing_s": {
+            "embed_query": 0.024,
+            "search": 0.012,
+            "bm25_and_merge": 0.013,
+            "rerank_1": 0.139,
+            "expand_and_rerank_2": 0.045,
+            "synthesize": 7.615,
+            "total": 7.847
+          },
+          "flags": [
+            {
+              "label": "should_find_sources=True (faktiskt: 2 källor)",
+              "ok": true,
+              "field": "should_find_sources",
+              "expected": true,
+              "actual": true
+            },
+            {
+              "label": "min_sources=2 (faktiskt: 2)",
+              "ok": true,
+              "field": "min_sources",
+              "expected": 2,
+              "actual": 2
+            }
+          ]
+        },
+        {
+          "turn": 2,
+          "question": "Utveckla vilken process som gäller.",
+          "expect": {
+            "sequence_role": "followup",
+            "should_find_sources": true,
+            "notes": "Klar elaboration-kandidat — innehållssvag, vänder sig inåt. Bör klassas som elaboration. Svaret ska innehålla mer detalj än tur 1, inte upprepa."
+          },
+          "answer": "Denna process innebär att alla ansökningar om extern forskningsfinansiering vid Högskolan Dalarna ska genomgå en intern kvalitetssäkringsprocess före inskickande till finansiär. Det är huvudsökande forskare/projektledaren vid HDa som har ansvaret för att denna process sker [Källa 2].",
+          "num_sources": 2,
+          "sources": [
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "3.",
+              "score": 0.741
+            },
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "Intern kvalitetssäkringsprocess - i korthet",
+              "score": 0.074
+            }
+          ],
+          "classification": {
+            "intent": "elaboration",
+            "substyle": null,
+            "reason": "Användaren vill ha mer information om den aktiva huvudfrågan utan att peka utåt till nya områden.",
+            "used_fallback": false
+          },
+          "path": "elaboration",
+          "qud": {
+            "text": "God kväll. Vad behöver jag göra om jag ska skicka in en extern forskningsansökan?",
+            "age_turns": 1
+          },
+          "qud_drift": null,
+          "synthesis": {
+            "used_fallback": false,
+            "mode": "elaboration",
+            "num_extracted": 1,
+            "not_found": [],
+            "timing_s": {
+              "evidence_extraction": 3.347,
+              "answer_generation": 1.822
+            }
+          },
+          "timing_s": {
+            "rework": 5.169,
+            "total": 5.169
+          },
+          "flags": [
+            {
+              "label": "should_find_sources=True (faktiskt: 2 källor)",
+              "ok": true,
+              "field": "should_find_sources",
+              "expected": true,
+              "actual": true
+            }
+          ]
+        },
+        {
+          "turn": 3,
+          "question": "Vad gäller för medfinansiering?",
+          "expect": {
+            "sequence_role": "followup",
+            "same_topic_as_previous": true,
+            "should_find_sources": true,
+            "notes": "Ny aspekt inom samma tråd — förväntas bli broadening eller subquestion, inte elaboration (har ny sökterm). Om det klassas som elaboration är det ett tecken på att gränsen fortfarande är fel inställd."
+          },
+          "answer": "Processen för ansökningar om extern forskningsfinansiering vid Högskolan Dalarna innebär följande steg:\n\n1. Alla ansökningar ska förankras internt genom att föranmälan görs till prefekt i fall där detta krävs, och att avdelningschef och ämnesansvarig informeras.\n2. Alla ansökningar ska hålla god vetenskaplig kvalitet, vilken säkerställs genom kollegiala granskningar.\n3. Eventuell medfinansiering och intern ekonomisk kalkyl ska godkännas av prefekt.\n4. Beslut om inskickande till finansiär fattas av rektor eller prefekt, utifrån aktuella kriterier enligt Rektors och verksamhetschefers delegationer vid Högskolan Dalarna (C 2021/1036).\n\nRelevanta dokument:\n\n* Regel för ansökningar om extern forskningsfinansiering\n* Rektors och verksamhetschefers delegationer vid Högskolan Dalarna",
+          "num_sources": 8,
+          "sources": [
+            {
+              "file_name": "rektors-och-verksamhetschefers-delegationer-vid-hogskolan-dalarna.pdf",
+              "section_title": "4.  Ärenden som rektor avgör [table]",
+              "score": 7.251
+            },
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "Intern kvalitetssäkringsprocess - i korthet [bullet_list]",
+              "score": 3.829
+            },
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "Aktuella underlag och stöd i processen [bullet_list]",
+              "score": 2.927
+            },
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "Intern kvalitetssäkringsprocess - i korthet",
+              "score": 8.97
+            },
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "Bakgrund",
+              "score": 8.496
+            },
+            {
+              "file_name": "rektors-och-verksamhetschefers-delegationer-vid-hogskolan-dalarna.pdf",
+              "section_title": "4.  Ärenden som rektor avgör",
+              "score": 5.407
+            },
+            {
+              "file_name": "rektors-och-verksamhetschefers-delegationer-vid-hogskolan-dalarna.pdf",
+              "section_title": "5.1. Prefekt",
+              "score": 4.283
+            },
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "Rektor beslutar",
+              "score": 4.2
+            }
+          ],
+          "classification": {
+            "intent": "related_to_qud",
+            "substyle": "broadening",
+            "reason": "The user is asking about a related topic (medfinansiering) that was not covered in the previous response.",
+            "used_fallback": false
+          },
+          "path": "related_to_qud",
+          "qud": {
+            "text": "God kväll. Vad behöver jag göra om jag ska skicka in en extern forskningsansökan?",
+            "age_turns": 2
+          },
+          "qud_drift": {
+            "similarity": 0.8115,
+            "threshold": 0.55,
+            "drift_detected": false
+          },
+          "synthesis": {
+            "used_fallback": false,
+            "timing_s": {
+              "direct_synthesis": 6.146
+            }
+          },
+          "timing_s": {
+            "embed_query": 0.01,
+            "search": 0.071,
+            "bm25_and_merge": 0.012,
+            "rerank_1": 0.044,
+            "expand_and_rerank_2": 0.483,
+            "synthesize": 6.146,
+            "total": 6.767
+          },
+          "flags": [
+            {
+              "label": "should_find_sources=True (faktiskt: 8 källor)",
+              "ok": true,
+              "field": "should_find_sources",
+              "expected": true,
+              "actual": true
+            }
+          ]
+        }
+      ],
+      "failed_flags": []
+    },
+    {
+      "name": "proprefekt_djup",
+      "description": "Testar att retrieval nu hittar fler sektioner i ett dokument med flera relevanta avsnitt. Proprefekt-dokumentet har tidigare gett tunna svar trots att det är rätt dokument.",
+      "session_id": "716ad85e-1ed2-4a49-bb19-a4474403fb38",
+      "turns": [
+        {
+          "turn": 1,
+          "question": "Vilken process finns för att tillsätta en ny proprefekt?",
+          "expect": {
+            "sequence_role": "opening",
+            "should_find_sources": true,
+            "min_sources": 3,
+            "notes": "Bör hitta flera sektioner i regler-for-tillsattning-av-proprefekt.pdf. Tidigare fick vi 5 hits men bara 2-3 nådde syntesen. Efter retrieval-ändringen förväntas fler."
+          },
+          "answer": "Processen för att tillsätta en ny proprefekt sker på följande sätt:\n\n1. Den kollegiala kommittén konstitueras inom varje institution inför varje proprefekttillsättning.\n2. Deltagare i kommittén utgörs av de av UFN utsedda ledamöterna i IL och/eller lärarrepresentanter utsedda av UFN på förslag av dessa.\n3. Kommittén ska ha minst tre deltagare, och om färre än tre av de av UFN utsedda ledamöterna i IL kan ingå i kommittén ansvarar de för att föreslå ytterligare lärarrepresentanter till kommittén inför UFN:s beslut.\n4. Den kollegiala kommittén ska fastställas av UFN.\n5. Om en ledamot i kommittén är jävig i förhållande till någon av kandidaterna så utgår ledamoten ur kommittén och en ersättare utses enligt ovanstående princip.\n6. Kommittén beslutar om egna arbets- och mötesformer.\n7. Prefekt samråder med den kollegiala kommittén rörande slutligt förslag till kandidat/er och beaktar synpunkter avseende aktuella kandidater.\n8. Prefekt föredrar slutgiltigt förslag i IL.\n9. Prefekt lämnar förslag på en kandidat per proprefektuppdrag till rektor.\n10. Prefekt ger i förekommande fall förslag på vilken av proprefektkandidaterna som ska vara ställföreträdande prefekt.\n11. Förhandling enligt MBL.\n12. Rektor utser proprefekt/er.\n\nKälla: [Källa 2] regler-for-tillsattning-av-proprefekt.pdf — Process för tillsättning",
+          "num_sources": 3,
+          "sources": [
+            {
+              "file_name": "regler-for-tillsattning-av-proprefekt.pdf",
+              "section_title": "Om proprefekt slutar sitt uppdrag i förtid",
+              "score": 6.03
+            },
+            {
+              "file_name": "regler-for-tillsattning-av-proprefekt.pdf",
+              "section_title": "Process för tillsättning",
+              "score": 2.128
+            },
+            {
+              "file_name": "regler-for-tillsattning-av-proprefekt.pdf",
+              "section_title": "Den kollegiala kommittén",
+              "score": 1.855
+            }
+          ],
+          "classification": {
+            "intent": "new_main_question",
+            "substyle": null,
+            "reason": "The question is not related to any active main question and cannot be answered without additional context.",
+            "used_fallback": false
+          },
+          "path": "new_main_question",
+          "qud": {
+            "text": "Vilken process finns för att tillsätta en ny proprefekt?",
+            "age_turns": 0
+          },
+          "qud_drift": null,
+          "synthesis": {
+            "used_fallback": false,
+            "timing_s": {
+              "direct_synthesis": 8.095
+            }
+          },
+          "timing_s": {
+            "embed_query": 0.009,
+            "search": 0.012,
+            "bm25_and_merge": 0.01,
+            "rerank_1": 0.078,
+            "expand_and_rerank_2": 0.043,
+            "synthesize": 8.095,
+            "total": 8.248
+          },
+          "flags": [
+            {
+              "label": "should_find_sources=True (faktiskt: 3 källor)",
+              "ok": true,
+              "field": "should_find_sources",
+              "expected": true,
+              "actual": true
+            },
+            {
+              "label": "min_sources=3 (faktiskt: 3)",
+              "ok": true,
+              "field": "min_sources",
+              "expected": 3,
+              "actual": 3
+            }
+          ]
+        },
+        {
+          "turn": 2,
+          "question": "Utveckla svaret. Vilka steg ingår i processen för tillsättande?",
+          "expect": {
+            "sequence_role": "followup",
+            "should_find_sources": true,
+            "notes": "Bör förbli i elaboration-läge och lyfta fram steg ur samma dokument. Om active_hits nu är fler (från tur 1) bör svaret bli mer komplett."
+          },
+          "answer": "Processen för att tillsätta en ny proprefekt sker på följande sätt:\n\n1. Den kollegiala kommittén konstitueras inom varje institution inför varje proprefekttillsättning.\n2. Deltagare i kommittén utgörs av de av UFN utsedda ledamöterna i IL och/eller lärarrepresentanter utsedda av UFN på förslag av dessa.\n3. Kommittén ska ha minst tre deltagare, och om färre än tre av de av UFN utsedda ledamöterna i IL kan ingå i kommittén ansvarar de för att föreslå ytterligare lärarrepresentanter till kommittén inför UFN:s beslut.\n4. Den kollegiala kommittén ska fastställas av UFN.\n5. Om en ledamot i kommittén är jävig i förhållande till någon av kandidaterna så utgår ledamoten ur kommittén och en ersättare utses enligt ovanstående princip.\n6. Kommittén beslutar om egna arbets- och mötesformer.\n7. Prefekt samråder med den kollegiala kommittén rörande slutligt förslag till kandidat/er och beaktar synpunkter avseende aktuella kandidater.\n8. Prefekt föredrar slutgiltigt förslag i IL.\n9. Prefekt lämnar förslag på en kandidat per proprefektuppdrag till rektor.\n10. Prefekt ger i förekommande fall förslag på vilken av proprefektkandidaterna som ska vara ställföreträdande prefekt.\n11. Förhandling enligt MBL.\n12. Rektor utser proprefekt/er.\n\nKälla: [Källa 2] regler-for-tillsattning-av-proprefekt.pdf — Process för tillsättning\n\nNya textstycken:\n- Källa 1: Om proprefekt slutar sitt uppdrag före mandatperiodens utgång tillsätts ny proprefekt på det sätt som beskrivits ovan för en ny full mandatperiod.\n- Källa 1: Under interimsperioden kan vid behov en tillförordnad proprefekt utnämnas av rektor på förslag av prefekt efter samråd med de av UFN utsedda ledamöterna i IL.\n- Källa 1: Mandatperiod för nytillsatt proprefekt avslutas vid ett halvårsskifte (juni/juli eller dec/jan). Mandatperiod som inleds mellan halvårsskiftena varar tre år från det halvårsskifte som infaller närmast efter tillträdesdatum.\n- Källa 2: 9. Inför offentligt hörande informeras kvarvarande kandidater om hur hörandet ska gå till och den fortsatta processen. Ansvar: Avdelningen för HR.\n- Källa 2: 10. Offentligt hörande med utvalda kandidater genomförs. Ansvar för arrangerande: Avdelningen för HR. Kollegiet kan därefter skicka skriftliga synpunkter till den kollegiala kommittén.\n- Källa 2: 11. Prefekt samråder med den kollegiala kommittén rörande slutligt förslag till kandidat/er och beaktar synpunkter avseende aktuella kandidater.\n- Källa 2: 12. Prefekt föredrar slutgiltigt förslag i IL.\n- Källa 2: 13. Prefekt lämnar förslag på en kandidat per proprefektuppdrag till rektor.\n- Källa 2: 14. Prefekt ger i förekommande fall förslag på vilken av proprefektkandidaterna som ska vara ställföreträdande prefekt.\n- Källa 2: 15. Förhandling enligt MBL.\n- Källa 2: 16. Rektor utser proprefekt/er.\n\nAktuell yttring:\nUtveckla svaret. Vilka steg ingår i processen för tillsättande?\n\nProcessen för att tillsätta en ny proprefekt består av följande steg:\n\n1. Konstituering av den kollegiala kommittén inom varje institution inför varje proprefekttillsättning.\n2. Fastställande av kommitténs deltagare, som utgörs av de av UFN utsedda ledamöterna i IL och/eller lärarrepresentanter utsedda av UFN på förslag av dessa.\n3. Bestämmande av minst tre deltagare i kommittén och eventuellt föreslagande av ytterligare lärarrepresentanter till kommittén inför UFN:s beslut om kommittén ska ha färre än tre av de av UFN utsedda ledamöterna i IL.\n4. Fastställande av den kollegiala kommittén av UFN.\n5. Eventuellt utesluts en ledamot ur kommittén om denne är jävig i förhållande till någon av kandidaterna och en ersättare utses enligt ovanstående princip.\n6. Kommittén beslutar om egna arbets- och mötesformer.\n7. Prefekt samråder med den kollegiala kommittén rörande slutligt förslag till kandidat/er och beaktar synpunkter avseende aktuella kandidater.\n8. Prefekt föredrar slutgiltigt förslag i IL.\n9. Prefekt lämnar förslag på en kandidat per proprefektuppdrag till rektor.\n10. Prefekt ger i förekommande fall förslag på vilken av proprefektkandidaterna som ska vara ställföreträdande prefekt.\n11. Förhandling enligt MBL.\n12. Rektor utser proprefekt/er.\n\nKälla: [Källa 2] regler-for-tillsattning-av-proprefekt.pdf — Process för tillsättning",
+          "num_sources": 3,
+          "sources": [
+            {
+              "file_name": "regler-for-tillsattning-av-proprefekt.pdf",
+              "section_title": "Om proprefekt slutar sitt uppdrag i förtid",
+              "score": 6.03
+            },
+            {
+              "file_name": "regler-for-tillsattning-av-proprefekt.pdf",
+              "section_title": "Process för tillsättning",
+              "score": 2.128
+            },
+            {
+              "file_name": "regler-for-tillsattning-av-proprefekt.pdf",
+              "section_title": "Den kollegiala kommittén",
+              "score": 1.855
+            }
+          ],
+          "classification": {
+            "intent": "elaboration",
+            "substyle": null,
+            "reason": "Användaren vill ha mer information om den aktiva huvudfrågan utan att peka utåt till nya områden.",
+            "used_fallback": false
+          },
+          "path": "elaboration",
+          "qud": {
+            "text": "Vilken process finns för att tillsätta en ny proprefekt?",
+            "age_turns": 1
+          },
+          "qud_drift": null,
+          "synthesis": {
+            "used_fallback": false,
+            "mode": "elaboration",
+            "num_extracted": 11,
+            "not_found": [],
+            "timing_s": {
+              "evidence_extraction": 13.916,
+              "answer_generation": 24.543
+            }
+          },
+          "timing_s": {
+            "rework": 38.459,
+            "total": 38.459
+          },
+          "flags": [
+            {
+              "label": "should_find_sources=True (faktiskt: 3 källor)",
+              "ok": true,
+              "field": "should_find_sources",
+              "expected": true,
+              "actual": true
+            }
+          ]
+        },
+        {
+          "turn": 3,
+          "question": "Finns det mer information?",
+          "expect": {
+            "sequence_role": "followup",
+            "notes": "Andra elaboration i kedja. Bör antingen hitta ännu mer detalj eller abstaina ärligt om materialet är uttömt. Inget 'rätt' utfall — observation."
+          },
+          "answer": "Ja, det finns ytterligare information i de nya textstycken som jag har tillgängliggjort. Bland annat beskrivs hur en ny proprefekt tillsätts om den gamla properfekt slutar sitt uppdrag före mandatperiodens utgång [Källa 1]. Det nämns också att under en interimsperiod kan en tillförordnad proprefekt utnämnas av rektor på förslag av prefekt efter samråd med de av UFN utsedda ledamöterna i IL [Källa 1].\n\nDet finns även information om hur mandatperioden för en nytillsatt proprefekt avslutas och hur den beräknas [Källa 1]. Mandatperioden för en nytillsatt proprefekt avslutas vid ett halvårsskifte (juni/juli eller dec/jan). Om en properfekt tillträder mellan halvårsskiftena, så varar mandatperioden tre år från det halvårsskifte som infaller närmast efter tillträdesdatum.\n\nDet finns även information om hur offentligt hörande genomförs och vilka som har ansvar för detta [Källa 2]. Det nämns också att kollegiet kan skicka skriftliga synpunkter till den kollegiala kommittén efter offentligt hörande.",
+          "num_sources": 3,
+          "sources": [
+            {
+              "file_name": "regler-for-tillsattning-av-proprefekt.pdf",
+              "section_title": "Om proprefekt slutar sitt uppdrag i förtid",
+              "score": 6.03
+            },
+            {
+              "file_name": "regler-for-tillsattning-av-proprefekt.pdf",
+              "section_title": "Process för tillsättning",
+              "score": 2.128
+            },
+            {
+              "file_name": "regler-for-tillsattning-av-proprefekt.pdf",
+              "section_title": "Den kollegiala kommittén",
+              "score": 1.855
+            }
+          ],
+          "classification": {
+            "intent": "elaboration",
+            "substyle": null,
+            "reason": "Användaren vill ha mer detaljerad information om den aktiva huvudfrågan utan att peka utåt till nya områden.",
+            "used_fallback": false
+          },
+          "path": "elaboration",
+          "qud": {
+            "text": "Vilken process finns för att tillsätta en ny proprefekt?",
+            "age_turns": 2
+          },
+          "qud_drift": null,
+          "synthesis": {
+            "used_fallback": false,
+            "mode": "elaboration",
+            "num_extracted": 11,
+            "not_found": [],
+            "timing_s": {
+              "evidence_extraction": 14.517,
+              "answer_generation": 6.089
+            }
+          },
+          "timing_s": {
+            "rework": 20.606,
+            "total": 20.606
+          },
+          "flags": []
+        }
+      ],
+      "failed_flags": []
+    },
+    {
+      "name": "qud_drift_adjungerad_till_iit",
+      "description": "Prövar att drift-skyddet upptäcker ämnesbyte. Detta är det tydligaste drift-fallet vi sett — 'adjungerad lektor' → 'IIT rutiner för forskningsansökan' är ett skarpt tematiskt hopp.",
+      "session_id": "b1c6def3-2097-4e20-8f01-659a5859ee9c",
+      "turns": [
+        {
+          "turn": 1,
+          "question": "Jag vill rekrytera en adjungerad lektor. Vilken rutin finns?",
+          "expect": {
+            "sequence_role": "opening",
+            "notes": "Bör klassas som new_main_question. Historiskt har retrieval abstainat för denna fråga — kolla om den nu hittar något tack vare sänkt tröskel."
+          },
+          "answer": "Jag hittar inget tydligt stöd i de indexerade dokumenten för att besvara frågan.",
+          "num_sources": 0,
+          "sources": [],
+          "classification": {
+            "intent": "new_main_question",
+            "substyle": null,
+            "reason": "The statement introduces a new topic that is not related to any previous discussion.",
+            "used_fallback": false
+          },
+          "path": "new_main_question",
+          "qud": {
+            "text": "Jag vill rekrytera en adjungerad lektor. Vilken rutin finns?",
+            "age_turns": 0
+          },
+          "qud_drift": null,
+          "synthesis": {},
+          "timing_s": {
+            "embed_query": 0.011,
+            "search": 0.009,
+            "bm25_and_merge": 0.011,
+            "rerank_1": 0.082,
+            "expand_and_rerank_2": 0.0,
+            "total": 0.113
+          },
+          "flags": []
+        },
+        {
+          "turn": 2,
+          "question": "En adjungerad lektor faller under adjungerad lärare. Vad gäller?",
+          "expect": {
+            "sequence_role": "followup",
+            "same_topic_as_previous": true,
+            "should_find_sources": true,
+            "notes": "Precisering/repair inom samma tråd. Bör hitta anstallningsordning-dokumentet och svara på adjungerad lärare-reglerna."
+          },
+          "answer": "En adjungerad lektor faller under adjungerad lärare enligt avsnitt 11 i dokumentet \"Anställningsordning för lärare vid Högskolan Dalarna\". Detta innebär att en adjungerad lektor ska ha en anställning som regleras av ett centralt kollektivavtal från den 14 december 2011. En sådan anställning kan vara tillsvidare, men högst två år. Den kan förnyas om det finns ett fortsatt verksamhetsbehov [Källa 3].",
+          "num_sources": 3,
+          "sources": [
+            {
+              "file_name": "anstallningsordning-for-larare-vid-hogskolan-dalarna.pdf",
+              "section_title": "11.  Anställning av adjungerad lärare",
+              "score": 2.895
+            },
+            {
+              "file_name": "anstallningsordning-for-larare-vid-hogskolan-dalarna.pdf",
+              "section_title": "4.  Anställning av adjungerad professor",
+              "score": 1.273
+            },
+            {
+              "file_name": "anstallningsordning-for-larare-vid-hogskolan-dalarna.pdf",
+              "section_title": "11.1 Anställningsform",
+              "score": 1.159
+            }
+          ],
+          "classification": {
+            "intent": "related_to_qud",
+            "substyle": "broadening",
+            "reason": "Yttringen pekar ut ett nytt område ('adjungerad lärare') som inte täcks av tidigare hämtade källor.",
+            "used_fallback": false
+          },
+          "path": "related_to_qud",
+          "qud": {
+            "text": "Jag vill rekrytera en adjungerad lektor. Vilken rutin finns?",
+            "age_turns": 1
+          },
+          "qud_drift": {
+            "similarity": 0.9033,
+            "threshold": 0.55,
+            "drift_detected": false
+          },
+          "synthesis": {
+            "used_fallback": false,
+            "timing_s": {
+              "direct_synthesis": 2.839
+            }
+          },
+          "timing_s": {
+            "embed_query": 0.008,
+            "search": 0.009,
+            "bm25_and_merge": 0.008,
+            "rerank_1": 0.049,
+            "expand_and_rerank_2": 0.331,
+            "synthesize": 2.839,
+            "total": 3.244
+          },
+          "flags": [
+            {
+              "label": "should_find_sources=True (faktiskt: 3 källor)",
+              "ok": true,
+              "field": "should_find_sources",
+              "expected": true,
+              "actual": true
+            }
+          ]
+        },
+        {
+          "turn": 3,
+          "question": "Vilka lokala rutiner gäller på IIT före beslut om extern forskningsansökan?",
+          "expect": {
+            "sequence_role": "topic_switch",
+            "should_detect_drift": true,
+            "should_find_sources": true,
+            "notes": "Detta är ämnesbyte. Drift-skyddet bör trigga (similarity under 0.55) och klassificeringen skrivas om till new_main_question. Kolla qud_drift i debug."
+          },
+          "answer": "Jag hittar inget tydligt stöd i de indexerade dokumenten för att besvara frågan.",
+          "num_sources": 0,
+          "sources": [],
+          "classification": {
+            "intent": "related_to_qud",
+            "substyle": "broadening",
+            "reason": "The user is asking about additional local routines that might not have been covered in the previous response.",
+            "used_fallback": false
+          },
+          "path": "related_to_qud",
+          "qud": {
+            "text": "Jag vill rekrytera en adjungerad lektor. Vilken rutin finns?",
+            "age_turns": 2
+          },
+          "qud_drift": {
+            "similarity": 0.8678,
+            "threshold": 0.55,
+            "drift_detected": false
+          },
+          "synthesis": {},
+          "timing_s": {
+            "embed_query": 0.01,
+            "search": 0.043,
+            "bm25_and_merge": 0.015,
+            "rerank_1": 0.049,
+            "expand_and_rerank_2": 0.0,
+            "total": 0.118
+          },
+          "flags": [
+            {
+              "label": "should_find_sources=True (faktiskt: 0 källor)",
+              "ok": false,
+              "field": "should_find_sources",
+              "expected": true,
+              "actual": false
+            },
+            {
+              "label": "should_detect_drift=True (faktiskt: False)",
+              "ok": false,
+              "field": "should_detect_drift",
+              "expected": true,
+              "actual": false
+            }
+          ]
+        }
+      ],
+      "failed_flags": [
+        {
+          "turn": 3,
+          "question": "Vilka lokala rutiner gäller på IIT före beslut om extern forskningsansökan?",
+          "label": "should_find_sources=True (faktiskt: 0 källor)",
+          "ok": false,
+          "field": "should_find_sources",
+          "expected": true,
+          "actual": false
+        },
+        {
+          "turn": 3,
+          "question": "Vilka lokala rutiner gäller på IIT före beslut om extern forskningsansökan?",
+          "label": "should_detect_drift=True (faktiskt: False)",
+          "ok": false,
+          "field": "should_detect_drift",
+          "expected": true,
+          "actual": false
+        }
+      ]
+    },
+    {
+      "name": "elaboration_vs_broadening",
+      "description": "Prövar gränsen mellan elaboration och broadening. Två frågor som är innehållsnära men pekar åt olika håll — en inåt, en utåt.",
+      "session_id": "abfc495c-7d8b-4524-88fa-8c4e0af5464a",
+      "turns": [
+        {
+          "turn": 1,
+          "question": "Vad gäller vid disputation?",
+          "expect": {
+            "sequence_role": "opening",
+            "should_find_sources": true,
+            "notes": "Baslinje — huvudfråga om disputation."
+          },
+          "answer": "Vid disputation har ordföranden följande ansvar:\n\n[Källa 1] C2023-1000_20250909_Instruktion till ordförande vid disputation i MDA-DA och ESBE vid IIT (Swe and Eng).pdf — Instruktion till ordförande inför och under disputation i MDA-DA och EBM vid IIT\n\n- Kontakta opponent och betygsnämndsledamöter för instruktioner om disputationen.\n- Initiatera så snart som möjligt rese- och hotellbokningar för opponent och betygsnämnd, samt stäma av kostnaderna med objekt-godkännare. Institutionsadministratören hjälper till med bokningarna.\n- Initiatera ungefär två veckor innan middag kvällen före disputationen, lunch (vid behov), blommor, dryck och snacks vid uppvaktningen efter disputationen. Bokningar/beställningar görs av institutionsadministratör. Kostnaderna stäms av med objekt-godkännare innan.\n- Arrangera zoom-länk till betygsnämndsmötet i de fall ledamot är med på distans.\n- Kontakta support och bokar dem för att koppla upp i salen för distansmedverkan för publik och ev. betygsnämndsledamöter på distans.\n- Ansvarar för att betygsnämnden har ett protokoll som de kan fylla i och signera under sitt möte. Protokollet förbereds av forskarutbildningssamordnare och tillsänds ordföranden. Ordförande (assisterad av forskarstudierektor) skickar det av betygsnämnden signerade protokollet tillbaka till forskarutbildningssamordnaren. En scannad version av protokollet skickas direkt och originalet kommer med internpost.\n\n[Källa 2] C2023-1000_20250909_Instruktion till ordförande vid disputation i MDA-DA och ESBE vid IIT (Swe and Eng).pdf — Instruktion till ordförande inför och under disputation i MDA-DA och EBM vid IIT\n\n- Se till att disputationen genomförs enligt rådande rutiner och regler för att garantera en rättssäker examination.\n- Värdskapet från institutionens sida gällande opponent och betygsnämnd, samt att tillse att de är på plats och känner till sina uppdrag.\n- Visa professionalism genom Högskolan vid disputationen som är en högtidsdag för doktoranden, handledare, släkt och vänner och övriga nära medarbetare på Högskolan.",
+          "num_sources": 2,
+          "sources": [
+            {
+              "file_name": "C2023-1000_20250909_Instruktion till ordförande vid disputation i MDA-DA och ESBE vid IIT (Swe and Eng).pdf",
+              "section_title": "Instruktion till ordförande inför och under disputation i MDA-DA och EBM vid IIT [bullet_list]",
+              "score": 0.297
+            },
+            {
+              "file_name": "C2023-1000_20250909_Instruktion till ordförande vid disputation i MDA-DA och ESBE vid IIT (Swe and Eng).pdf",
+              "section_title": "Instruktion till ordförande inför och under disputation i MDA-DA och EBM vid IIT",
+              "score": 1.02
+            }
+          ],
+          "classification": {
+            "intent": "new_main_question",
+            "substyle": null,
+            "reason": "Aktuell yttring är en fristående fråga om disputationer och kan stå på egna ben utan samtalshistorik.",
+            "used_fallback": false
+          },
+          "path": "new_main_question",
+          "qud": {
+            "text": "Vad gäller vid disputation?",
+            "age_turns": 0
+          },
+          "qud_drift": null,
+          "synthesis": {
+            "used_fallback": false,
+            "timing_s": {
+              "direct_synthesis": 12.205
+            }
+          },
+          "timing_s": {
+            "embed_query": 0.008,
+            "search": 0.012,
+            "bm25_and_merge": 0.007,
+            "rerank_1": 0.07,
+            "expand_and_rerank_2": 0.061,
+            "synthesize": 12.205,
+            "total": 12.362
+          },
+          "flags": [
+            {
+              "label": "should_find_sources=True (faktiskt: 2 källor)",
+              "ok": true,
+              "field": "should_find_sources",
+              "expected": true,
+              "actual": true
+            }
+          ]
+        },
+        {
+          "turn": 2,
+          "question": "Berätta mer.",
+          "expect": {
+            "sequence_role": "followup",
+            "notes": "Klar elaboration — ingen ny sökterm, vänder sig inåt. Bör klassas som elaboration. Om det klassas som broadening eller subquestion, fel väg."
+          },
+          "answer": "Ordföranden har ansvaret för att se till att betygsnämnden har ett protokoll som de kan fylla i och signera under sitt möte. Protokollet förbereds av forskarutbildningssamordnare och tillsänds ordföranden. Efter att det av betygsnämnden signerade protokollet skickats tillbaka till forskarutbildningssamordnaren, skickas en scannad version direkt och originalet kommer med internpost [Källa 1].",
+          "num_sources": 2,
+          "sources": [
+            {
+              "file_name": "C2023-1000_20250909_Instruktion till ordförande vid disputation i MDA-DA och ESBE vid IIT (Swe and Eng).pdf",
+              "section_title": "Instruktion till ordförande inför och under disputation i MDA-DA och EBM vid IIT [bullet_list]",
+              "score": 0.297
+            },
+            {
+              "file_name": "C2023-1000_20250909_Instruktion till ordförande vid disputation i MDA-DA och ESBE vid IIT (Swe and Eng).pdf",
+              "section_title": "Instruktion till ordförande inför och under disputation i MDA-DA och EBM vid IIT",
+              "score": 1.02
+            }
+          ],
+          "classification": {
+            "intent": "elaboration",
+            "substyle": null,
+            "reason": "Användaren vill ha en utökad version av föregående svar utan att tillföra nya sökbara termer eller peka utåt till nya områden.",
+            "used_fallback": false
+          },
+          "path": "elaboration",
+          "qud": {
+            "text": "Vad gäller vid disputation?",
+            "age_turns": 1
+          },
+          "qud_drift": null,
+          "synthesis": {
+            "used_fallback": false,
+            "mode": "elaboration",
+            "num_extracted": 1,
+            "not_found": [],
+            "timing_s": {
+              "evidence_extraction": 4.023,
+              "answer_generation": 2.528
+            }
+          },
+          "timing_s": {
+            "rework": 6.551,
+            "total": 6.551
+          },
+          "flags": []
+        },
+        {
+          "turn": 3,
+          "question": "Vilka regler gäller för licentiatseminarium?",
+          "expect": {
+            "sequence_role": "followup",
+            "same_topic_as_previous": true,
+            "should_find_sources": true,
+            "notes": "Relaterat men utåt — ny sökterm 'licentiatseminarium'. Bör klassas som broadening eller subquestion, INTE elaboration. Kräver ny retrieval för att lyckas."
+          },
+          "answer": "Följande regler gäller för licentiatseminarium:\n\n- Licentiatseminariets upplägg kan variera mellan olika forskarutbildningar. Eventuella specificeringar anges i den Allmänna studieplanen för respektive forskarutbildningsämne. Riktlinjer för hur seminariet läggs upp presenteras i bilaga Licentiatseminariet [Källa 5].\n- Licentiatseminariet får hållas på svenska eller engelska. Språket bestäms i första hand med hänsyn till respondent, opponent och examinator, och i andra hand med hänsyn till förväntade åhörare [Källa 5].\n- Datum och plats för licentiatseminarium ska normalt äga rum under arbetstid mellan den 7 januari och måndag i midsommarveckan samt mellan 15 augusti och 21 december. Fler än ett licentiatseminarium eller en disputation inom samma forskarutbildningsområde ska inte äga rum samma dag [Källa 6].\n- Licentiatuppsats ska försvaras vid ett offentligt seminarium. Licentiatseminariet ska ledas av en ordförande som ska vara en från handledarna och doktoranden oberoende person. Det ska finnas en opponent (granskare) och en examinator alternativt en betygsnämnd om minst tre ledamöter samt ersättare till betygsnämnd. Examinator och betygsnämndsledamöterna, samt en ersättare, ska vara docent eller professor. Opponenten ska inte vara anställd vid Högskolan Dalarna men examinator ska vara anställd vid Högskolan Dalarna och som mest får en betygsnämndsledamot vara anställd vid Högskolan Dalarna. Avsteg kan göras i undantagsfall om utsedd ersättare som är anställd vid Högskolan Dalarna behöver träda in. Bägge könen bör vara representerade i betygsnämnd [Källa 7].\n- När beslut om licentiatseminarium är fattat ska plats och tid, titel på uppsats, namn på doktorand, opponent och examinator alternativt betygsnämnd kungöras på Högskolan Dalarnas hemsida och i kalendariet. Senast tre veckor före licentiatseminarium ska länk till uppsatsen i DiVA göras tillgänglig på Högskolans hemsida, så kallad spikning. Doktoranden ska då även distribuera uppsatsen till opponent och examinator alternativt betygsnämndsledamöter [Källa 8].",
+          "num_sources": 8,
+          "sources": [
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Anordnande av disputation och licentiatseminarium i nätbaserad form [bullet_list]",
+              "score": 4.826
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Examenskrav [bullet_list]",
+              "score": 3.164
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Anordnande av disputation och licentiatseminarium i nätbaserad form",
+              "score": 7.017
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Riktlinjer licentiatseminariet",
+              "score": 6.081
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Licentiatseminarium",
+              "score": 5.342
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Anmälan och beslut om licentiatseminarium",
+              "score": 5.024
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Examination av licentiatuppsats",
+              "score": 4.465
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Kungörelse, mångfaldigande och distribution av licentiatuppsatsen",
+              "score": 3.292
+            }
+          ],
+          "classification": {
+            "intent": "new_main_question",
+            "substyle": null,
+            "reason": "The user has asked a new question that is not related to the active main question about disputation.",
+            "used_fallback": false
+          },
+          "path": "new_main_question",
+          "qud": {
+            "text": "Vilka regler gäller för licentiatseminarium?",
+            "age_turns": 0
+          },
+          "qud_drift": null,
+          "synthesis": {
+            "used_fallback": false,
+            "timing_s": {
+              "direct_synthesis": 12.954
+            }
+          },
+          "timing_s": {
+            "embed_query": 0.01,
+            "search": 0.009,
+            "bm25_and_merge": 0.008,
+            "rerank_1": 0.067,
+            "expand_and_rerank_2": 0.229,
+            "synthesize": 12.954,
+            "total": 13.278
+          },
+          "flags": [
+            {
+              "label": "should_find_sources=True (faktiskt: 8 källor)",
+              "ok": true,
+              "field": "should_find_sources",
+              "expected": true,
+              "actual": true
+            }
+          ]
+        }
+      ],
+      "failed_flags": []
+    },
+    {
+      "name": "verification_flode",
+      "description": "Testar verification-vägen. Användaren prövar ett påstående från föregående svar — bör aktivera striktare källgranskning.",
+      "session_id": "150e1971-e317-46ca-8d28-ab4cf8fb292e",
+      "turns": [
+        {
+          "turn": 1,
+          "question": "Vem fattar beslut om inskickande av en extern forskningsansökan?",
+          "expect": {
+            "sequence_role": "opening",
+            "should_find_sources": true,
+            "notes": "Baslinjefråga. Föregående svar har angett prefekt/rektor — förbered verifiering."
+          },
+          "answer": "Head of School decides on submission of external research applications when co-funding from the university is max 500 tkr. Vice Chancellor decides when co-funding exceeds 500 tkr or for other reasons addressed in the calls [Källa 1].",
+          "num_sources": 10,
+          "sources": [
+            {
+              "file_name": "20250311_beslut_Beslut- reviderad rutin för beslut externa forskningsansökningar IIT.pdf",
+              "section_title": "Guidelines for decision before submitting external research applications -collection of instructions from different documents and local routine at IIT [table]",
+              "score": 5.839
+            },
+            {
+              "file_name": "20250311_beslut_Beslut- reviderad rutin för beslut externa forskningsansökningar IIT.pdf",
+              "section_title": "B. IIT local routine before decision meeting",
+              "score": 6.171
+            },
+            {
+              "file_name": "20250311_beslut_Beslut- reviderad rutin för beslut externa forskningsansökningar IIT.pdf",
+              "section_title": "Guidelines for decision before submitting external research applications -collection of instructions from different documents and local routine at IIT",
+              "score": 6.052
+            },
+            {
+              "file_name": "20250311_beslut_Beslut- reviderad rutin för beslut externa forskningsansökningar IIT.pdf",
+              "section_title": "Beslut",
+              "score": 6.016
+            },
+            {
+              "file_name": "20250311_beslut_Beslut- reviderad rutin för beslut externa forskningsansökningar IIT.pdf",
+              "section_title": "C. Meeting for decision/approval by head of school",
+              "score": 3.752
+            },
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "Intern kvalitetssäkringsprocess - i korthet",
+              "score": 4.219
+            },
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "3.",
+              "score": 3.743
+            },
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "Notera!",
+              "score": 3.32
+            },
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "5. Inskickande av ansökan",
+              "score": 2.767
+            },
+            {
+              "file_name": "20250311_Information och teknik_protokoll.pdf",
+              "section_title": "10 Beslut reviderad rutin för beslut externa forskningsansökningar, IIT",
+              "score": 2.181
+            }
+          ],
+          "classification": {
+            "intent": "new_main_question",
+            "substyle": null,
+            "reason": "related_to_qud_without_context",
+            "used_fallback": false
+          },
+          "path": "new_main_question",
+          "qud": {
+            "text": "Vem fattar beslut om inskickande av en extern forskningsansökan?",
+            "age_turns": 0
+          },
+          "qud_drift": null,
+          "synthesis": {
+            "used_fallback": false,
+            "timing_s": {
+              "direct_synthesis": 2.35
+            }
+          },
+          "timing_s": {
+            "embed_query": 0.01,
+            "search": 0.011,
+            "bm25_and_merge": 0.01,
+            "rerank_1": 0.061,
+            "expand_and_rerank_2": 0.125,
+            "synthesize": 2.35,
+            "total": 2.568
+          },
+          "flags": [
+            {
+              "label": "should_find_sources=True (faktiskt: 10 källor)",
+              "ok": true,
+              "field": "should_find_sources",
+              "expected": true,
+              "actual": true
+            }
+          ]
+        },
+        {
+          "turn": 2,
+          "question": "Stämmer det verkligen att prefekten kan fatta beslut ensam?",
+          "expect": {
+            "sequence_role": "followup",
+            "notes": "Klar verification. Bör klassas som verification_or_challenge och köra rework mot active_hits med striktare prompt. Kolla att svaret särskiljer explicit vs tolkning."
+          },
+          "answer": "Det finns ingen explicit information i källorna som stöder påståendet att Head of School kan fatta beslut ensam när det gäller att skicka in externa forskningsansökningar. Det tidigare svaret påstod detta, men jag kan inte hitta stöd för detta i de tillgängliga källorna [Källa 1]. Det som tydligt framgår av källan är att Head of School tar beslutet när universitetets medfinansiering är max 500 tkr och Vice Chancellor tar beslutet när medfinansieringen överstiger 500 tkr eller för andra orsaker som anges i anropskraven. Det tycks därmed innebära att beslut om skickande av externa forskningsansökningar kräver samordning mellan Head of School och Vice Chancellor, men det är inte tydligt definierat vem som har det slutgiltiga ansvar eller vilka andra faktorer som kan påverka beslutet. För att bekräfta eller avfärda påståendet om ensam beslutsfattande behövs ytterligare källor eller klargöranden från den ansvarige instansen.",
+          "num_sources": 10,
+          "sources": [
+            {
+              "file_name": "20250311_beslut_Beslut- reviderad rutin för beslut externa forskningsansökningar IIT.pdf",
+              "section_title": "Guidelines for decision before submitting external research applications -collection of instructions from different documents and local routine at IIT [table]",
+              "score": 5.839
+            },
+            {
+              "file_name": "20250311_beslut_Beslut- reviderad rutin för beslut externa forskningsansökningar IIT.pdf",
+              "section_title": "B. IIT local routine before decision meeting",
+              "score": 6.171
+            },
+            {
+              "file_name": "20250311_beslut_Beslut- reviderad rutin för beslut externa forskningsansökningar IIT.pdf",
+              "section_title": "Guidelines for decision before submitting external research applications -collection of instructions from different documents and local routine at IIT",
+              "score": 6.052
+            },
+            {
+              "file_name": "20250311_beslut_Beslut- reviderad rutin för beslut externa forskningsansökningar IIT.pdf",
+              "section_title": "Beslut",
+              "score": 6.016
+            },
+            {
+              "file_name": "20250311_beslut_Beslut- reviderad rutin för beslut externa forskningsansökningar IIT.pdf",
+              "section_title": "C. Meeting for decision/approval by head of school",
+              "score": 3.752
+            },
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "Intern kvalitetssäkringsprocess - i korthet",
+              "score": 4.219
+            },
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "3.",
+              "score": 3.743
+            },
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "Notera!",
+              "score": 3.32
+            },
+            {
+              "file_name": "regler-for-ansokningar-om-extern-forskningsfinansiering.pdf",
+              "section_title": "5. Inskickande av ansökan",
+              "score": 2.767
+            },
+            {
+              "file_name": "20250311_Information och teknik_protokoll.pdf",
+              "section_title": "10 Beslut reviderad rutin för beslut externa forskningsansökningar, IIT",
+              "score": 2.181
+            }
+          ],
+          "classification": {
+            "intent": "verification_or_challenge",
+            "substyle": null,
+            "reason": "yttringen prövar föregående svar",
+            "used_fallback": false
+          },
+          "path": "verification_or_challenge",
+          "qud": {
+            "text": "Vem fattar beslut om inskickande av en extern forskningsansökan?",
+            "age_turns": 1
+          },
+          "qud_drift": null,
+          "synthesis": {
+            "used_fallback": false,
+            "mode": "verification",
+            "num_extracted": 2,
+            "not_found": [
+              "Prefekten kan fatta beslut ensam"
+            ],
+            "timing_s": {
+              "evidence_extraction": 3.828,
+              "answer_generation": 4.781
+            }
+          },
+          "timing_s": {
+            "rework": 8.609,
+            "total": 8.609
+          },
+          "flags": []
+        }
+      ],
+      "failed_flags": []
+    },
+    {
+      "name": "social_i_kedja",
+      "description": "Testar att social markör inte förstör arbetsminnet — efter 'Tack' ska nästa fråga fortfarande kunna refereras till föregående dokumenttur.",
+      "session_id": "cfd15596-b26a-4c0f-8846-0d6c7728ae1c",
+      "turns": [
+        {
+          "turn": 1,
+          "question": "Vad krävs för att antas till forskarutbildning?",
+          "expect": {
+            "sequence_role": "opening",
+            "should_find_sources": true
+          },
+          "answer": "För att antas till forskarutbildning krävs enligt Högskoleförordningen:\n\n1. Grundläggande behörighet:\n\t* Avlagd examen på avancerad nivå\n\t* Fullgjort kursfordringar om minst 240 högskolepoäng, varav minst 60 högskolepoäng på avancerad nivå\n\t* På något sätt inom eller utom landet förvärvat i huvudsak motsvarande kunskaper [Källa 6]\n2. Särskild behörighet:\n\t* Kunskaper från högskoleutbildning eller motsvarande utbildning\n\t* Särskild yrkeserfarenhet\n\t* Nödvändiga språkkunskaper eller andra villkor som betingas av utbildningen [Källa 1]\n3. Förmåga till muntlig och skriftlig kommunikation på engelska [Källa 2]\n4. Personlig lämplighet [Källa 2]\n5. Övriga meriter [Källa 2]\n6. Erbjudande av anställning som doktorand eller inneha annan anställning där det finns sådana villkor att forskarutbildning kan bedrivas [Källa 3]",
+          "num_sources": 10,
+          "sources": [
+            {
+              "file_name": "antagningsordning--utbildning-pa-forskarniva.pdf",
+              "section_title": "Särskild behörighet [numbered_list]",
+              "score": 2.453
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Urval [numbered_list]",
+              "score": 2.177
+            },
+            {
+              "file_name": "antagningsordning--utbildning-pa-forskarniva.pdf",
+              "section_title": "Behörighet",
+              "score": 9.325
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Särskild behörighet",
+              "score": 7.465
+            },
+            {
+              "file_name": "antagningsordning--utbildning-pa-forskarniva.pdf",
+              "section_title": "Antagning",
+              "score": 4.852
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Grundläggande behörighet",
+              "score": 4.361
+            },
+            {
+              "file_name": "antagningsordning--utbildning-pa-forskarniva.pdf",
+              "section_title": "Antagning till utbildning på forskarnivå",
+              "score": 3.585
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Studiefinansiering",
+              "score": 3.038
+            },
+            {
+              "file_name": "antagningsordning--utbildning-pa-forskarniva.pdf",
+              "section_title": "Urval och anställning",
+              "score": 2.818
+            },
+            {
+              "file_name": "anstallningsordning-for-larare-vid-hogskolan-dalarna.pdf",
+              "section_title": "16.3.2 Övriga bedömningsgrunder",
+              "score": 2.972
+            }
+          ],
+          "classification": {
+            "intent": "new_main_question",
+            "substyle": null,
+            "reason": "Detta är en ny fråga som inte har något samband med tidigare frågor.",
+            "used_fallback": false
+          },
+          "path": "new_main_question",
+          "qud": {
+            "text": "Vad krävs för att antas till forskarutbildning?",
+            "age_turns": 0
+          },
+          "qud_drift": null,
+          "synthesis": {
+            "used_fallback": false,
+            "timing_s": {
+              "direct_synthesis": 6.776
+            }
+          },
+          "timing_s": {
+            "embed_query": 0.009,
+            "search": 0.011,
+            "bm25_and_merge": 0.01,
+            "rerank_1": 0.065,
+            "expand_and_rerank_2": 0.488,
+            "synthesize": 6.776,
+            "total": 7.359
+          },
+          "flags": [
+            {
+              "label": "should_find_sources=True (faktiskt: 10 källor)",
+              "ok": true,
+              "field": "should_find_sources",
+              "expected": true,
+              "actual": true
+            }
+          ]
+        },
+        {
+          "turn": 2,
+          "question": "Utveckla det.",
+          "expect": {
+            "sequence_role": "followup",
+            "notes": "Bör klassas som elaboration."
+          },
+          "answer": "Lägg till detaljer:\n\nFör att antas till forskarutbildning krävs enligt Högskoleförordningen även godtagbar finansiering för hela utbildningstiden [Källa 8]. Detta innebär att den sökande måste ha tillräcklig ekonomisk stöd för att kunna fullfölja sin utbildning utan att drabbas av ekonomiska svårigheter. Finansieringen kan komma från olika källor, såsom stipendium, bidrag eller egen finansiering.\n\nVid urvalet av sökande sker en lämplighetsprövning där viktiga aspekter är vetenskaplig mognad, förmåga till självständigt omdöme och kritisk analys [Källa 9]. Detta innebär att den sökandes tidigare akademiska prestationer och kunskaper bedöms, liksom dess förmåga att arbeta oberoende och Analysa komplexa problem. Tolkning_krävdes: Det är möjligt att andra aspekter också betraktas vid urvalet, men de nämnda är de som uttryckligen nämns i källan.",
+          "num_sources": 10,
+          "sources": [
+            {
+              "file_name": "antagningsordning--utbildning-pa-forskarniva.pdf",
+              "section_title": "Särskild behörighet [numbered_list]",
+              "score": 2.453
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Urval [numbered_list]",
+              "score": 2.177
+            },
+            {
+              "file_name": "antagningsordning--utbildning-pa-forskarniva.pdf",
+              "section_title": "Behörighet",
+              "score": 9.325
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Särskild behörighet",
+              "score": 7.465
+            },
+            {
+              "file_name": "antagningsordning--utbildning-pa-forskarniva.pdf",
+              "section_title": "Antagning",
+              "score": 4.852
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Grundläggande behörighet",
+              "score": 4.361
+            },
+            {
+              "file_name": "antagningsordning--utbildning-pa-forskarniva.pdf",
+              "section_title": "Antagning till utbildning på forskarnivå",
+              "score": 3.585
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Studiefinansiering",
+              "score": 3.038
+            },
+            {
+              "file_name": "antagningsordning--utbildning-pa-forskarniva.pdf",
+              "section_title": "Urval och anställning",
+              "score": 2.818
+            },
+            {
+              "file_name": "anstallningsordning-for-larare-vid-hogskolan-dalarna.pdf",
+              "section_title": "16.3.2 Övriga bedömningsgrunder",
+              "score": 2.972
+            }
+          ],
+          "classification": {
+            "intent": "elaboration",
+            "substyle": null,
+            "reason": "Användaren vill ha mer information om den aktiva huvudfrågan utan att peka utåt till nya områden.",
+            "used_fallback": false
+          },
+          "path": "elaboration",
+          "qud": {
+            "text": "Vad krävs för att antas till forskarutbildning?",
+            "age_turns": 1
+          },
+          "qud_drift": null,
+          "synthesis": {
+            "used_fallback": false,
+            "mode": "elaboration",
+            "num_extracted": 3,
+            "not_found": [],
+            "timing_s": {
+              "evidence_extraction": 6.698,
+              "answer_generation": 5.025
+            }
+          },
+          "timing_s": {
+            "rework": 11.723,
+            "total": 11.723
+          },
+          "flags": []
+        },
+        {
+          "turn": 3,
+          "question": "Tack, det var tydligt.",
+          "expect": {
+            "sequence_role": "social",
+            "should_find_sources": false,
+            "notes": "Social markör. Bör ge kort artigt svar utan retrieval. VIKTIGT: active_hits ska INTE nollställas."
+          },
+          "answer": "Gärna! Vill du veta mer om något specifikt?",
+          "num_sources": 0,
+          "sources": [],
+          "classification": {
+            "intent": "social_or_meta",
+            "substyle": null,
+            "reason": "Tack, det var tydligt är en social markör som kräver ingen retrieval.",
+            "used_fallback": false
+          },
+          "path": "social_or_meta",
+          "qud": {
+            "text": "Vad krävs för att antas till forskarutbildning?",
+            "age_turns": 2
+          },
+          "qud_drift": null,
+          "synthesis": {},
+          "timing_s": {},
+          "flags": [
+            {
+              "label": "should_find_sources=False (faktiskt: 0 källor)",
+              "ok": true,
+              "field": "should_find_sources",
+              "expected": false,
+              "actual": false
+            }
+          ]
+        },
+        {
+          "turn": 4,
+          "question": "Berätta mer om studiefinansieringen.",
+          "expect": {
+            "sequence_role": "followup",
+            "same_topic_as_previous": true,
+            "notes": "Förväntas klassas som broadening (nytt område inom samma tråd) eller subquestion. QUD ska fortfarande vara forskarutbildningsfrågan. active_hits ska vara intakt från tur 1."
+          },
+          "answer": "Studiefinansieringen är en viktig aspekt när det gäller antagning till forskarutbildning. Det krävs enligt Högskoleförordningen godtagbar finansiering för hela utbildningstiden [Källa 8]. Detta innebär att den sökande måste ha tillräcklig ekonomisk stöd för att kunna fullfölja sin utbildning utan att drabbas av ekonomiska svårigheter. Finansieringen kan komma från olika källor, såsom stipendium, bidrag eller egen finansiering.\n\nDet är viktigt att notera att det inte bara handlar om att ha tillräcklig finansiering när man antas till utbildningen, utan även under hela utbildningstiden. Det innebär att den sökande måste planera sin ekonomiska situation på ett sätt som säkerställer att de kan fortsätta sina studier utan att drabbas av ekonomiska problem.\n\nDet finns olika former för studiefinansiering, såsom stipendium eller bidrag från olika organisationer eller myndigheter. Det är viktigt att undersöka alla möjligheter och söka efter finansiering som passar den sökandes behov.\n\nI vissa fall kan även egen finansiering vara en alternativ väg för studiefinansiering. Detta kan innebära att ta ett lån eller använda egna sparekonomi för att betala för utbildningen. Det är viktigt att tänka på de ekonomiska följderna av detta och planera sin ekonomi på ett sätt som säkerställer att man kan betala tillbaka eventuella lån efter utbildningen.\n\nI slutändan handlar det om att ha en god plan för sin finansiering under hela utbildningstiden. Detta är en viktig del av antagningen till forskarutbildning och kan även påverka den sökandes möjligheter att fullfölja sin utbildning utan ekonomiska problem.",
+          "num_sources": 10,
+          "sources": [
+            {
+              "file_name": "antagningsordning--utbildning-pa-forskarniva.pdf",
+              "section_title": "Särskild behörighet [numbered_list]",
+              "score": 2.453
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Urval [numbered_list]",
+              "score": 2.177
+            },
+            {
+              "file_name": "antagningsordning--utbildning-pa-forskarniva.pdf",
+              "section_title": "Behörighet",
+              "score": 9.325
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Särskild behörighet",
+              "score": 7.465
+            },
+            {
+              "file_name": "antagningsordning--utbildning-pa-forskarniva.pdf",
+              "section_title": "Antagning",
+              "score": 4.852
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Grundläggande behörighet",
+              "score": 4.361
+            },
+            {
+              "file_name": "antagningsordning--utbildning-pa-forskarniva.pdf",
+              "section_title": "Antagning till utbildning på forskarnivå",
+              "score": 3.585
+            },
+            {
+              "file_name": "regler-for-utbildning-pa-forskarniva.pdf",
+              "section_title": "Studiefinansiering",
+              "score": 3.038
+            },
+            {
+              "file_name": "antagningsordning--utbildning-pa-forskarniva.pdf",
+              "section_title": "Urval och anställning",
+              "score": 2.818
+            },
+            {
+              "file_name": "anstallningsordning-for-larare-vid-hogskolan-dalarna.pdf",
+              "section_title": "16.3.2 Övriga bedömningsgrunder",
+              "score": 2.972
+            }
+          ],
+          "classification": {
+            "intent": "elaboration",
+            "substyle": null,
+            "reason": "Användaren vill ha mer information om studiefinansieringen efter att föregående svar gav en generell överblick.",
+            "used_fallback": false
+          },
+          "path": "elaboration",
+          "qud": {
+            "text": "Vad krävs för att antas till forskarutbildning?",
+            "age_turns": 3
+          },
+          "qud_drift": null,
+          "synthesis": {
+            "used_fallback": false,
+            "mode": "elaboration",
+            "num_extracted": 1,
+            "not_found": [],
+            "timing_s": {
+              "evidence_extraction": 4.557,
+              "answer_generation": 8.078
+            }
+          },
+          "timing_s": {
+            "rework": 12.635,
+            "total": 12.635
+          },
+          "flags": []
+        }
+      ],
+      "failed_flags": []
+    },
+    {
+      "name": "terminologigap_kant_problem",
+      "description": "Ett känt problem: 'inskrivning' matchar inte 'antagning'. Bör misslyckas tills claimslagret byggs. Med som regression-vakt.",
+      "session_id": "6c2ecaad-07cc-4943-bbb3-30238e7d495a",
+      "turns": [
+        {
+          "turn": 1,
+          "question": "Hur går inskrivningen av en ny doktorand till?",
+          "expect": {
+            "sequence_role": "opening",
+            "known_issue": "Terminologigap: 'inskrivning' matchar inte dokumentens term 'antagning'. Bör misslyckas tills claimslagret är på plats.",
+            "notes": "Om detta PLÖTSLIGT börjar fungera är det värt att notera — kan betyda att något annat ändrats (t.ex. sänkta trösklar) som råkar överbrygga gapet."
+          },
+          "answer": "Jag hittar inget tydligt stöd i de indexerade dokumenten för att besvara frågan.",
+          "num_sources": 0,
+          "sources": [],
+          "classification": {
+            "intent": "new_main_question",
+            "substyle": null,
+            "reason": "Detta är en ny fråga som inte kan kopplas till någon aktiv huvudfråga.",
+            "used_fallback": false
+          },
+          "path": "new_main_question",
+          "qud": {
+            "text": "Hur går inskrivningen av en ny doktorand till?",
+            "age_turns": 0
+          },
+          "qud_drift": null,
+          "synthesis": {},
+          "timing_s": {
+            "embed_query": 0.011,
+            "search": 0.011,
+            "bm25_and_merge": 0.011,
+            "rerank_1": 0.088,
+            "expand_and_rerank_2": 0.0,
+            "total": 0.12
+          },
+          "flags": []
+        }
+      ],
+      "failed_flags": []
+    }
+  ]
+}

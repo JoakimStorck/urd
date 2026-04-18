@@ -979,7 +979,7 @@ def test(
 
     Testfilen ska ha formatet:
 
-      {"version": 2, "sequences": [
+      {"version": 3, "sequences": [
         {"name": "...", "description": "...", "turns": [
           {"question": "...", "expect": {...}},
           ...
@@ -988,9 +988,17 @@ def test(
 
     Varje sekvens körs i en egen session (session_id delas mellan
     sekvensens turer). Expect-fälten rapporteras bredvid faktiskt
-    utfall utan att betraktas som pass/fail — bara observationsbara
-    flaggor (should_find_sources, should_detect_drift) valideras
-    uttryckligen.
+    utfall. Observationsbara flaggor som valideras uttryckligen:
+      - should_find_sources, min_sources
+      - should_abstain
+      - should_detect_drift
+      - expected_intent (matchar classification.intent)
+      - expect_new_hits (elaboration har hämtat nytt material)
+      - expect_verification_status (verification har producerat
+        minst en finding med angiven status: supported/unclear/unsupported)
+
+    Kvalitativa fält (notes, known_issue, sequence_role) rapporteras
+    men valideras inte.
     """
     import time as time_module
     from datetime import datetime
@@ -999,7 +1007,7 @@ def test(
         typer.echo(f"Testfil saknas: {test_file}")
         typer.echo("")
         typer.echo("Filen ska vara i sekvensformat:")
-        typer.echo('  {"version": 2, "sequences": [...]}')
+        typer.echo('  {"version": 3, "sequences": [...]}')
         raise typer.Exit(code=1)
 
     try:
@@ -1162,12 +1170,19 @@ def test(
             typer.echo(f"    {' | '.join(parts)}")
 
             # Utvärdera expect-flaggor (valideras)
+            # num_new_hits finns bara på rework-vägen (elaboration/verification)
+            num_new_hits = debug.get("num_new_hits")
+            # status_counts finns bara när verification körts
+            verification_status_counts = synthesis.get("status_counts")
+
             flags = _evaluate_expect(
                 expect=expect,
                 num_sources=num_sources,
                 intent=classification.get("intent", ""),
                 qud_drift_detected=qud_drift.get("drift_detected", False),
                 abstained=debug.get("abstained", False),
+                num_new_hits=num_new_hits,
+                verification_status_counts=verification_status_counts,
             )
             for flag in flags:
                 icon = "✓" if flag["ok"] else "✗"
@@ -1299,6 +1314,8 @@ def _evaluate_expect(
     intent: str,
     qud_drift_detected: bool,
     abstained: bool,
+    num_new_hits: int | None,
+    verification_status_counts: dict | None,
 ) -> list[dict]:
     """
     Utvärdera observationsbara expect-flaggor.
@@ -1307,6 +1324,10 @@ def _evaluate_expect(
     faktiskt var angiven i expect. Kvalitativa fält (notes,
     known_issue, sequence_role, same_topic_as_previous) valideras
     INTE — de är rapportering, inte pass/fail.
+
+    Parametrarna num_new_hits och verification_status_counts är bara
+    meningsfulla för rework-turer (elaboration/verification). För
+    andra turer kan de vara None.
     """
     flags: list[dict] = []
 
@@ -1353,6 +1374,60 @@ def _evaluate_expect(
             "field": "should_detect_drift",
             "expected": want,
             "actual": qud_drift_detected,
+        })
+
+    if "expected_intent" in expect:
+        want = str(expect["expected_intent"])
+        ok = (intent == want)
+        flags.append({
+            "label": f"expected_intent={want} (faktiskt: {intent})",
+            "ok": ok,
+            "field": "expected_intent",
+            "expected": want,
+            "actual": intent,
+        })
+
+    if "expect_new_hits" in expect:
+        want = bool(expect["expect_new_hits"])
+        # Elaboration lyckades hämta nytt material om num_new_hits > 0.
+        # För icke-rework-turer är num_new_hits None och flaggan är
+        # inte meningsfull — markera som fail med förklarande text.
+        if num_new_hits is None:
+            ok = False
+            detail = "(ej rework-tur — num_new_hits saknas)"
+        else:
+            got = num_new_hits > 0
+            ok = (got == want)
+            detail = f"(faktiskt: {num_new_hits} nya hits)"
+        flags.append({
+            "label": f"expect_new_hits={want} {detail}",
+            "ok": ok,
+            "field": "expect_new_hits",
+            "expected": want,
+            "actual": num_new_hits,
+        })
+
+    if "expect_verification_status" in expect:
+        want = str(expect["expect_verification_status"])
+        # Kräver att minst en finding har den begärda statusen.
+        if verification_status_counts is None:
+            ok = False
+            detail = "(ingen verification körd)"
+            actual_count = None
+        else:
+            actual_count = verification_status_counts.get(want, 0)
+            ok = actual_count > 0
+            detail = (
+                f"(supported={verification_status_counts.get('supported', 0)}, "
+                f"unclear={verification_status_counts.get('unclear', 0)}, "
+                f"unsupported={verification_status_counts.get('unsupported', 0)})"
+            )
+        flags.append({
+            "label": f"expect_verification_status={want} {detail}",
+            "ok": ok,
+            "field": "expect_verification_status",
+            "expected": want,
+            "actual": actual_count,
         })
 
     return flags

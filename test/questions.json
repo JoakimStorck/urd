@@ -1,18 +1,18 @@
 {
-  "version": 2,
-  "description": "URD testbatteri — sekvenser som prövar de samtalsdynamiska och retrieval-mässiga utmaningar vi identifierat. Se docs för utvecklingsdiskussion.",
+  "version": 3,
+  "description": "URD testbatteri v3 — uppdaterat efter rework-refaktoreringen (elaborate/verify i egen modul, verification använder smal supported/unclear/unsupported-modell, elaboration gör ny retrieval inom aktiva dokument).",
   "sequences": [
     {
       "name": "forskningsansokan_grund",
-      "description": "Grundflödet: öppna huvudfråga, utveckla, bredda. Prövar att första turen ger fyllig retrieval, att elaboration kan komma åt mer än första turen visade, och att broadening hanteras som ny retrieval inom samma tråd.",
+      "description": "Grundflödet: öppna huvudfråga, utveckla, bredda. Prövar att första turen ger fyllig retrieval, att elaboration kan hämta nytt material inom aktiva dokument, och att broadening hanteras som ny retrieval inom samma tråd.",
       "turns": [
         {
-          "question": "God kväll. Vad behöver jag göra om jag ska skicka in en extern forskningsansökan?",
+          "question": "Hej. Vad behöver jag göra om jag ska skicka in en extern forskningsansökan?",
           "expect": {
             "sequence_role": "opening",
             "should_find_sources": true,
             "min_sources": 2,
-            "notes": "Baslinjefråga. Bör hitta forskningsansökan-dokumentet. Efter retrieval-ändringen (lägre expansionstösklar) förväntas fyllig info — fler chunkar än tidigare 2."
+            "notes": "Baslinjefråga. Bör hitta forskningsansökan-dokumentet."
           }
         },
         {
@@ -20,7 +20,8 @@
           "expect": {
             "sequence_role": "followup",
             "should_find_sources": true,
-            "notes": "Klar elaboration-kandidat — innehållssvag, vänder sig inåt. Bör klassas som elaboration. Svaret ska innehålla mer detalj än tur 1, inte upprepa."
+            "expect_new_hits": true,
+            "notes": "Klar elaboration. Med refaktoreringen ska elaborate() hämta nytt material från samma dokument (num_new_hits > 0). Svaret ska innehålla detaljer som INTE var med i tur 1."
           }
         },
         {
@@ -29,22 +30,22 @@
             "sequence_role": "followup",
             "same_topic_as_previous": true,
             "should_find_sources": true,
-            "notes": "Ny aspekt inom samma tråd — förväntas bli broadening eller subquestion, inte elaboration (har ny sökterm). Om det klassas som elaboration är det ett tecken på att gränsen fortfarande är fel inställd."
+            "expected_intent": "related_to_qud",
+            "notes": "Ny aspekt inom samma tråd — förväntas bli broadening eller subquestion (har ny sökterm 'medfinansiering'). Om elaboration: fel väg."
           }
         }
       ]
     },
     {
       "name": "proprefekt_djup",
-      "description": "Testar att retrieval nu hittar fler sektioner i ett dokument med flera relevanta avsnitt. Proprefekt-dokumentet har tidigare gett tunna svar trots att det är rätt dokument.",
+      "description": "Testar att elaboration verkligen hämtar nytt material. Proprefekt-dokumentet har flera sektioner men tur 1 tar typiskt bara 3 — resten bör elaboration kunna lyfta fram.",
       "turns": [
         {
           "question": "Vilken process finns för att tillsätta en ny proprefekt?",
           "expect": {
             "sequence_role": "opening",
             "should_find_sources": true,
-            "min_sources": 3,
-            "notes": "Bör hitta flera sektioner i regler-for-tillsattning-av-proprefekt.pdf. Tidigare fick vi 5 hits men bara 2-3 nådde syntesen. Efter retrieval-ändringen förväntas fler."
+            "min_sources": 3
           }
         },
         {
@@ -52,27 +53,49 @@
           "expect": {
             "sequence_role": "followup",
             "should_find_sources": true,
-            "notes": "Bör förbli i elaboration-läge och lyfta fram steg ur samma dokument. Om active_hits nu är fler (från tur 1) bör svaret bli mer komplett."
+            "expect_new_hits": true,
+            "notes": "Bör klassas som elaboration. Ska hämta sektioner ur proprefekt-dokumentet som tur 1 missade (interimsproprefekt, mandatperiod, avbrott). num_new_hits bör vara minst 2."
           }
         },
         {
           "question": "Finns det mer information?",
           "expect": {
             "sequence_role": "followup",
-            "notes": "Andra elaboration i kedja. Bör antingen hitta ännu mer detalj eller abstaina ärligt om materialet är uttömt. Inget 'rätt' utfall — observation."
+            "notes": "Andra elaboration i kedja. Förväntas antingen hitta ytterligare material (num_new_hits > 0) eller abstaina ärligt (num_new_hits == 0) — båda är OK utfall."
+          }
+        }
+      ]
+    },
+    {
+      "name": "elaboration_abstain",
+      "description": "Prövar att elaboration abstainar ärligt när materialet är uttömt. Ett kort dokument som har få chunks — elaboration kan inte gräva fram mer än vad som redan sagts.",
+      "turns": [
+        {
+          "question": "Vilka regler gäller för sändlistor och delgivning?",
+          "expect": {
+            "sequence_role": "opening",
+            "notes": "Bör hitta ett litet dokument där första turen sannolikt uttömmer innehållet."
+          }
+        },
+        {
+          "question": "Utveckla det.",
+          "expect": {
+            "sequence_role": "followup",
+            "should_abstain": true,
+            "notes": "Elaboration ska abstaina ärligt när det inte finns mer material. Förväntas num_new_hits == 0 och svaret ska innehålla fras om att tidigare svar täckte källorna. Om systemet upprepar sig eller fabricerar: regression."
           }
         }
       ]
     },
     {
       "name": "qud_drift_adjungerad_till_iit",
-      "description": "Prövar att drift-skyddet upptäcker ämnesbyte. Detta är det tydligaste drift-fallet vi sett — 'adjungerad lektor' → 'IIT rutiner för forskningsansökan' är ett skarpt tematiskt hopp.",
+      "description": "Prövar att drift-skyddet upptäcker ämnesbyte. 'adjungerad lektor' → 'IIT rutiner för forskningsansökan' är ett skarpt tematiskt hopp.",
       "turns": [
         {
           "question": "Jag vill rekrytera en adjungerad lektor. Vilken rutin finns?",
           "expect": {
             "sequence_role": "opening",
-            "notes": "Bör klassas som new_main_question. Historiskt har retrieval abstainat för denna fråga — kolla om den nu hittar något tack vare sänkt tröskel."
+            "notes": "Bör klassas som new_main_question."
           }
         },
         {
@@ -81,7 +104,7 @@
             "sequence_role": "followup",
             "same_topic_as_previous": true,
             "should_find_sources": true,
-            "notes": "Precisering/repair inom samma tråd. Bör hitta anstallningsordning-dokumentet och svara på adjungerad lärare-reglerna."
+            "notes": "Precisering/repair inom samma tråd. Bör hitta anstallningsordning-dokumentet."
           }
         },
         {
@@ -90,7 +113,7 @@
             "sequence_role": "topic_switch",
             "should_detect_drift": true,
             "should_find_sources": true,
-            "notes": "Detta är ämnesbyte. Drift-skyddet bör trigga (similarity under 0.55) och klassificeringen skrivas om till new_main_question. Kolla qud_drift i debug."
+            "notes": "Ämnesbyte. Drift-skyddet bör trigga (similarity under 0.55) och klassificeringen skrivas om till new_main_question."
           }
         }
       ]
@@ -103,15 +126,15 @@
           "question": "Vad gäller vid disputation?",
           "expect": {
             "sequence_role": "opening",
-            "should_find_sources": true,
-            "notes": "Baslinje — huvudfråga om disputation."
+            "should_find_sources": true
           }
         },
         {
           "question": "Berätta mer.",
           "expect": {
             "sequence_role": "followup",
-            "notes": "Klar elaboration — ingen ny sökterm, vänder sig inåt. Bör klassas som elaboration. Om det klassas som broadening eller subquestion, fel väg."
+            "expected_intent": "elaboration",
+            "notes": "Klar elaboration — ingen ny sökterm, vänder sig inåt. Om det klassas som broadening eller subquestion är gränsen fel inställd."
           }
         },
         {
@@ -120,28 +143,75 @@
             "sequence_role": "followup",
             "same_topic_as_previous": true,
             "should_find_sources": true,
-            "notes": "Relaterat men utåt — ny sökterm 'licentiatseminarium'. Bör klassas som broadening eller subquestion, INTE elaboration. Kräver ny retrieval för att lyckas."
+            "expected_intent": "related_to_qud",
+            "notes": "Relaterat men utåt — ny sökterm 'licentiatseminarium'. Bör klassas som broadening eller subquestion, INTE elaboration."
           }
         }
       ]
     },
     {
-      "name": "verification_flode",
-      "description": "Testar verification-vägen. Användaren prövar ett påstående från föregående svar — bör aktivera striktare källgranskning.",
+      "name": "verification_unsupported",
+      "description": "Verification där påståendet användaren prövar saknar stöd i källorna. Förväntas resultera i minst en unsupported-finding och ett svar som ärligt säger att stöd saknas.",
       "turns": [
         {
           "question": "Vem fattar beslut om inskickande av en extern forskningsansökan?",
           "expect": {
             "sequence_role": "opening",
             "should_find_sources": true,
-            "notes": "Baslinjefråga. Föregående svar har angett prefekt/rektor — förbered verifiering."
+            "notes": "Baslinjefråga. Sätter scen för verifiering."
           }
         },
         {
           "question": "Stämmer det verkligen att prefekten kan fatta beslut ensam?",
           "expect": {
             "sequence_role": "followup",
-            "notes": "Klar verification. Bör klassas som verification_or_challenge och köra rework mot active_hits med striktare prompt. Kolla att svaret särskiljer explicit vs tolkning."
+            "expected_intent": "verification_or_challenge",
+            "expect_verification_status": "unsupported",
+            "notes": "Användaren insinuerar ett påstående som inte kommer direkt från föregående svar. Bör resultera i minst en unsupported-finding. Svaret ska innehålla en formulering i stil med 'inget stöd för' eller 'hittar inte stöd'."
+          }
+        }
+      ]
+    },
+    {
+      "name": "verification_supported",
+      "description": "Verification där användaren prövar ett påstående som FAKTISKT har stöd i källorna. Förväntas bekräftande svar med supported-findings.",
+      "turns": [
+        {
+          "question": "Vem ansvarar för att budget och intern kalkyl upprättas för en forskningsansökan?",
+          "expect": {
+            "sequence_role": "opening",
+            "should_find_sources": true,
+            "notes": "Baslinjefråga. Svaret bör peka ut projektledare och ekonom."
+          }
+        },
+        {
+          "question": "Är det verkligen projektledaren som har det ansvaret?",
+          "expect": {
+            "sequence_role": "followup",
+            "expected_intent": "verification_or_challenge",
+            "expect_verification_status": "supported",
+            "notes": "Användaren prövar ett påstående som stämmer. Förväntas minst en supported-finding. Svaret ska bekräfta snarare än att ifrågasätta. Om systemet blir överförsiktigt och börjar tvivla på sitt eget korrekta svar: regression."
+          }
+        }
+      ]
+    },
+    {
+      "name": "verification_vague",
+      "description": "Verification där användarens prövning är vag — 'är du säker?' utan konkret tvivel. Bör inte fabricera tvivel som inte finns.",
+      "turns": [
+        {
+          "question": "Vilka regler gäller för examinator vid licentiatseminarium?",
+          "expect": {
+            "sequence_role": "opening",
+            "should_find_sources": true
+          }
+        },
+        {
+          "question": "Är du säker på det där?",
+          "expect": {
+            "sequence_role": "followup",
+            "expected_intent": "verification_or_challenge",
+            "notes": "Vag prövning utan konkret tvivel. Bör leda till strukturerad granskning där findings klassificeras ärligt. Om systemet börjar fabricera tvivel eller överger välstödda påståenden utan anledning: regression. Ett bra svar kan också fråga vad specifikt användaren tvivlar på."
           }
         }
       ]
@@ -161,7 +231,7 @@
           "question": "Utveckla det.",
           "expect": {
             "sequence_role": "followup",
-            "notes": "Bör klassas som elaboration."
+            "expected_intent": "elaboration"
           }
         },
         {
@@ -169,6 +239,7 @@
           "expect": {
             "sequence_role": "social",
             "should_find_sources": false,
+            "expected_intent": "social_or_meta",
             "notes": "Social markör. Bör ge kort artigt svar utan retrieval. VIKTIGT: active_hits ska INTE nollställas."
           }
         },
@@ -177,21 +248,22 @@
           "expect": {
             "sequence_role": "followup",
             "same_topic_as_previous": true,
-            "notes": "Förväntas klassas som broadening (nytt område inom samma tråd) eller subquestion. QUD ska fortfarande vara forskarutbildningsfrågan. active_hits ska vara intakt från tur 1."
+            "expected_intent": "related_to_qud",
+            "notes": "Förväntas klassas som broadening (nytt område inom samma tråd). QUD ska fortfarande vara forskarutbildningsfrågan. active_hits ska vara intakt."
           }
         }
       ]
     },
     {
       "name": "terminologigap_kant_problem",
-      "description": "Ett känt problem: 'inskrivning' matchar inte 'antagning'. Bör misslyckas tills claimslagret byggs. Med som regression-vakt.",
+      "description": "Ett känt problem: 'inskrivning' matchar inte 'antagning'. Regression-vakt. Om detta plötsligt fungerar: utred vad som ändrats.",
       "turns": [
         {
           "question": "Hur går inskrivningen av en ny doktorand till?",
           "expect": {
             "sequence_role": "opening",
-            "known_issue": "Terminologigap: 'inskrivning' matchar inte dokumentens term 'antagning'. Bör misslyckas tills claimslagret är på plats.",
-            "notes": "Om detta PLÖTSLIGT börjar fungera är det värt att notera — kan betyda att något annat ändrats (t.ex. sänkta trösklar) som råkar överbrygga gapet."
+            "known_issue": "Terminologigap: 'inskrivning' matchar inte dokumentens term 'antagning'.",
+            "notes": "Regression-vakt. Förväntat utfall: abstain eller svagt svar. Om systemet PLÖTSLIGT hittar bra källor — utred vad som ändrats."
           }
         }
       ]

@@ -11,7 +11,6 @@ from app.session_state import SessionStore
 from app.intent import classify_utterance, Classification
 from app.social import handle_social
 from app.qud_drift import measure_drift
-from app.llm import LLMUnavailableError
 from app.followup import rewrite_followup
 
 app = FastAPI(title="Local IIT URD")
@@ -132,9 +131,12 @@ def chat(req: ChatRequest) -> ChatResponse:
                 },
             )
 
-        # 2b. Elaboration och verification: inget nytt retrieval,
-        # arbeta mot active_hits. Skyddsregeln i intent.py har
-        # redan garanterat att active_hits inte är tom här.
+        # 2b. Elaboration och verification: arbetar mot active_hits från
+        # föregående tur. Elaboration gör ny reranking inom aktiva
+        # dokument för att hitta material som inte användes första
+        # gången; verification arbetar direkt mot active_hits.
+        # Skyddsregeln i intent.py har redan garanterat att active_hits
+        # inte är tom här.
         if classification.intent in ("elaboration", "verification_or_challenge"):
             mode = (
                 "elaboration"
@@ -148,6 +150,7 @@ def chat(req: ChatRequest) -> ChatResponse:
                 hits=state.active_hits,
                 previous_answer=previous_answer,
                 mode=mode,
+                qud_question=state.current_qud_text,
             )
 
             # Rework-tur: ersätt INTE active_hits — samma material bär
@@ -177,20 +180,18 @@ def chat(req: ChatRequest) -> ChatResponse:
         qud_anchor: str | None = None
         background_turns = None
         background_max_turns = 0
-        style: str | None = None
         retrieval_question: str | None = None
         preferred_source_paths: list[str] | None = None
 
         if classification.intent == "new_main_question":
-            # Standard retrieval, ingen bakgrund, standardstil.
+            # Standard retrieval, ingen bakgrund.
             path_label = "new_main_question"
 
         elif classification.intent == "related_to_qud":
-            # QUD-ankare i retrieval + bakgrund i syntes + stil
+            # QUD-ankare i retrieval + bakgrund i syntes
             qud_anchor = state.current_qud_text
             background_turns = list(state.turns)
             background_max_turns = settings.qud_background_turns
-            style = classification.substyle  # subquestion | broadening | narrowing_or_repair
             path_label = "related_to_qud"
 
             # Broadening: skriv om den korta följdfrågan till en
@@ -217,7 +218,6 @@ def chat(req: ChatRequest) -> ChatResponse:
             qud_anchor=qud_anchor,
             background_turns=background_turns,
             background_max_turns=background_max_turns,
-            style=style,
             retrieval_question=retrieval_question,
             preferred_source_paths=preferred_source_paths,
         )
@@ -243,8 +243,6 @@ def chat(req: ChatRequest) -> ChatResponse:
         response.debug["path"] = path_label
         if background_max_turns > 0:
             response.debug["background_max_turns"] = background_max_turns
-        if style is not None:
-            response.debug["synthesis_style"] = style
         if retrieval_question is not None:
             response.debug["retrieval_question"] = retrieval_question
         if preferred_source_paths is not None:
