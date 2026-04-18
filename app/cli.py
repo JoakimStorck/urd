@@ -274,12 +274,23 @@ def ingest(
         raise
 
     indexed_docs = store.get_indexed_documents()
+    indexed_with_evidence = store.get_evidence_source_paths()
     fs_paths = iter_document_paths(root)
     fs_map = {str(p): compute_source_fingerprint(p) for p in fs_paths}
 
     typer.echo(f"Läser dokument från: {root}")
     typer.echo(f"Antal filer funna: {len(fs_paths)}")
     typer.echo(f"Indexerade dokument i Qdrant: {len(indexed_docs)}")
+    missing_evidence_count = sum(
+        1
+        for path in fs_paths
+        if str(path) in indexed_docs and str(path) not in indexed_with_evidence
+    )
+    if missing_evidence_count:
+        typer.echo(
+            f"Dokument utan evidensobjekt: {missing_evidence_count} "
+            f"(kommer processas för evidens även om fingerprint är oförändrat)"
+        )
 
     total_docs = 0
     total_chunks = 0
@@ -301,9 +312,35 @@ def ingest(
         new_fp = fs_map[source_path]
         old_fp = indexed_docs.get(source_path)
 
-        if not force and old_fp == new_fp:
+        fingerprint_unchanged = old_fp == new_fp
+        has_evidence = source_path in indexed_with_evidence
+        needs_evidence_backfill = fingerprint_unchanged and not has_evidence
+
+        if not force and fingerprint_unchanged and has_evidence:
             skipped += 1
             typer.echo(f"Skip unchanged: {source_path}")
+            continue
+
+        if needs_evidence_backfill:
+            # Chunks är korrekt indexerade men evidens saknas. Lägg
+            # bara till evidensobjekt, utan att röra chunks.
+            _, evidence_objects = ingest_path_with_evidence(path, root)
+            if evidence_objects:
+                evidence_vectors = embedder.embed_texts(
+                    [e.evidence_text for e in evidence_objects]
+                )
+                store.upsert_evidence_objects(evidence_objects, evidence_vectors)
+                updated += 1
+                typer.echo(
+                    f"Evidensbackfill: {source_path} -> "
+                    f"{len(evidence_objects)} evidensobjekt"
+                )
+            else:
+                skipped += 1
+                typer.echo(
+                    f"Evidensbackfill: {source_path} (inga evidensobjekt hittades)"
+                )
+            total_docs += 1
             continue
 
         if old_fp is not None:
