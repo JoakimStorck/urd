@@ -264,6 +264,18 @@ class QdrantStore:
                 by_path[hit.metadata.source_path] = hit.metadata.source_fingerprint
         return by_path
 
+    def get_evidence_source_paths(self, batch_size: int = 256) -> set[str]:
+        """
+        Hämta de source_paths som har minst ett evidensobjekt indexerat.
+
+        Används av ingest-loopen för att upptäcka dokument som har
+        chunks men saknar evidensobjekt — t.ex. dokument som
+        indexerades innan evidensstrukturen införts, eller där
+        evidens-extraktionen misslyckats tidigare.
+        """
+        hits = self.iter_all_evidence(batch_size=batch_size)
+        return {hit.metadata.source_path for hit in hits if hit.metadata.source_path}
+
     def delete_chunks_by_source_path(self, source_path: str) -> None:
         self.client.delete(
             collection_name=self.collection_name,
