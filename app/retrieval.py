@@ -560,6 +560,8 @@ class RagService:
         background_turns: list[dict] | None = None,
         background_max_turns: int = 0,
         style: str | None = None,
+        retrieval_question: str | None = None,
+        preferred_source_paths: list[str] | None = None,
     ) -> ChatResponse:
         """
         Kör retrieval och syntes.
@@ -576,25 +578,37 @@ class RagService:
           skickas med till evidensextraktionen.
         - style: valfri stilmarkör som styr svarsformuleringen. Giltiga
           värden hanteras i synthesis.py. None = standardstil.
+        - retrieval_question: omskriven fråga för retrieval. Om satt
+          används den i embedding, BM25 och reranking, medan question
+          fortfarande används i syntesen.
+        - preferred_source_paths: dokument som bör prioriteras i
+          retrieval, t.ex. aktiva dokument från föregående svar.
         """
         t0 = time.perf_counter()
 
-        # Bygg söktexten. Om QUD-ankare finns konkateneras det med
-        # originalfrågan så att både embedding-modell, BM25 och
-        # cross-encoder får samma utökade kontext.
-        if qud_anchor:
+        # Bygg söktexten. Om en särskild retrieval-fråga finns används
+        # den direkt. Annars används nuvarande QUD-ankrade strategi.
+        if retrieval_question:
+            search_text = retrieval_question
+        elif qud_anchor:
             search_text = f"{question}\n\n(Huvudfråga i samtalet: {qud_anchor})"
         else:
             search_text = question
 
-        # 1. Semantisk sökning via Qdrant
+        # 1. Semantisk sökning via Qdrant. För broadening kan retrievaln
+        # ankras lokalt till tidigare aktiva dokument.
         query_vector = self.embedder.embed_query(search_text)
         t1 = time.perf_counter()
 
-        semantic_hits = self.store.search(query_vector, limit=15)
+        semantic_hits = self.store.search(
+            query_vector,
+            limit=15,
+            source_paths=preferred_source_paths,
+        )
         t2 = time.perf_counter()
 
-        # 2. BM25-sökning – tillför kandidater med exakt ordmatchning
+        # 2. BM25-sökning – tillför kandidater med exakt ordmatchning.
+        # Den hålls global i första versionen av broadening-fixen.
         bm25_hits = self.bm25_index.top_k(search_text, k=10)
 
         # 3. Slå ihop till en unik kandidatpool
@@ -676,6 +690,10 @@ class RagService:
                     "evidence_docs": evidence_source_paths,
                     "abstained": True,
                     "qud_anchor_used": qud_anchor is not None,
+                "retrieval_question_used": retrieval_question is not None,
+                "preferred_source_paths": preferred_source_paths,
+                    "retrieval_question_used": retrieval_question is not None,
+                    "preferred_source_paths": preferred_source_paths,
                     "timing_s": {
                         "embed_query": round(t1 - t0, 3),
                         "search": round(t2 - t1, 3),
@@ -740,7 +758,7 @@ class RagService:
                 "num_reranked": len(all_reranked),
                 "num_hits": len(hits),
                 "abstained": False,
-                "qud_anchor_used": qud_anchor is not None,
+                
                 "synthesis": synthesis_debug,
                 "timing_s": {
                     "embed_query": round(t1 - t0, 3),

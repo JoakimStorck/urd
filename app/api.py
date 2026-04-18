@@ -12,6 +12,7 @@ from app.intent import classify_utterance, Classification
 from app.social import handle_social
 from app.qud_drift import measure_drift
 from app.llm import LLMUnavailableError
+from app.followup import rewrite_followup
 
 app = FastAPI(title="Local IIT URD")
 rag = RagService()
@@ -177,6 +178,8 @@ def chat(req: ChatRequest) -> ChatResponse:
         background_turns = None
         background_max_turns = 0
         style: str | None = None
+        retrieval_question: str | None = None
+        preferred_source_paths: list[str] | None = None
 
         if classification.intent == "new_main_question":
             # Standard retrieval, ingen bakgrund, standardstil.
@@ -190,6 +193,21 @@ def chat(req: ChatRequest) -> ChatResponse:
             style = classification.substyle  # subquestion | broadening | narrowing_or_repair
             path_label = "related_to_qud"
 
+            # Broadening: skriv om den korta följdfrågan till en
+            # fristående retrievalfråga och ankra retrieval lokalt
+            # i de dokument som bar föregående svar.
+            if classification.substyle == "broadening":
+                retrieval_question, was_rewritten = rewrite_followup(
+                    req.question,
+                    state,
+                    rag.llm,
+                )
+                if not was_rewritten:
+                    retrieval_question = None
+
+                if state.active_doc_paths:
+                    preferred_source_paths = list(state.active_doc_paths)
+
         else:
             # Skulle inte hända — alla klasser är hanterade ovan.
             path_label = "new_main_question"
@@ -200,6 +218,8 @@ def chat(req: ChatRequest) -> ChatResponse:
             background_turns=background_turns,
             background_max_turns=background_max_turns,
             style=style,
+            retrieval_question=retrieval_question,
+            preferred_source_paths=preferred_source_paths,
         )
 
         # Uppdatera sessionsstate med dokumentkällorna OCH de faktiska
@@ -225,6 +245,10 @@ def chat(req: ChatRequest) -> ChatResponse:
             response.debug["background_max_turns"] = background_max_turns
         if style is not None:
             response.debug["synthesis_style"] = style
+        if retrieval_question is not None:
+            response.debug["retrieval_question"] = retrieval_question
+        if preferred_source_paths is not None:
+            response.debug["preferred_source_paths"] = preferred_source_paths
 
         response.session_id = state.session_id
 

@@ -181,12 +181,26 @@ class QdrantStore:
             ),
         )
 
-    def search(self, query_vector: list[float], limit: int = 6) -> list[SourceHit]:
+    def search(
+        self,
+        query_vector: list[float],
+        limit: int = 6,
+        source_paths: list[str] | None = None,
+    ) -> list[SourceHit]:
+        query_filter = None
+        if source_paths:
+            conditions = [
+                FieldCondition(key="source_path", match=MatchValue(value=path))
+                for path in source_paths
+            ]
+            query_filter = Filter(should=conditions)
+
         response = self.client.query_points(
             collection_name=self.collection_name,
             query=query_vector,
             limit=limit,
             with_payload=True,
+            query_filter=query_filter,
         )
         points = response.points if hasattr(response, "points") else response
         return [self._source_hit_from_point(r) for r in points]
