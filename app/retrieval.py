@@ -134,6 +134,106 @@ def _merge_candidates(
     return merged
 
 
+
+
+def _top_document_paths(ranked: list[SourceHit], max_docs: int = 3) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    for hit in ranked:
+        path = hit.metadata.source_path
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        paths.append(path)
+        if len(paths) >= max_docs:
+            break
+    return paths
+
+
+def _select_evidence_hits(ranked: list[SourceHit], max_hits: int) -> list[SourceHit]:
+    """
+    Välj evidensobjekt relativt sin egen toppscore, utan absolut golv.
+
+    Evidensobjekt inom redan valda dokument ska få företräde även om de
+    individuellt är språkligt svagare än vanliga textchunkar. Därför
+    används en mild relativ cutoff och ett litet maxantal.
+    """
+    if not ranked:
+        return []
+
+    top_score = ranked[0].score
+    cutoff = top_score * 0.35
+
+    selected: list[SourceHit] = []
+    seen_keys: set[tuple[str, str | None, str]] = set()
+
+    for hit in ranked:
+        if hit.score < cutoff and selected:
+            break
+
+        key = (
+            hit.metadata.source_path,
+            hit.metadata.section_title,
+            hit.metadata.document_type or "",
+        )
+        if key in seen_keys:
+            continue
+
+        seen_keys.add(key)
+        selected.append(hit)
+        if len(selected) >= max_hits:
+            break
+
+    return selected
+
+
+def _merge_with_evidence_precedence(
+    text_hits: list[SourceHit],
+    evidence_hits: list[SourceHit],
+    max_hits: int,
+) -> list[SourceHit]:
+    """
+    Ge evidensobjekt företräde inom redan valda dokument.
+
+    Strategin är enkel:
+    1. ta först utvalda evidensobjekt
+    2. fyll sedan på med textträffar från samma dokument
+    3. fyll därefter på med övriga textträffar
+
+    Detta håller fast vid principen "evidensobjekt först, stödtext sedan"
+    utan att kasta bort den vanliga textretrievalen.
+    """
+    selected: list[SourceHit] = []
+    seen_ids: set[str] = set()
+
+    evidence_doc_paths = {
+        hit.metadata.source_path for hit in evidence_hits if hit.metadata.source_path
+    }
+
+    def add(hit: SourceHit) -> None:
+        if hit.chunk_id in seen_ids:
+            return
+        seen_ids.add(hit.chunk_id)
+        selected.append(hit)
+
+    for hit in evidence_hits:
+        add(hit)
+        if len(selected) >= max_hits:
+            return selected
+
+    for hit in text_hits:
+        if hit.metadata.source_path in evidence_doc_paths:
+            add(hit)
+            if len(selected) >= max_hits:
+                return selected
+
+    for hit in text_hits:
+        add(hit)
+        if len(selected) >= max_hits:
+            return selected
+
+    return selected
+
 # ---------------------------------------------------------------------------
 # Dedup – undvik dubbletter från samma sektion
 # ---------------------------------------------------------------------------
@@ -299,6 +399,36 @@ class RagService:
         self._build_bm25_index()
         return len(self.bm25_index.hits)
 
+    def _evidence_candidates_for_documents(
+        self,
+        search_text: str,
+        ranked_hits: list[SourceHit],
+    ) -> tuple[list[SourceHit], list[dict], list[str]]:
+        """
+        Hämta evidensobjekt från ett litet antal redan utvalda dokument,
+        reranka dem mot frågan och välj ut de starkaste.
+        """
+        source_paths = _top_document_paths(ranked_hits, max_docs=3)
+        if not source_paths:
+            return [], [], []
+
+        query_vector = self.embedder.embed_query(search_text)
+        evidence_candidates = self.store.search_evidence(
+            query_vector,
+            source_paths=source_paths,
+            limit=12,
+        )
+        if not evidence_candidates:
+            return [], [], source_paths
+
+        reranked, debug = self.reranker.rerank(
+            search_text,
+            evidence_candidates,
+            filter_floor=-1.0,
+        )
+        selected = _select_evidence_hits(reranked, max_hits=min(4, settings.max_hits))
+        return selected, debug, source_paths
+
     def answer(
         self,
         question: str,
@@ -374,12 +504,28 @@ class RagService:
 
         expanded_doc_paths = sorted({
             hit.metadata.source_path for hit in expanded_new
-        })        
-        
-        t5 = time.perf_counter()
+        })
 
-        # 6. Dedup och välj hits baserat på relevans
-        hits = _dedup_and_select(all_reranked)
+        # 6. Texturval efter vanlig retrieval
+        text_hits = _dedup_and_select(all_reranked)
+
+        # 7. Evidensobjekt inom valda dokument får företräde
+        evidence_hits: list[SourceHit] = []
+        evidence_debug: list[dict] = []
+        evidence_source_paths: list[str] = []
+        if text_hits:
+            evidence_hits, evidence_debug, evidence_source_paths = self._evidence_candidates_for_documents(
+                search_text,
+                text_hits,
+            )
+
+        hits = _merge_with_evidence_precedence(
+            text_hits,
+            evidence_hits,
+            max_hits=settings.max_hits,
+        )
+
+        t5 = time.perf_counter()
 
         if not hits:
             return ChatResponse(
@@ -400,6 +546,8 @@ class RagService:
                     "num_candidates": len(candidates),
                     "num_expanded": num_expanded,
                     "expanded_docs": expanded_doc_paths,
+                    "num_evidence_candidates": len(evidence_hits),
+                    "evidence_docs": evidence_source_paths,
                     "abstained": True,
                     "qud_anchor_used": qud_anchor is not None,
                     "timing_s": {
@@ -413,7 +561,7 @@ class RagService:
                 },
             )
 
-        # 7. Tvåstegssyntes: evidensextraktion → svarsformulering
+        # 8. Tvåstegssyntes: evidensextraktion → svarsformulering
         t6 = time.perf_counter()
 
         synthesis_result = synthesize(
@@ -461,6 +609,8 @@ class RagService:
                 "num_bm25": len(bm25_hits),
                 "num_candidates": len(candidates),
                 "num_expanded": num_expanded,
+                "num_evidence_candidates": len(evidence_hits),
+                "evidence_docs": evidence_source_paths,
                 "num_reranked": len(all_reranked),
                 "num_hits": len(hits),
                 "abstained": False,
@@ -480,6 +630,11 @@ class RagService:
                     key=lambda d: d.get("cross_encoder_score", -999),
                     reverse=True,
                 )[: settings.max_hits + 5],
+                "evidence_top": sorted(
+                    evidence_debug,
+                    key=lambda d: d.get("cross_encoder_score", -999),
+                    reverse=True,
+                )[: 6],
             },
         )
 
