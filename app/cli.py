@@ -1224,6 +1224,8 @@ def test(
                 "expect": expect,
                 "answer": response.answer,
                 "num_sources": num_sources,
+                "num_new_hits": num_new_hits,
+                "abstained": debug.get("abstained", False),
                 "sources": [
                     {
                         "file_name": s.metadata.file_name,
