@@ -194,7 +194,7 @@ class QdrantStore:
     def search_evidence(self, query_vector: list[float], source_paths: list[str], limit: int = 12) -> list[SourceHit]:
         if not source_paths:
             return []
-        must = [
+        conditions = [
             FieldCondition(key="source_path", match=MatchValue(value=path))
             for path in source_paths
         ]
@@ -203,7 +203,7 @@ class QdrantStore:
             query=query_vector,
             limit=limit,
             with_payload=True,
-            query_filter=Filter(should=must),
+            query_filter=Filter(should=conditions),
         )
         points = response.points if hasattr(response, "points") else response
         return [self._source_hit_from_evidence_point(r) for r in points]

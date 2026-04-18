@@ -402,17 +402,21 @@ class RagService:
     def _evidence_candidates_for_documents(
         self,
         search_text: str,
+        query_vector: list[float],
         ranked_hits: list[SourceHit],
     ) -> tuple[list[SourceHit], list[dict], list[str]]:
         """
         Hämta evidensobjekt från ett litet antal redan utvalda dokument,
         reranka dem mot frågan och välj ut de starkaste.
+
+        query_vector tas emot färdigberäknat från den vanliga retrieval-
+        vägen så att vi inte kör samma embedding-anrop två gånger per
+        request.
         """
         source_paths = _top_document_paths(ranked_hits, max_docs=3)
         if not source_paths:
             return [], [], []
 
-        query_vector = self.embedder.embed_query(search_text)
         evidence_candidates = self.store.search_evidence(
             query_vector,
             source_paths=source_paths,
@@ -516,6 +520,7 @@ class RagService:
         if text_hits:
             evidence_hits, evidence_debug, evidence_source_paths = self._evidence_candidates_for_documents(
                 search_text,
+                query_vector,
                 text_hits,
             )
 

@@ -18,7 +18,13 @@ import uvicorn
 
 from app.config import settings
 from app.embeddings import Embedder
-from app.ingest import compute_source_fingerprint, ingest_path, ingest_evidence_path, iter_document_paths
+from app.ingest import (
+    compute_source_fingerprint,
+    ingest_path,
+    ingest_evidence_path,
+    ingest_path_with_evidence,
+    iter_document_paths,
+)
 from app.preprocess_llm import SectionMetadataExtractor
 from app.qdrant_store import QdrantStore
 from app.retrieval import RagService
@@ -309,7 +315,7 @@ def ingest(
             created += 1
             typer.echo(f"Ingest new: {source_path}")
 
-        chunks = ingest_path(path, root)
+        chunks, evidence_objects = ingest_path_with_evidence(path, root)
         if not chunks:
             typer.echo(f"Hoppar över {path} (inga chunkar)")
             continue
@@ -317,7 +323,6 @@ def ingest(
         vectors = embedder.embed_texts([c.text for c in chunks])
         store.upsert_chunks(chunks, vectors)
 
-        evidence_objects = ingest_evidence_path(path, root)
         if evidence_objects:
             evidence_vectors = embedder.embed_texts([e.evidence_text for e in evidence_objects])
             store.upsert_evidence_objects(evidence_objects, evidence_vectors)

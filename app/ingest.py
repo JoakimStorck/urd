@@ -283,7 +283,17 @@ def _build_referring_passages(
     elif evidence_type == "table":
         patterns = [r"\btabell\b", r"\btable\b"]
     else:
-        patterns = [r"\bföljande\b", r"\bnedanstående\b", r"\bovenstående\b", r"\bstegen\b", r"\bpunkterna\b"]
+        patterns = [
+            r"\bföljande\b",
+            r"\bnedanstående\b",
+            r"\bovanstående\b",
+            r"\bovan\b",
+            r"\bnedan\b",
+            r"\bstegen\b",
+            r"\bpunkterna\b",
+            r"\benligt listan\b",
+            r"\benligt tabellen\b",
+        ]
 
     figure_number = None
     m = re.search(r"\b(?:figur|figure)\s*(\d+)\b", evidence_text, flags=re.IGNORECASE)
@@ -468,3 +478,43 @@ def ingest_evidence_path(
         sections=sections,
         source_fingerprint=source_fingerprint,
     )
+
+
+def ingest_path_with_evidence(
+    path: Path,
+    docs_root: Path,
+) -> tuple[list[DocumentChunk], list[EvidenceObject]]:
+    """
+    Samlad ingest: parsar dokumentet en gång och returnerar både
+    textchunkar och evidensobjekt.
+
+    Effektivare än att köra ingest_path och ingest_evidence_path
+    separat, eftersom docling-konverteringen, sektionsindelningen
+    och titel-/fingerprint-härledningen bara görs en gång. De äldre
+    funktionerna bevaras för bakåtkompatibilitet.
+    """
+    raw = extract_text_with_fallback(path)
+    if not raw.text.strip():
+        return [], []
+
+    document_title = infer_document_title(raw)
+    category = infer_category(path, docs_root)
+    source_fingerprint = compute_source_fingerprint(path)
+    sections = split_markdown_sections(raw.text)
+
+    chunks = build_chunks_from_sections(
+        path=path,
+        document_title=document_title,
+        category=category,
+        sections=sections,
+        source_fingerprint=source_fingerprint,
+    )
+
+    evidence_objects = extract_evidence_objects_from_sections(
+        path=path,
+        document_title=document_title,
+        sections=sections,
+        source_fingerprint=source_fingerprint,
+    )
+
+    return chunks, evidence_objects
