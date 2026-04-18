@@ -150,6 +150,92 @@ def _top_document_paths(ranked: list[SourceHit], max_docs: int = 3) -> list[str]
     return paths
 
 
+def _boost_evidence_from_text_support(
+    evidence_hits: list[SourceHit],
+    text_hits: list[SourceHit],
+    section_boost: float,
+    document_boost: float,
+) -> tuple[list[SourceHit], list[dict]]:
+    """
+    Höj evidensobjektens score när vanliga textchunkar från samma
+    sektion eller samma dokument redan rankat högt.
+
+    Tanken: ett evidensobjekt (tabell, lista, figur) är ofta språkligt
+    svagt och får låg individuell rankscore trots att det bär central
+    information. Men om den FÖRKLARANDE TEXT som omger objektet har
+    rankat högt som vanlig textchunk, är objektet sannolikt relevant
+    för frågan — texten introducerar eller refererar till det.
+
+    Två nivåer:
+    - Sektion-match: samma (source_path, section_title) som någon
+      textchunk. Stark indikation. Full boost.
+    - Dokument-match (men inte sektion): samma source_path men annan
+      sektion. Svagare. Mindre boost.
+
+    Endast text_hits med positiv score räknas som stödjande — vi vill
+    inte boosta evidens baserat på chunkar som cross-encodern dömt ut.
+
+    Returnerar (boostade hits sorterade fallande, debug-rader).
+    """
+    if not evidence_hits:
+        return [], []
+
+    supporting_sections: set[tuple[str, str | None]] = set()
+    supporting_documents: set[str] = set()
+
+    for hit in text_hits:
+        if hit.score <= 0:
+            continue
+        path = hit.metadata.source_path
+        if not path:
+            continue
+        supporting_documents.add(path)
+        supporting_sections.add((path, hit.metadata.section_title))
+
+    boosted: list[SourceHit] = []
+    debug: list[dict] = []
+
+    for hit in evidence_hits:
+        path = hit.metadata.source_path
+        section = hit.metadata.section_title
+        original = hit.score
+
+        applied = 0.0
+        reason = None
+        if (path, section) in supporting_sections:
+            applied = section_boost
+            reason = "section_match"
+        elif path in supporting_documents:
+            applied = document_boost
+            reason = "document_match"
+
+        new_score = original + applied
+        debug.append({
+            "file_name": hit.metadata.file_name,
+            "section_title": section,
+            "evidence_type": hit.metadata.document_type,
+            "original_score": round(original, 4),
+            "applied_boost": round(applied, 4),
+            "boosted_score": round(new_score, 4),
+            "boost_reason": reason,
+        })
+
+        if applied > 0:
+            boosted.append(
+                SourceHit(
+                    chunk_id=hit.chunk_id,
+                    score=new_score,
+                    text=hit.text,
+                    metadata=hit.metadata,
+                )
+            )
+        else:
+            boosted.append(hit)
+
+    boosted.sort(key=lambda h: h.score, reverse=True)
+    return boosted, debug
+
+
 def _select_evidence_hits(ranked: list[SourceHit], max_hits: int) -> list[SourceHit]:
     """
     Välj evidensobjekt relativt sin egen toppscore, utan absolut golv.
@@ -246,20 +332,20 @@ def _dedup_and_select(
     Välj hits baserat på relevans (cross-encoder-score), med dedup
     per (source_path, section_title).
 
-    Strategin: ta alla hits med score >= max(min_relevance_floor,
-    top_score * relevance_ratio), upp till max_hits. Detta ersätter
-    det tidigare hårdkodade top_k-taket med ett urval som skalar
-    efter hur relevansfördelningen faktiskt ser ut.
+    Urvalet görs i två passes:
 
-    - Om toppen är hög (t.ex. 6.0) kommer allt ner till ~1.8 med
-      (ratio 0.3), så ett dokument med många starka sektioner får
-      alla med.
-    - Om toppen är låg (t.ex. 0.7) begränsas av min_relevance_floor
-      (0.5), så vi inte drar in bullriga borderline-hits.
-    - Max_hits skyddar prefill-tiden vid extremt generösa urval.
+    Pass 1 (primärt): ta alla hits med score ≥ max(min_relevance_floor,
+    top_score × relevance_ratio), upp till max_hits.
 
-    top_k-argumentet behålls för bakåtkompatibilitet men ignoreras
-    om det ges. Använd max_hits i config istället för att sätta tak.
+    Pass 2 (kompletterande): om färre än min_desired_hits valdes i
+    pass 1 men det finns fler positiva hits kvar, fyll på upp till
+    min_desired_hits totalt. Detta ger elaboration och liknande
+    vägar tillräckligt material att arbeta mot, utan att införa
+    ett godtyckligt absolut golv. Endast positiva scores används
+    — vi vill inte släppa in chunkar som cross-encodern aktivt
+    dömt ut.
+
+    top_k-argumentet behålls för bakåtkompatibilitet men ignoreras.
     """
     if not ranked:
         return []
@@ -273,9 +359,10 @@ def _dedup_and_select(
     selected: list[SourceHit] = []
     seen_keys: set[tuple[str, str | None]] = set()
 
+    # Pass 1: välj allt över cutoff
     for hit in ranked:
         if hit.score < cutoff:
-            break  # listan är sorterad fallande; resten är också under
+            break  # listan är sorterad fallande
 
         key = (hit.metadata.source_path, hit.metadata.section_title)
         if key in seen_keys:
@@ -286,6 +373,22 @@ def _dedup_and_select(
 
         if len(selected) >= settings.max_hits:
             break
+
+    # Pass 2: fyll på till min_desired_hits om tillräckligt svaga
+    # men positiva hits finns. Hoppar över de redan valda via dedup.
+    if len(selected) < settings.min_desired_hits:
+        for hit in ranked:
+            if len(selected) >= settings.min_desired_hits:
+                break
+            if hit.score <= 0:
+                break  # inga fler positiva kvar
+            if hit.score >= cutoff:
+                continue  # redan övervägd i pass 1
+            key = (hit.metadata.source_path, hit.metadata.section_title)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            selected.append(hit)
 
     return selected
 
@@ -403,19 +506,28 @@ class RagService:
         self,
         search_text: str,
         query_vector: list[float],
-        ranked_hits: list[SourceHit],
-    ) -> tuple[list[SourceHit], list[dict], list[str]]:
+        text_hits: list[SourceHit],
+    ) -> tuple[list[SourceHit], list[dict], list[str], list[dict]]:
         """
         Hämta evidensobjekt från ett litet antal redan utvalda dokument,
-        reranka dem mot frågan och välj ut de starkaste.
+        reranka dem mot frågan, boosta dem baserat på textstöd och välj
+        ut de starkaste.
 
         query_vector tas emot färdigberäknat från den vanliga retrieval-
         vägen så att vi inte kör samma embedding-anrop två gånger per
         request.
+
+        text_hits används både för att välja ut kandidatdokument (de tre
+        högst rankade dokumenten) och för att identifiera vilka sektioner
+        som har starkt textstöd. Evidensobjekt från en sektion där text
+        också rankat högt får en kraftig boost; evidens från bara samma
+        dokument får en svag boost.
+
+        Returnerar (utvalda hits, rerank-debug, source_paths, boost-debug).
         """
-        source_paths = _top_document_paths(ranked_hits, max_docs=3)
+        source_paths = _top_document_paths(text_hits, max_docs=3)
         if not source_paths:
-            return [], [], []
+            return [], [], [], []
 
         evidence_candidates = self.store.search_evidence(
             query_vector,
@@ -423,15 +535,23 @@ class RagService:
             limit=12,
         )
         if not evidence_candidates:
-            return [], [], source_paths
+            return [], [], source_paths, []
 
         reranked, debug = self.reranker.rerank(
             search_text,
             evidence_candidates,
             filter_floor=-1.0,
         )
-        selected = _select_evidence_hits(reranked, max_hits=min(4, settings.max_hits))
-        return selected, debug, source_paths
+
+        boosted, boost_debug = _boost_evidence_from_text_support(
+            reranked,
+            text_hits,
+            section_boost=settings.evidence_section_boost,
+            document_boost=settings.evidence_document_boost,
+        )
+
+        selected = _select_evidence_hits(boosted, max_hits=min(4, settings.max_hits))
+        return selected, debug, source_paths, boost_debug
 
     def answer(
         self,
@@ -517,8 +637,9 @@ class RagService:
         evidence_hits: list[SourceHit] = []
         evidence_debug: list[dict] = []
         evidence_source_paths: list[str] = []
+        evidence_boost_debug: list[dict] = []
         if text_hits:
-            evidence_hits, evidence_debug, evidence_source_paths = self._evidence_candidates_for_documents(
+            evidence_hits, evidence_debug, evidence_source_paths, evidence_boost_debug = self._evidence_candidates_for_documents(
                 search_text,
                 query_vector,
                 text_hits,
@@ -638,6 +759,11 @@ class RagService:
                 "evidence_top": sorted(
                     evidence_debug,
                     key=lambda d: d.get("cross_encoder_score", -999),
+                    reverse=True,
+                )[: 6],
+                "evidence_boost": sorted(
+                    evidence_boost_debug,
+                    key=lambda d: d.get("boosted_score", -999),
                     reverse=True,
                 )[: 6],
             },

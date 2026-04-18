@@ -30,9 +30,12 @@ DEFAULTS = {
     "expansion_score_threshold": 0.2,
     "expanded_filter_floor": -1.0,
     "qud_drift_threshold": 0.55,
-    "min_relevance_floor": 0.5,
+    "min_relevance_floor": 0.0,
     "relevance_ratio": 0.3,
     "max_hits": 10,
+    "min_desired_hits": 3,
+    "evidence_section_boost": 3.0,
+    "evidence_document_boost": 0.5,
 }
 
 # Mapping: config-nyckel → miljövariabel
@@ -59,6 +62,9 @@ _ENV_KEYS = {
     "min_relevance_floor": "MIN_RELEVANCE_FLOOR",
     "relevance_ratio": "RELEVANCE_RATIO",
     "max_hits": "MAX_HITS",
+    "min_desired_hits": "MIN_DESIRED_HITS",
+    "evidence_section_boost": "EVIDENCE_SECTION_BOOST",
+    "evidence_document_boost": "EVIDENCE_DOCUMENT_BOOST",
 }
 
 
@@ -146,6 +152,9 @@ def _build_settings() -> "Settings":
         min_relevance_floor=f("min_relevance_floor"),
         relevance_ratio=f("relevance_ratio"),
         max_hits=i("max_hits"),
+        min_desired_hits=i("min_desired_hits"),
+        evidence_section_boost=f("evidence_section_boost"),
+        evidence_document_boost=f("evidence_document_boost"),
     )
 
 
@@ -197,16 +206,35 @@ class Settings(BaseModel):
     qud_drift_threshold: float = 0.55
 
     # Relevansbaserat hit-urval (ersätter hårdkodat top_k).
-    # Vi behåller top_k för bakåtkompatibilitet i debug-utdata, men
-    # den är inte längre gränsen för vilka hits som når syntesen.
-    # Istället: alla hits med score ≥ max(min_relevance_floor,
+    # Strategin: alla hits med score ≥ max(min_relevance_floor,
     # top_score × relevance_ratio) tas med, upp till max_hits.
-    # Detta gör urvalet dynamiskt efter faktisk relevansfördelning
-    # — ett dokument med 8 starkt relevanta sektioner får alla 8,
-    # en fråga där bara 2 sektioner är relevanta får 2.
-    min_relevance_floor: float = 0.5
+    # Om färre än min_desired_hits passerar men fler finns med
+    # positiv score, tas upp till min_desired_hits totalt.
+    #
+    # min_relevance_floor = 0.0 innebär att vi litar på den relativa
+    # cutoff:en. Ett absolut golv används inte — det är den relativa
+    # fördelningen som avgör, precis som en människa skulle göra en
+    # bedömning baserat på hur tydligt bästa träffen sticker ut.
+    min_relevance_floor: float = 0.0
     relevance_ratio: float = 0.3
     max_hits: int = 10
+    min_desired_hits: int = 3
+
+    # Evidensboost: evidensobjekt (tabeller, listor, figurer) får
+    # ett pålägg på sin cross-encoder-score när det finns stöd för
+    # att objektet är relevant för just denna fråga, utöver sin
+    # egen språkliga matchning. Pålägg adderas i två steg:
+    #   - evidence_section_boost: evidensobjektet delar sektion med
+    #     en högt rankad textchunk. Stark indikation att den
+    #     förklarande texten hör ihop med objektet.
+    #   - evidence_document_boost: evidensobjektet är från samma
+    #     dokument som en högt rankad textchunk. Svagare indikation
+    #     men ger en lätt förmån åt strukturella objekt i relevanta
+    #     dokument.
+    # Section-boost ges bara, document-boost bara om section inte
+    # redan matchade.
+    evidence_section_boost: float = 3.0
+    evidence_document_boost: float = 0.5
 
 
 settings = _build_settings()
