@@ -18,7 +18,7 @@ import uvicorn
 
 from app.config import settings
 from app.embeddings import Embedder
-from app.ingest import compute_source_fingerprint, ingest_path, iter_document_paths
+from app.ingest import compute_source_fingerprint, ingest_path, ingest_evidence_path, iter_document_paths
 from app.preprocess_llm import SectionMetadataExtractor
 from app.qdrant_store import QdrantStore
 from app.retrieval import RagService
@@ -287,6 +287,7 @@ def ingest(
         removed = sorted(indexed_set - fs_set)
         for source_path in removed:
             store.delete_chunks_by_source_path(source_path)
+            store.delete_evidence_by_source_path(source_path)
             typer.echo(f"Deleted missing document from index: {source_path}")
 
     for path in fs_paths:
@@ -301,6 +302,7 @@ def ingest(
 
         if old_fp is not None:
             store.delete_chunks_by_source_path(source_path)
+            store.delete_evidence_by_source_path(source_path)
             updated += 1
             typer.echo(f"Reingest changed: {source_path}")
         else:
@@ -315,9 +317,17 @@ def ingest(
         vectors = embedder.embed_texts([c.text for c in chunks])
         store.upsert_chunks(chunks, vectors)
 
+        evidence_objects = ingest_evidence_path(path, root)
+        if evidence_objects:
+            evidence_vectors = embedder.embed_texts([e.evidence_text for e in evidence_objects])
+            store.upsert_evidence_objects(evidence_objects, evidence_vectors)
+
         total_docs += 1
         total_chunks += len(chunks)
-        typer.echo(f"Indexed {path} -> {len(chunks)} chunks")
+        typer.echo(
+            f"Indexed {path} -> {len(chunks)} chunks"
+            + (f", {len(evidence_objects)} evidensobjekt" if evidence_objects else "")
+        )
 
     typer.echo("")
     typer.echo(

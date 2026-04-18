@@ -52,6 +52,22 @@ class SourceHit(BaseModel):
     metadata: ChunkMetadata
 
 
+class EvidenceObject(BaseModel):
+    evidence_id: str
+    source_path: str
+    file_name: str
+    document_title: str | None = None
+    section_title: str | None = None
+    evidence_type: str
+    evidence_text: str
+    supporting_before: str | None = None
+    supporting_after: str | None = None
+    referring_passages: list[str] = Field(default_factory=list)
+    source_fingerprint: str | None = None
+    chunk_ids: list[str] = Field(default_factory=list)
+
+
+
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=3)
     session_id: str | None = None

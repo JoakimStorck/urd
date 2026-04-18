@@ -7,7 +7,12 @@ import re
 
 from docling.document_converter import DocumentConverter
 
-from app.schemas import DocumentChunk, ChunkMetadata, SectionSemanticMetadata
+from app.schemas import (
+    DocumentChunk,
+    ChunkMetadata,
+    EvidenceObject,
+    SectionSemanticMetadata,
+)
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".xlsx"}
 _converter = DocumentConverter()
@@ -201,6 +206,171 @@ def make_chunk_id(path: Path, idx: int, text: str) -> str:
     return h
 
 
+def make_evidence_id(path: Path, kind: str, order: int, text: str) -> str:
+    h = hashlib.sha1(f"{path}:{kind}:{order}:{text}".encode("utf-8")).hexdigest()
+    return h
+
+
+def _split_paragraphs(text: str) -> list[str]:
+    blocks = [normalize_chunk_text(b) for b in re.split(r"\n\s*\n", text) if b.strip()]
+    return [b for b in blocks if b]
+
+
+def _is_table_block(block: str) -> bool:
+    lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return False
+    has_pipe_rows = sum("|" in ln for ln in lines) >= 2
+    has_separator = any(re.search(r"\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?", ln) for ln in lines)
+    return has_pipe_rows and has_separator
+
+
+def _is_bullet_list(block: str) -> bool:
+    lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+    return len(lines) >= 2 and all(re.match(r"^[-*•]\s+", ln) for ln in lines)
+
+
+def _is_numbered_list(block: str) -> bool:
+    lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+    return len(lines) >= 2 and all(re.match(r"^\d+[\.)]\s+", ln) for ln in lines)
+
+
+def _is_figure_block(block: str) -> bool:
+    lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    if any(re.match(r"^!\[.*\]\(.*\)$", ln) for ln in lines):
+        return True
+    first = lines[0]
+    return bool(re.match(r"^(figur|figure)\s*\d*\s*[:.-]?\s+", first, flags=re.IGNORECASE))
+
+
+def _figure_text(block: str) -> str:
+    lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+    caption = None
+    for ln in lines:
+        m = re.match(r"^(figur|figure)\s*\d*\s*[:.-]?\s*(.+)$", ln, flags=re.IGNORECASE)
+        if m and m.group(2).strip():
+            caption = m.group(2).strip()
+            break
+        img = re.match(r"^!\[(.*?)\]\(.*\)$", ln)
+        if img and img.group(1).strip():
+            caption = img.group(1).strip()
+            break
+    if caption:
+        return f"[Figur: {caption}]"
+    return "[Figur]"
+
+
+def _table_text(block: str) -> str:
+    return "[Tabell]\n" + normalize_chunk_text(block)
+
+
+def _list_text(block: str, numbered: bool) -> str:
+    label = "[Numrerad lista]" if numbered else "[Punktlista]"
+    return label + "\n" + normalize_chunk_text(block)
+
+
+def _build_referring_passages(
+    paragraphs: list[str],
+    evidence_type: str,
+    evidence_text: str,
+    block_index: int,
+) -> list[str]:
+    refs: list[str] = []
+    if evidence_type == "figure":
+        patterns = [r"\bfigur\b", r"\bfigure\b"]
+    elif evidence_type == "table":
+        patterns = [r"\btabell\b", r"\btable\b"]
+    else:
+        patterns = [r"\bföljande\b", r"\bnedanstående\b", r"\bovenstående\b", r"\bstegen\b", r"\bpunkterna\b"]
+
+    figure_number = None
+    m = re.search(r"\b(?:figur|figure)\s*(\d+)\b", evidence_text, flags=re.IGNORECASE)
+    if m:
+        figure_number = m.group(1)
+    table_number = None
+    m = re.search(r"\btabell\s*(\d+)\b", evidence_text, flags=re.IGNORECASE)
+    if m:
+        table_number = m.group(1)
+
+    for idx, para in enumerate(paragraphs):
+        if idx == block_index:
+            continue
+        low = para.casefold()
+        if any(re.search(pat, low, flags=re.IGNORECASE) for pat in patterns):
+            refs.append(para)
+            continue
+        if figure_number and re.search(rf"\bfigur\s*{re.escape(figure_number)}\b", para, flags=re.IGNORECASE):
+            refs.append(para)
+            continue
+        if table_number and re.search(rf"\btabell\s*{re.escape(table_number)}\b", para, flags=re.IGNORECASE):
+            refs.append(para)
+            continue
+    return refs[:4]
+
+
+def extract_evidence_objects_from_sections(
+    path: Path,
+    document_title: str | None,
+    sections: list[StructuredSection],
+    source_fingerprint: str,
+) -> list[EvidenceObject]:
+    evidence_objects: list[EvidenceObject] = []
+    order = 0
+
+    for section in sections:
+        paragraphs = _split_paragraphs(section.text)
+        for idx, block in enumerate(paragraphs):
+            evidence_type: str | None = None
+            evidence_text: str | None = None
+
+            if _is_figure_block(block):
+                evidence_type = "figure"
+                evidence_text = _figure_text(block)
+            elif _is_table_block(block):
+                evidence_type = "table"
+                evidence_text = _table_text(block)
+            elif _is_numbered_list(block):
+                evidence_type = "numbered_list"
+                evidence_text = _list_text(block, numbered=True)
+            elif _is_bullet_list(block):
+                evidence_type = "bullet_list"
+                evidence_text = _list_text(block, numbered=False)
+
+            if evidence_type is None or evidence_text is None:
+                continue
+
+            support_before = paragraphs[idx - 1] if idx > 0 else None
+            support_after = paragraphs[idx + 1] if idx + 1 < len(paragraphs) else None
+            referring = _build_referring_passages(
+                paragraphs=paragraphs,
+                evidence_type=evidence_type,
+                evidence_text=evidence_text,
+                block_index=idx,
+            )
+
+            evidence_objects.append(
+                EvidenceObject(
+                    evidence_id=make_evidence_id(path, evidence_type, order, evidence_text),
+                    source_path=str(path),
+                    file_name=path.name,
+                    document_title=document_title,
+                    section_title=section.title,
+                    evidence_type=evidence_type,
+                    evidence_text=evidence_text,
+                    supporting_before=support_before,
+                    supporting_after=support_after,
+                    referring_passages=referring,
+                    source_fingerprint=source_fingerprint,
+                    chunk_ids=[],
+                )
+            )
+            order += 1
+
+    return evidence_objects
+
+
 def build_chunks_from_sections(
     path: Path,
     document_title: str | None,
@@ -275,6 +445,26 @@ def ingest_path(
         path=path,
         document_title=document_title,
         category=category,
+        sections=sections,
+        source_fingerprint=source_fingerprint,
+    )
+
+
+def ingest_evidence_path(
+    path: Path,
+    docs_root: Path,
+) -> list[EvidenceObject]:
+    raw = extract_text_with_fallback(path)
+    if not raw.text.strip():
+        return []
+
+    document_title = infer_document_title(raw)
+    source_fingerprint = compute_source_fingerprint(path)
+    sections = split_markdown_sections(raw.text)
+
+    return extract_evidence_objects_from_sections(
+        path=path,
+        document_title=document_title,
         sections=sections,
         source_fingerprint=source_fingerprint,
     )
