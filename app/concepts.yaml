@@ -1,0 +1,44 @@
+concepts:
+  - id: teacher
+    labels:
+      - lärare
+      - teacher
+      - teachers
+
+  - id: lecturer
+    labels:
+      - lektor
+      - universitetslektor
+      - lecturer
+      - senior lecturer
+    broader:
+      - teacher
+
+  - id: adjunct
+    labels:
+      - adjunkt
+      - universitetsadjunkt
+      - adjunct lecturer
+    broader:
+      - teacher
+
+  - id: assistant_professor
+    labels:
+      - biträdande lektor
+      - biträdande universitetslektor
+      - bitr. lektor
+      - bitr. universitetslektor
+      - assistant professor
+    broader:
+      - teacher
+
+  - id: professor
+    labels:
+      - professor
+    broader:
+      - teacher
+
+  - id: prefekt
+    labels:
+        prefekt
+        Head of School

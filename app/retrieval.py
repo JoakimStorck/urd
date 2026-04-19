@@ -18,7 +18,7 @@ from app.synthesis import synthesize
 from app.rework import elaborate, verify
 from app.schemas import ChatResponse, SourceHit
 from app.synonyms import load_synonyms
-
+from app.concepts import load_concepts
 
 # ---------------------------------------------------------------------------
 # Boilerplate-filter (behålls – detta är dokumentspecifikt, inte heuristisk
@@ -65,6 +65,21 @@ def _is_boilerplate(title: str | None, text: str) -> bool:
 
     return False
 
+def _contains_label(text: str, label: str) -> bool:
+    if not text or not label:
+        return False
+    return label.casefold() in text.casefold()
+
+def _ordered_unique(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        key = item.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
 
 # ---------------------------------------------------------------------------
 # BM25-index (byggs vid uppstart från alla chunks i Qdrant)
@@ -321,6 +336,40 @@ def _merge_with_evidence_precedence(
 
     return selected
 
+def _select_hits_for_synthesis(hits: list[SourceHit]) -> list[SourceHit]:
+    """
+    Välj en snävare delmängd av hits för huvudsyntesen baserat på score-gap.
+
+    Tanken:
+    - UI kan visa flera källor
+    - huvudsvaret ska i första hand bäras av de tydligast relevanta
+      träffarna, så att LLM:n inte glider till svagare källor
+
+    Policy:
+    - 1 hit om toppträffen sticker ut mycket tydligt
+    - 2 hits om toppträffen är tydlig men inte ensam
+    - annars 3 hits
+    """
+    if not hits:
+        return []
+
+    if len(hits) == 1:
+        return hits[:1]
+
+    score_1 = hits[0].score
+    score_2 = hits[1].score
+
+    if score_2 <= 0:
+        return hits[:1]
+
+    if score_1 >= score_2 * 2.0:
+        return hits[:1]
+
+    if score_1 >= score_2 * 1.35:
+        return hits[:2]
+
+    return hits[:3]
+    
 # ---------------------------------------------------------------------------
 # Dedup – undvik dubbletter från samma sektion
 # ---------------------------------------------------------------------------
@@ -487,6 +536,11 @@ class RagService:
         # Ladda instansens synonymlista om den finns. Tyst fallback
         # till tomt index om filen saknas eller är felaktig.
         self.synonyms = load_synonyms(settings.synonyms_path)
+        
+        # Ladda instansens begreppsmodell om den finns. Används ännu
+        # inte i retrievalpolicyn, men hålls laddad så att strukturen
+        # kan testas och byggas ut stegvis.
+        self.concepts = load_concepts(settings.concepts_path)
 
     def _build_bm25_index(self) -> None:
         """Bygg eller återbygg BM25-indexet från Qdrant."""
@@ -557,6 +611,90 @@ class RagService:
         selected = _select_evidence_hits(boosted, max_hits=min(4, settings.max_hits))
         return selected, debug, source_paths, boost_debug
 
+    def _related_concepts_in_selected_docs(
+        self,
+        question: str,
+        hits: list[SourceHit],
+        max_items: int = 5,
+    ) -> list[str]:
+        """
+        Hitta relaterade begrepp som faktiskt förekommer i de dokument som
+        bar svaret.
+    
+        Relationer:
+        - broader-begrepp till de begrepp som matchar frågan
+        - syskonbegrepp som delar samma broader-begrepp
+    
+        Endast begrepp som faktiskt kan beläggas i samma dokument returneras.
+        """
+        if not hits:
+            return []
+    
+        matched_ids = self.concepts.find_matching_concept_ids(question)
+        if not matched_ids:
+            return []
+    
+        matched_set = set(matched_ids)
+    
+        # Kandidatbegrepp: broader + syskon
+        candidate_ids: list[str] = []
+        broader_ids: list[str] = []
+    
+        for concept_id in matched_ids:
+            concept = self.concepts.concepts.get(concept_id)
+            if concept is None:
+                continue
+            for broader_id in concept.broader:
+                broader_ids.append(broader_id)
+                candidate_ids.append(broader_id)
+    
+        for concept in self.concepts.concepts.values():
+            if concept.concept_id in matched_set:
+                continue
+            if set(concept.broader) & set(broader_ids):
+                candidate_ids.append(concept.concept_id)
+    
+        candidate_ids = _ordered_unique(candidate_ids)
+    
+        source_paths = {
+            hit.metadata.source_path
+            for hit in hits
+            if hit.metadata.source_path
+        }
+        if not source_paths:
+            return []
+    
+        found_labels: list[str] = []
+    
+        for candidate_id in candidate_ids:
+            concept = self.concepts.concepts.get(candidate_id)
+            if concept is None or not concept.labels:
+                continue
+    
+            found = False
+            for path in source_paths:
+                for chunk in self.bm25_index.get_chunks_by_source(path):
+                    haystack_title = chunk.metadata.section_title or ""
+                    haystack_text = chunk.text or ""
+    
+                    if any(
+                        _contains_label(haystack_title, label)
+                        or _contains_label(haystack_text, label)
+                        for label in concept.labels
+                    ):
+                        found = True
+                        break
+                if found:
+                    break
+    
+            if found:
+                found_labels.append(concept.labels[0])
+    
+            if len(found_labels) >= max_items:
+                break
+    
+        return found_labels
+        
     def answer(
         self,
         question: str,
@@ -690,6 +828,7 @@ class RagService:
             evidence_hits,
             max_hits=settings.max_hits,
         )
+        hits.sort(key=lambda h: h.score, reverse=True)
 
         t5 = time.perf_counter()
 
@@ -733,14 +872,26 @@ class RagService:
         # 8. Syntes: enstegsformulering direkt från källorna
         t6 = time.perf_counter()
 
+        hits_for_synthesis = _select_hits_for_synthesis(hits)
+        
         synthesis_result = synthesize(
             question,
-            hits,
+            hits_for_synthesis,
             self.llm,
             background_turns=background_turns,
             background_max_turns=background_max_turns,
         )
         t7 = time.perf_counter()
+        
+        related_concepts = self._related_concepts_in_selected_docs(question, hits)
+        if related_concepts:
+            synthesis_result.answer = (
+                synthesis_result.answer.rstrip()
+                + "\n\nRelaterade begrepp: "
+                + ", ".join(related_concepts)
+                + "."
+            )
+        t8 = time.perf_counter()
 
         # Bygg debug-info för syntesen
         synthesis_debug = {
@@ -757,7 +908,7 @@ class RagService:
 
         return ChatResponse(
             answer=synthesis_result.answer,
-            sources=hits,
+            sources=hits_for_synthesis,
             debug={
                 "selection": {
                     "min_relevance_floor": settings.min_relevance_floor,
@@ -772,6 +923,17 @@ class RagService:
                         3,
                     ) if all_reranked else None,
                 },
+                "synthesis_input": {
+                    "num_hits_for_synthesis": len(hits_for_synthesis),
+                    "synthesis_source_sections": [
+                        {
+                            "file_name": h.metadata.file_name,
+                            "section_title": h.metadata.section_title,
+                            "score": round(h.score, 4),
+                        }
+                        for h in hits_for_synthesis
+                    ],
+                },                
                 "num_semantic": len(semantic_hits),
                 "num_bm25": len(bm25_hits),
                 "num_candidates": len(candidates),
@@ -782,6 +944,7 @@ class RagService:
                 "num_hits": len(hits),
                 "abstained": False,
                 "synonym_additions": synonym_additions,
+                "related_concepts": related_concepts,
                 
                 "synthesis": synthesis_debug,
                 "timing_s": {
@@ -791,7 +954,8 @@ class RagService:
                     "rerank_1": round(t4 - t3, 3),
                     "expand_and_rerank_2": round(t5 - t4, 3),
                     "synthesize": round(t7 - t6, 3),
-                    "total": round(t7 - t0, 3),
+                    "related_concepts":  round(t8 - t7, 3),
+                    "total": round(t8 - t0, 3),
                 },
                 "rerank_top": sorted(
                     rerank_debug,
@@ -818,6 +982,7 @@ class RagService:
         previous_answer: str,
         mode: str,
         qud_question: str | None = None,
+        consumed_hit_ids: set[str] | None = None,
     ) -> ChatResponse:
         """
         Arbeta mot föregående turs källor utan ny huvudretrieval.
@@ -838,7 +1003,11 @@ class RagService:
 
         if mode == "elaboration":
             search_question = qud_question or question
-            new_hits = self.retrieve_for_elaboration(search_question, hits)
+            new_hits = self.retrieve_for_elaboration(
+                search_question,
+                hits,
+                consumed_hit_ids=consumed_hit_ids or set(),
+            )
 
             t1 = time.perf_counter()
 
@@ -907,6 +1076,7 @@ class RagService:
                 "rework_mode": mode,
                 "num_hits_reused": len(hits),
                 "num_new_hits": num_new,
+                "num_consumed_hits": len(consumed_hit_ids or set()),
                 "abstained": abstained,
                 "synthesis": synthesis_debug,
                 "timing_s": {
@@ -921,6 +1091,7 @@ class RagService:
         self,
         question: str,
         active_hits: list[SourceHit],
+        consumed_hit_ids: set[str] | None = None,
     ) -> list[SourceHit]:
         """
         Hämta material som kan bära en elaboration av föregående svar.
@@ -944,7 +1115,8 @@ class RagService:
             return []
 
         active_ids = {h.chunk_id for h in active_hits}
-
+        blocked_ids = active_ids | set(consumed_hit_ids or set())
+        
         # Samla alla chunks från aktiva dokument som inte redan användes.
         # bm25_index innehåller bara textchunks, inte evidensobjekt.
         # Om active_hits är rent evidensobjekt kommer active_ids inte att
@@ -954,7 +1126,7 @@ class RagService:
         candidates: list[SourceHit] = []
         for path in active_doc_paths:
             for chunk in self.bm25_index.get_chunks_by_source(path):
-                if chunk.chunk_id in active_ids:
+                if chunk.chunk_id in blocked_ids:
                     continue
                 candidates.append(chunk)
 

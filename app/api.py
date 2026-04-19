@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.schemas import ChatRequest, ChatResponse
+from app.schemas import ChatRequest, ChatResponse, SourceHit
 from app.retrieval import RagService
 from app.session_state import SessionStore
 from app.intent import classify_utterance, Classification
@@ -24,6 +24,27 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 _docs_root = settings.docs_path.resolve()
 
 
+def select_active_hits(hits: list[SourceHit], max_hits: int = 3) -> list[SourceHit]:
+    if not hits:
+        return []
+
+    top = hits[0]
+    top_doc = top.metadata.source_path
+    top_score = top.score
+
+    selected = [top]
+
+    for hit in hits[1:]:
+        if len(selected) >= max_hits:
+            break
+        if hit.metadata.source_path != top_doc:
+            continue
+        if hit.score < top_score * 0.5:
+            continue
+        selected.append(hit)
+
+    return selected
+    
 @app.get("/")
 def index():
     return FileResponse(static_dir / "index.html")
@@ -105,6 +126,10 @@ def chat(req: ChatRequest) -> ChatResponse:
                 "text": state.current_qud_text,
                 "age_turns": state.qud_age_turns,
             },
+            "rework_state": {
+                "num_active_hits": len(state.active_hits),
+                "num_consumed_hits": len(state.consumed_hit_ids),
+            },            
         }
 
         if drift is not None:
@@ -151,11 +176,17 @@ def chat(req: ChatRequest) -> ChatResponse:
                 previous_answer=previous_answer,
                 mode=mode,
                 qud_question=state.current_qud_text,
+                consumed_hit_ids=state.consumed_hit_ids,
             )
 
             # Rework-tur: ersätt INTE active_hits — samma material bär
             # fortfarande tråden. Bara last_answer och snippets uppdateras.
-            state.add_rework_turn(req.question, response.answer)
+            state.add_rework_turn(
+                req.question,
+                response.answer,
+                mode=mode,
+                hits=response.sources,
+            )
 
             if response.debug is None:
                 response.debug = {}
@@ -225,15 +256,18 @@ def chat(req: ChatRequest) -> ChatResponse:
         # Uppdatera sessionsstate med dokumentkällorna OCH de faktiska
         # hits som bar svaret — så att nästa elaboration/verification
         # kan återanvända dem.
+        active_hits = select_active_hits(response.sources)
+        
         doc_paths = list({
             hit.metadata.source_path
-            for hit in response.sources
+            for hit in active_hits
         })
+        
         state.add_turn(
             req.question,
             response.answer,
             doc_paths,
-            hits=response.sources,
+            hits=active_hits,
         )
 
         # Merga debug-info från retrieval/syntes med vår dispatch-info

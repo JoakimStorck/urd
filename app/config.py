@@ -162,6 +162,7 @@ class Settings(BaseModel):
     docs_path: Path = Path("./docs")
     qdrant_path: Path = Path("./data/qdrant")
     synonyms_path: Path = Path(".urd/synonyms.yaml")
+    concepts_path: Path = Path(".urd/concepts.yaml")
     collection_name: str = "iit_docs"
 
     embedding_model: str = "intfloat/multilingual-e5-large"

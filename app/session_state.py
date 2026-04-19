@@ -64,7 +64,9 @@ class ConversationState:
     # Uppdateras i add_turn när hits tillhandahålls. Nollställs
     # aldrig tyst — en ny dokumenttur ersätter dem med sina egna.
     active_hits: list[SourceHit] = field(default_factory=list)
-
+    
+    consumed_hit_ids: set[str] = field(default_factory=set)
+    
     # Senaste svaret — behövs av rework-vägen för att inte upprepa
     # det som redan sagts.
     last_answer: str | None = None
@@ -88,6 +90,7 @@ class ConversationState:
         """
         self.current_qud_text = text
         self.current_qud_turn_index = len(self.turns)
+        self.consumed_hit_ids.clear()
 
     @property
     def qud_age_turns(self) -> int | None:
@@ -131,11 +134,14 @@ class ConversationState:
 
         if hits is not None:
             self.active_hits = list(hits)
+            self.mark_hits_consumed(hits)
 
     def add_rework_turn(
         self,
         question: str,
         answer: str,
+        mode: str,
+        hits: list[SourceHit] | None = None,
     ) -> None:
         """
         Registrera en rework-tur (elaboration eller verification).
@@ -152,6 +158,9 @@ class ConversationState:
 
         self.last_answer = answer
         self.active_answer_snippets = _extract_snippets(answer, max_snippets=3)
+
+        if mode == "elaboration" and hits:
+            self.mark_hits_consumed(hits)
 
     def add_social_turn(
         self,
@@ -170,6 +179,10 @@ class ConversationState:
         self.turns.append({"role": "assistant", "content": answer})
 
         self._trim_turns()
+
+    def mark_hits_consumed(self, hits: list[SourceHit]) -> None:
+        for hit in hits:
+            self.consumed_hit_ids.add(hit.chunk_id)
 
     def _trim_turns(self) -> None:
         window = _max_turns_window()
