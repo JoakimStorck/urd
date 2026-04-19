@@ -108,10 +108,9 @@ KRITISKT för svarets användbarhet:
   — använd den termen, inte "ansökning och validering".
 
 - Ange källa efter varje påstående med [Källa N].
-- Inled direkt med det mest specifika svaret på frågan. Inga
+- Inled direkt med det viktigaste svaret på frågan. Inga
   inledande "inramningar" eller "för att besvara frågan om...".
-- Om källorna täcker aspekter bortom frågan, nämn INTE att de saknas.
-  Bara besvara det som faktiskt frågades.
+- Om källorna täcker aspekter bortom frågan, så besvara bara det som faktiskt efterfrågades.
 
 {background_block}Källor:
 {sources_block}
