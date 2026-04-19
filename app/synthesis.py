@@ -102,6 +102,10 @@ KRITISKT för svarets användbarhet:
   som tabell eller strukturerad lista. Komprimera inte tabeller till
   löptext.
 
+- UTVECKLA INTE SVERET grundat på knapphändig information i källorna.
+  Om källorna innehåller kortfattade formuleringar så REDOGÖR för dem, 
+  bygg inte ut svaret med vad du tror är sannolikt.
+
 - ANVÄND KÄLLORNAS EXAKTA TERMER för formella moment, roller och
   procedurer. Om källan säger "intervju" — säg "intervju", inte
   "samtal". Om källan säger "öppen nominering och ansökningsförfarande"
