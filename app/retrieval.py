@@ -499,7 +499,7 @@ class RagService:
 
     def _evidence_candidates_for_documents(
         self,
-        search_text: str,
+        rerank_text: str,
         query_vector: list[float],
         text_hits: list[SourceHit],
     ) -> tuple[list[SourceHit], list[dict], list[str], list[dict]]:
@@ -507,6 +507,10 @@ class RagService:
         Hämta evidensobjekt från ett litet antal redan utvalda dokument,
         reranka dem mot frågan, boosta dem baserat på textstöd och välj
         ut de starkaste.
+
+        rerank_text ska vara den rena frågan (inte en QUD-konkatenerad
+        sökvariant), eftersom cross-encodern är känslig för meta-text
+        i frågesträngen. Se answer() för resonemanget.
 
         query_vector tas emot färdigberäknat från den vanliga retrieval-
         vägen så att vi inte kör samma embedding-anrop två gånger per
@@ -533,7 +537,7 @@ class RagService:
             return [], [], source_paths, []
 
         reranked, debug = self.reranker.rerank(
-            search_text,
+            rerank_text,
             evidence_candidates,
             filter_floor=-1.0,
         )
@@ -562,30 +566,47 @@ class RagService:
 
         Parametrar:
         - question: originalfrågan som användaren ställde. Det är den
-          som syntesen refererar till.
+          som syntesen refererar till, och det är den som cross-encodern
+          bedömer chunkar mot.
         - qud_anchor: om satt, en QUD-text som konkateneras med question
-          för att bilda söktexten som används i semantisk sökning, BM25
-          och cross-encoder-reranking. Används för related_to_qud-fall
-          där den aktiva huvudfrågan ska påverka retrieval utan att
-          förvränga originalfrågan i syntesen.
+          för att bredda kandidatpoolen i semantisk sökning och BM25.
+          Cross-encoder-rerankingen använder däremot alltid den rena
+          frågan (question eller retrieval_question), eftersom mMARCO-
+          tränade rerankers är känsliga för konkatenerade söktexter och
+          ger kollapsade scores när frågan innehåller meta-formulering
+          som "Huvudfråga i samtalet: ...". QUD-ankaret påverkar alltså
+          *vad som tas upp i poolen*, inte *hur det bedöms*.
         - background_turns, background_max_turns: samtalsbakgrund som
           skickas med till syntesen.
         - retrieval_question: omskriven fråga för retrieval. Om satt
-          används den i embedding, BM25 och reranking, medan question
-          fortfarande används i syntesen.
+          används den i stället för question i embedding, BM25 och
+          cross-encoder-reranking. question används fortfarande i syntesen.
         - preferred_source_paths: dokument som bör prioriteras i
           retrieval, t.ex. aktiva dokument från föregående svar.
         """
         t0 = time.perf_counter()
 
-        # Bygg söktexten. Om en särskild retrieval-fråga finns används
-        # den direkt. Annars används nuvarande QUD-ankrade strategi.
+        # Bygg söktexten. Två varianter:
+        #
+        # - search_text används i kandidatinsamling (embedding + BM25).
+        #   Här är QUD-konkatenering mindre skadlig — embeddings klarar
+        #   längre texter, och BM25 kan dra nytta av bredare ordmängd.
+        #
+        # - rerank_text används i cross-encoder-reranking och är alltid
+        #   den rena frågan. Cross-encodern (mMARCO-tränad) är känslig
+        #   för konkatenerade fråge-strängar som innehåller meta-text
+        #   av formen "(Huvudfråga i samtalet: ...)" och ger kollapsade
+        #   scores i det fallet. Att hålla den rena bevarar rerankerns
+        #   precision även när QUD-ankaret breddar kandidatpoolen.
         if retrieval_question:
             search_text = retrieval_question
+            rerank_text = retrieval_question
         elif qud_anchor:
             search_text = f"{question}\n\n(Huvudfråga i samtalet: {qud_anchor})"
+            rerank_text = question
         else:
             search_text = question
+            rerank_text = question
 
         # 1. Semantisk sökning via Qdrant. För broadening kan retrievaln
         # ankras lokalt till tidigare aktiva dokument.
@@ -607,8 +628,8 @@ class RagService:
         candidates = _merge_candidates(semantic_hits, bm25_hits)
         t3 = time.perf_counter()
 
-        # 4. Första reranking
-        reranked, rerank_debug = self.reranker.rerank(search_text, candidates)
+        # 4. Första reranking – använder den rena frågan, inte QUD-ankaret
+        reranked, rerank_debug = self.reranker.rerank(rerank_text, candidates)
         t4 = time.perf_counter()
 
         # 5. Dokumentexpansion: för dokument med högt rankade chunkar,
@@ -621,7 +642,7 @@ class RagService:
             # eftersom chunkarna kommer från dokument som redan visat
             # sig starkt relevanta. Se expanded_filter_floor i config.
             exp_reranked, exp_debug = self.reranker.rerank(
-                search_text,
+                rerank_text,
                 expanded_new,
                 filter_floor=settings.expanded_filter_floor,
             )
@@ -646,7 +667,7 @@ class RagService:
         evidence_boost_debug: list[dict] = []
         if text_hits:
             evidence_hits, evidence_debug, evidence_source_paths, evidence_boost_debug = self._evidence_candidates_for_documents(
-                search_text,
+                rerank_text,
                 query_vector,
                 text_hits,
             )
