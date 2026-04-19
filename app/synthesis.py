@@ -102,9 +102,9 @@ KRITISKT för svarets användbarhet:
   som tabell eller strukturerad lista. Komprimera inte tabeller till
   löptext.
 
-- UTVECKLA INTE SVERET grundat på knapphändig information i källorna.
-  Om källorna innehåller kortfattade formuleringar så REDOGÖR för dem, 
-  bygg inte ut svaret med vad du tror är sannolikt.
+- REDOGÖR för innehållet i källorna, inget mer.
+  UTVECKLA INTE SVERET om information i källorna är knapphändig.
+  Säg det som står, inget mer.
 
 - ANVÄND KÄLLORNAS EXAKTA TERMER för formella moment, roller och
   procedurer. Om källan säger "intervju" — säg "intervju", inte
