@@ -1,0 +1,65 @@
+# Synonymlista för URD
+#
+# Används av retrievals BM25-väg för att bredda kandidatpoolen när
+# en fråga använder en annan term än dokumenten. Påverkar inte
+# embedding eller cross-encoder-rerank.
+#
+# Format: 'synonyms' är en lista av grupper. Varje grupp är en lista
+# av termer som ska behandlas som utbytbara. Matchningen är flexibel
+# för svenska böjningsändelser — "lektor", "lektorer" och "lektorn"
+# matchar alla mot termen "lektor".
+#
+# Termer kan bestå av flera ord. Då behöver alla ord matcha i frågan
+# (oavsett ordning) för att termen ska räknas som träff.
+#
+# Principer för att utöka listan:
+# - Ta bara med termer som verkligen är utbytbara, inte bara
+#   relaterade. "Rektor" och "prorektor" är INTE synonymer.
+# - Stavningsvarianter och förkortningar hör hemma här ("bitr." för
+#   "biträdande", "hp" för "högskolepoäng").
+# - Tveksamma fall är bättre utanför än inne. En falsk synonym drar
+#   in irrelevanta dokument; en missad synonym gör bara att du inte
+#   får den extra bredden för just den frågan.
+
+synonyms:
+  # Lärartjänster — olika stavningsvarianter av samma roll
+  - [lektor, universitetslektor]
+  - [adjunkt, universitetsadjunkt]
+  - [biträdande lektor, biträdande universitetslektor, bitr. lektor, bitr. universitetslektor]
+
+  # Fakultetsledning — rollens namn växlar mellan olika formuleringar
+  - [dekanus, fakultetsnämndens ordförande]
+  - [prodekanus, fakultetsnämndens vice ordförande]
+  - [prorektor, rektors ställföreträdare]
+
+  # Högskola vs universitet används ibland som samlingsbegrepp
+  # (använd med försiktighet — i många dokument är skillnaden viktig)
+  # - [högskola, universitet]
+
+  # Examina — officiell term och äldre/vardaglig
+  - [doktorsexamen, doktorsgrad]
+
+  # Arbete/uppsats — olika namn på samma typ av dokument
+  - [examensarbete, självständigt arbete, uppsats]
+
+  # Avhandling har två nivåer med olika namn enligt ordlistan:
+  # på doktorsnivå avhandling, på licentiatnivå uppsats. Dessa
+  # ska INTE slås ihop — det är olika saker.
+
+  # Studiestöd — samlingsterm och delar
+  # (dessa är INTE fullständigt synonyma, kommenterade bort)
+  # - [studiemedel, studiebidrag, studielån]
+
+  # Förkortningar som förekommer i formella dokument
+  - [hp, högskolepoäng]
+  - [pm, promemoria]
+
+  # Tenta är informell term för tentamen. "Tentor" listas separat
+  # eftersom svensk a->or-växling i pluralform inte fångas av
+  # prefix-matchningen.
+  - [tentamen, tenta, tentor]
+
+  # Behörighet — grundläggande vs särskild ska hållas isär.
+  # Bara den allmänna termen "allmän behörighet" är utbytbar
+  # mot "grundläggande behörighet" enligt ordlistan.
+  - [grundläggande behörighet, allmän behörighet]

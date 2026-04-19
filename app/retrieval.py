@@ -17,6 +17,7 @@ from app.llm import LocalLLM
 from app.synthesis import synthesize
 from app.rework import elaborate, verify
 from app.schemas import ChatResponse, SourceHit
+from app.synonyms import load_synonyms
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +484,10 @@ class RagService:
         # Bygg BM25-index från alla chunks i Qdrant
         self._build_bm25_index()
 
+        # Ladda instansens synonymlista om den finns. Tyst fallback
+        # till tomt index om filen saknas eller är felaktig.
+        self.synonyms = load_synonyms(settings.synonyms_path)
+
     def _build_bm25_index(self) -> None:
         """Bygg eller återbygg BM25-indexet från Qdrant."""
         all_chunks = self.store.iter_all_chunks()
@@ -622,7 +627,15 @@ class RagService:
 
         # 2. BM25-sökning – tillför kandidater med exakt ordmatchning.
         # Den hålls global i första versionen av broadening-fixen.
-        bm25_hits = self.bm25_index.top_k(search_text, k=10)
+        # Synonymexpansion breddar söktexten med kända termvarianter
+        # (se app/synonyms.py). Det påverkar bara BM25 — embedding
+        # och cross-encoder-rerank arbetar på den ursprungliga frågan.
+        synonym_additions = self.synonyms.expand_terms(search_text)
+        if synonym_additions:
+            bm25_search_text = search_text + " " + " ".join(synonym_additions)
+        else:
+            bm25_search_text = search_text
+        bm25_hits = self.bm25_index.top_k(bm25_search_text, k=10)
 
         # 3. Slå ihop till en unik kandidatpool
         candidates = _merge_candidates(semantic_hits, bm25_hits)
@@ -704,6 +717,7 @@ class RagService:
                     "abstained": True,
                     "qud_anchor_used": qud_anchor is not None,
                     "retrieval_question_used": retrieval_question is not None,
+                    "synonym_additions": synonym_additions,
                     "preferred_source_paths": preferred_source_paths,
                     "timing_s": {
                         "embed_query": round(t1 - t0, 3),
@@ -767,6 +781,7 @@ class RagService:
                 "num_reranked": len(all_reranked),
                 "num_hits": len(hits),
                 "abstained": False,
+                "synonym_additions": synonym_additions,
                 
                 "synthesis": synthesis_debug,
                 "timing_s": {
