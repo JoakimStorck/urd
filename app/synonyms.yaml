@@ -23,13 +23,13 @@
 
 synonyms:
   # Lärartjänster — olika stavningsvarianter av samma roll
-  - [lektor, universitetslektor]
   - [adjunkt, universitetsadjunkt]
-  - [biträdande lektor, biträdande universitetslektor, bitr. lektor, bitr. universitetslektor]
+  - [lektor, universitetslektor]
+  - [adjunkt, universitetsadjunkt]  - [biträdande lektor, biträdande universitetslektor, bitr. lektor, bitr. universitetslektor]
 
   # Fakultetsledning — rollens namn växlar mellan olika formuleringar
-  - [dekanus, fakultetsnämndens ordförande]
-  - [prodekanus, fakultetsnämndens vice ordförande]
+  - [dekan, dekanus, fakultetsnämndens ordförande]
+  - [prodekan, prodekanus, fakultetsnämndens vice ordförande]
   - [prorektor, rektors ställföreträdare]
 
   # Högskola vs universitet används ibland som samlingsbegrepp
@@ -37,7 +37,7 @@ synonyms:
   # - [högskola, universitet]
 
   # Examina — officiell term och äldre/vardaglig
-  - [doktorsexamen, doktorsgrad]
+  - [doktorsexamen, doktorsgrad, PhD]
 
   # Arbete/uppsats — olika namn på samma typ av dokument
   - [examensarbete, självständigt arbete, uppsats]
