@@ -109,19 +109,32 @@ def chat(req: ChatRequest) -> ChatResponse:
                         f"qud_drift_detected (similarity={drift.similarity} "
                         f"< threshold={drift.threshold})"
                     ),
+                    question_operation=classification.question_operation,
                     raw=classification.raw,
                     used_fallback=False,
                 )
 
+        matched_concept_ids = rag.concepts.find_matching_concept_ids(req.question)
+        matched_concept_labels = rag.concepts.labels_for_concept_ids(matched_concept_ids)
+        relation_pair_ids = rag.concepts.first_two_matching_concept_ids(req.question)
+        relation_pair_labels = rag.concepts.labels_for_concept_ids(relation_pair_ids)
+        
         # Grund-debug som alla vägar lägger till
         base_debug = {
             "session_id": state.session_id,
             "classification": {
                 "intent": classification.intent,
                 "substyle": classification.substyle,
+                "question_operation": classification.question_operation,
                 "reason": classification.reason,
                 "used_fallback": classification.used_fallback,
             },
+            "concepts": {
+                "matched_ids": matched_concept_ids,
+                "matched_labels": matched_concept_labels,
+                "relation_pair_ids": relation_pair_ids,
+                "relation_pair_labels": relation_pair_labels,
+            },            
             "qud": {
                 "text": state.current_qud_text,
                 "age_turns": state.qud_age_turns,
@@ -251,6 +264,8 @@ def chat(req: ChatRequest) -> ChatResponse:
             background_max_turns=background_max_turns,
             retrieval_question=retrieval_question,
             preferred_source_paths=preferred_source_paths,
+            question_operation=classification.question_operation,
+            matched_concept_ids=matched_concept_ids,
         )
 
         # Uppdatera sessionsstate med dokumentkällorna OCH de faktiska

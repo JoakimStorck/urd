@@ -161,6 +161,18 @@ class ConceptIndex:
 
         return added
 
+    def labels_for_concept_ids(self, concept_ids: list[str]) -> list[str]:
+        labels: list[str] = []
+        for concept_id in concept_ids:
+            concept = self.concepts.get(concept_id)
+            if concept is None or not concept.labels:
+                continue
+            labels.append(concept.labels[0])
+        return labels
+
+    def first_two_matching_concept_ids(self, question: str) -> list[str]:
+        return self.find_matching_concept_ids(question)[:2]
+
 
 def load_concepts(path: Path) -> ConceptIndex:
     if not path.exists():

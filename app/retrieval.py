@@ -19,6 +19,7 @@ from app.rework import elaborate, verify
 from app.schemas import ChatResponse, SourceHit
 from app.synonyms import load_synonyms
 from app.concepts import load_concepts
+from app.question_operations import load_question_operations
 
 # ---------------------------------------------------------------------------
 # Boilerplate-filter (behålls – detta är dokumentspecifikt, inte heuristisk
@@ -542,6 +543,10 @@ class RagService:
         # kan testas och byggas ut stegvis.
         self.concepts = load_concepts(settings.concepts_path)
 
+        self.question_operations = load_question_operations(
+            settings.question_operations_path
+        )
+        
     def _build_bm25_index(self) -> None:
         """Bygg eller återbygg BM25-indexet från Qdrant."""
         all_chunks = self.store.iter_all_chunks()
@@ -695,6 +700,28 @@ class RagService:
     
         return found_labels
         
+    def _operation_expansion_terms(
+        self,
+        question_operation: str,
+        matched_concept_ids: list[str] | None = None,
+    ) -> list[str]:
+        policy = self.question_operations.get(question_operation)
+        terms = list(policy.expansion_terms)
+
+        if question_operation == "relation_membership" and matched_concept_ids:
+            # Lägg till labels för överordnade begrepp till de matchade begreppen.
+            for concept_id in matched_concept_ids:
+                concept = self.concepts.concepts.get(concept_id)
+                if concept is None:
+                    continue
+                for broader_id in concept.broader:
+                    broader = self.concepts.concepts.get(broader_id)
+                    if broader is None:
+                        continue
+                    terms.extend(broader.labels)
+
+        return _ordered_unique(terms)
+        
     def answer(
         self,
         question: str,
@@ -703,6 +730,8 @@ class RagService:
         background_max_turns: int = 0,
         retrieval_question: str | None = None,
         preferred_source_paths: list[str] | None = None,
+        question_operation: str = "direct_lookup",
+        matched_concept_ids: list[str] | None = None,
     ) -> ChatResponse:
         """
         Kör retrieval och syntes.
@@ -763,14 +792,25 @@ class RagService:
         )
         t2 = time.perf_counter()
 
+        # comparison är medvetet begränsad i första versionen.
+        # Vi gör ännu inte två separata retrievalspår per begrepp,
+        # utan låter den vanliga retrievalkedjan arbeta mot frågan som helhet.
+        # Den egentliga skillnaden i v1 ligger därför främst i syntesstilen.
+        operation_additions = self._operation_expansion_terms(
+            question_operation,
+            matched_concept_ids=matched_concept_ids,
+        )
+        
         # 2. BM25-sökning – tillför kandidater med exakt ordmatchning.
         # Den hålls global i första versionen av broadening-fixen.
         # Synonymexpansion breddar söktexten med kända termvarianter
         # (se app/synonyms.py). Det påverkar bara BM25 — embedding
         # och cross-encoder-rerank arbetar på den ursprungliga frågan.
         synonym_additions = self.synonyms.expand_terms(search_text)
-        if synonym_additions:
-            bm25_search_text = search_text + " " + " ".join(synonym_additions)
+        bm25_additions = _ordered_unique(operation_additions + synonym_additions)
+
+        if bm25_additions:
+            bm25_search_text = search_text + " " + " ".join(bm25_additions)
         else:
             bm25_search_text = search_text
         bm25_hits = self.bm25_index.top_k(bm25_search_text, k=10)
@@ -856,7 +896,10 @@ class RagService:
                     "abstained": True,
                     "qud_anchor_used": qud_anchor is not None,
                     "retrieval_question_used": retrieval_question is not None,
+                    "question_operation": question_operation,
+                    "operation_additions": operation_additions,
                     "synonym_additions": synonym_additions,
+                    "bm25_additions": bm25_additions,
                     "preferred_source_paths": preferred_source_paths,
                     "timing_s": {
                         "embed_query": round(t1 - t0, 3),
@@ -880,6 +923,7 @@ class RagService:
             self.llm,
             background_turns=background_turns,
             background_max_turns=background_max_turns,
+            question_operation=question_operation,
         )
         t7 = time.perf_counter()
         
@@ -943,7 +987,10 @@ class RagService:
                 "num_reranked": len(all_reranked),
                 "num_hits": len(hits),
                 "abstained": False,
+                "question_operation": question_operation,
+                "operation_additions": operation_additions,
                 "synonym_additions": synonym_additions,
+                "bm25_additions": bm25_additions,
                 "related_concepts": related_concepts,
                 
                 "synthesis": synthesis_debug,

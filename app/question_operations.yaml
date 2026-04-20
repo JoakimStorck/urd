@@ -1,0 +1,45 @@
+operations:
+  requirements:
+    expansion_terms:
+      - behörighet
+      - krav
+      - kvalifikationskrav
+      - bedömningsgrunder
+    preferred_section_terms:
+      - Behörighet
+      - Kvalifikationskrav
+      - Bedömningsgrunder
+
+  process:
+    expansion_terms:
+      - process
+      - tillsättning
+      - beredning
+      - handläggning
+      - sakkunnigbedömning
+    preferred_section_terms:
+      - Process
+      - Tillsättning
+      - Beredning
+
+  relation_membership:
+    expansion_terms:
+      - kategori
+      - anställning
+      - lärarkategori
+      - läraranställning
+      - tjänst
+    preferred_section_terms:
+      - Lärarkategorier
+      - Anställningsform
+
+  aggregation:
+    expansion_terms:
+      - kategorier
+      - typer
+      - tjänster
+      - roller
+      - lärarkategorier
+    preferred_section_terms:
+      - Lärarkategorier
+      - Kategorier

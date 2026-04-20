@@ -73,11 +73,20 @@ Intent = Literal[
 # Den styr syntesstilen, inte retrievalbeteendet.
 Substyle = Literal["subquestion", "broadening", "narrowing_or_repair"]
 
+QuestionOperation = Literal[
+    "direct_lookup",
+    "relation_membership",
+    "comparison",
+    "requirements",
+    "process",
+    "aggregation",
+]
 
 @dataclass
 class Classification:
     intent: Intent
-    substyle: Substyle | None = None  # bara meningsfull för related_to_qud
+    substyle: Substyle | None = None
+    question_operation: QuestionOperation = "direct_lookup"
     reason: str | None = None
     raw: str | None = None
     used_fallback: bool = False
@@ -171,11 +180,32 @@ VIKTIGA REGLER:
 - "substyle" anges ENDAST för related_to_qud. För övriga klasser
   ska substyle vara null.
 
+FRÅGEOPERATIONER:
+
+question_operation beskriver vilken sorts dokumentläsning som krävs.
+
+Använd:
+- relation_membership för frågor som "är X en Y?", "tillhör X Y?",
+  "räknas X som Y?"
+- comparison för frågor som "vad är skillnaden mellan", "hur skiljer sig",
+  "jämfört med"
+- requirements för frågor om "krav", "behörighet", "kvalifikationer",
+  "formella krav"
+- process för frågor om "process", "hur går det till", "tillsätts",
+  "anställs", "beredning"
+- aggregation för frågor som "vilka finns", "vilka typer", "vilka kategorier",
+  "vilka tjänster", "vilka roller"
+- direct_lookup för övriga frågor
+
+question_operation är en separat axel från intent:
+- intent beskriver yttringens relation till samtalet
+- question_operation beskriver vilken sorts läsning som behövs
+
 {qud_block}{history_block}Aktuell yttring:
 {utterance}
 
 Svara ENBART med JSON, utan förklaringar eller markdown:
-{{"intent": "...", "substyle": "..."|null, "reason": "kort motivering"}}"""
+{{"intent": "...", "substyle": "..."|null, "question_operation": "...", "reason": "kort motivering"}}"""
 
 
 def _format_qud_block(qud_text: str | None) -> str:
@@ -214,6 +244,14 @@ _VALID_INTENTS = {
 }
 _VALID_SUBSTYLES = {"subquestion", "broadening", "narrowing_or_repair"}
 
+_VALID_OPERATIONS = {
+    "direct_lookup",
+    "relation_membership",
+    "comparison",
+    "requirements",
+    "process",
+    "aggregation",
+}
 
 def _parse_classification_json(raw: str) -> Classification | None:
     """
@@ -260,6 +298,11 @@ def _parse_classification_json(raw: str) -> Classification | None:
     if intent_raw != "related_to_qud":
         substyle = None
 
+    operation_raw = str(data.get("question_operation", "direct_lookup")).strip()
+    if operation_raw not in _VALID_OPERATIONS:
+        logger.info("Ogiltig question_operation %r — använder direct_lookup.", operation_raw)
+        operation_raw = "direct_lookup"
+        
     reason = data.get("reason")
     if reason is not None:
         reason = str(reason).strip() or None
@@ -269,6 +312,7 @@ def _parse_classification_json(raw: str) -> Classification | None:
         substyle=substyle,
         reason=reason,
         raw=text,
+        question_operation=operation_raw,  # type: ignore[arg-type]
         used_fallback=False,
     )
 
@@ -313,6 +357,7 @@ def classify_utterance(
         )
         return Classification(
             intent="new_main_question",
+            question_operation="direct_lookup",
             reason=f"llm_error: {type(e).__name__}",
             used_fallback=True,
         )
@@ -321,6 +366,7 @@ def classify_utterance(
     if result is None:
         return Classification(
             intent="new_main_question",
+            question_operation="direct_lookup",
             reason="parse_failed",
             raw=raw[:500] if raw else None,
             used_fallback=True,
@@ -343,6 +389,7 @@ def classify_utterance(
             )
             return Classification(
                 intent="new_main_question",
+                question_operation="direct_lookup",
                 reason=f"{result.intent}_without_context",
                 raw=result.raw,
                 used_fallback=False,
@@ -365,6 +412,7 @@ def classify_utterance(
                 return Classification(
                     intent="related_to_qud",
                     substyle="broadening",
+                    question_operation=result.question_operation,
                     reason=f"{result.intent}_without_active_hits",
                     raw=result.raw,
                     used_fallback=False,
@@ -372,6 +420,7 @@ def classify_utterance(
             else:
                 return Classification(
                     intent="new_main_question",
+                    question_operation="direct_lookup",
                     reason=f"{result.intent}_without_active_hits",
                     raw=result.raw,
                     used_fallback=False,
