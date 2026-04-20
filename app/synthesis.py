@@ -83,6 +83,40 @@ VIKTIGT om samtalsbakgrunden:
   eller "det" refererar till), men den är inte faktamaterial.
 """
 
+OPERATION_BLOCKS = {
+    "direct_lookup": "",
+    "relation_membership": """
+EXTRA INSTRUKTION FÖR DENNA FRÅGETYP:
+- Svara först med ett kort besked: ja, nej, eller framgår inte tydligt.
+- Förklara sedan kort vilket stöd som finns i källorna.
+- Påstå inte klassifikation om källorna bara indirekt antyder den.
+""",
+    "comparison": """
+EXTRA INSTRUKTION FÖR DENNA FRÅGETYP:
+- Jämför endast sådant som uttryckligen stöds i källorna.
+- Strukturera gärna svaret under korta jämförelsedimensioner:
+  arbetsuppgifter, behörighet, ansvar, roll, eller vad som inte framgår.
+- Om skillnaden inte uttrycks tydligt i källorna, säg det.
+""",
+    "requirements": """
+EXTRA INSTRUKTION FÖR DENNA FRÅGETYP:
+- Lista formella krav eller behörighetskrav tydligt.
+- Blanda inte ihop krav med process, allmänna egenskaper eller lämplighetsbedömningar
+  om detta inte uttryckligen stöds av källorna.
+""",
+    "process": """
+EXTRA INSTRUKTION FÖR DENNA FRÅGETYP:
+- Återge processen som steg eller tydlig ordning när källorna stödjer det.
+- Bevara roller, ansvar och ordningsföljd.
+- Komprimera inte bort mellanled.
+""",
+    "aggregation": """
+EXTRA INSTRUKTION FÖR DENNA FRÅGETYP:
+- Sammanställ de kategorier, typer eller roller som källorna uttryckligen stödjer.
+- Presentera dem som en lista.
+- Om listan kan vara ofullständig utifrån källmaterialet, säg det.
+""",
+}
 
 DIRECT_SYNTHESIS_PROMPT = """Du är en lokal dokumentassistent för interna styrdokument.
 Svara på frågan enbart utifrån källorna nedan.
@@ -119,7 +153,7 @@ GRUNDREGLER FÖR FORM:
 - Ange källa efter varje påstående med [Källa N].
 - Inled direkt med svaret.
 
-{background_block}Källor:
+{background_block}{operation_block}Källor:
 {sources_block}
 
 Fråga: {question}
@@ -137,6 +171,7 @@ def synthesize(
     llm: LocalLLM,
     background_turns: list[dict] | None = None,
     background_max_turns: int = 0,
+    question_operation: str = "direct_lookup",
 ) -> SynthesisResult:
     """
     Enstegssyntes med detaljbevarande prompt.
@@ -160,6 +195,7 @@ def synthesize(
         background_block=background_block,
         sources_block=sources_block,
         question=question,
+        operation_block=OPERATION_BLOCKS.get(question_operation, ""),
     )
 
     t0 = time.perf_counter()

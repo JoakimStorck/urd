@@ -10,9 +10,10 @@ URD_DIR = Path(".urd")
 CONFIG_FILE = URD_DIR / "config.json"
 
 # Hårdkodade defaults — dessa skrivs till .urd/config.json om filen saknas
-DEFAULTS = {
+DEFAULTS = { 
     "docs_path": "./docs",
     "qdrant_path": "./data/qdrant",
+    "question_operations_path": ".urd/question_operations.yaml",
     "collection_name": "iit_docs",
     "embedding_model": "intfloat/multilingual-e5-large",
     "reranker_model": "jeffwan/mmarco-mMiniLMv2-L12-H384-v1",
@@ -42,6 +43,7 @@ DEFAULTS = {
 _ENV_KEYS = {
     "docs_path": "DOCS_PATH",
     "qdrant_path": "QDRANT_PATH",
+    "question_operations_path": "QUESTION_OPERATIONS_PATH",
     "collection_name": "QDRANT_COLLECTION",
     "embedding_model": "EMBEDDING_MODEL",
     "reranker_model": "RERANKER_MODEL",
@@ -132,6 +134,7 @@ def _build_settings() -> "Settings":
     return Settings(
         docs_path=Path(s("docs_path")),
         qdrant_path=Path(s("qdrant_path")),
+        question_operations_path=Path(s("question_operations_path")),
         collection_name=s("collection_name"),
         embedding_model=s("embedding_model"),
         reranker_model=s("reranker_model"),
@@ -163,6 +166,8 @@ class Settings(BaseModel):
     qdrant_path: Path = Path("./data/qdrant")
     synonyms_path: Path = Path(".urd/synonyms.yaml")
     concepts_path: Path = Path(".urd/concepts.yaml")
+    question_operations_path: Path = Path(".urd/question_operations.yaml")
+    
     collection_name: str = "iit_docs"
 
     embedding_model: str = "intfloat/multilingual-e5-large"
