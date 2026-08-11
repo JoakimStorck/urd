@@ -31,7 +31,7 @@ DEFAULTS = {
     "classification_history_turns": 2,
     "expansion_score_threshold": 0.2,
     "expanded_filter_floor": -1.0,
-    "qud_drift_threshold": 0.55,
+    "qud_drift_threshold": 0.80,
     "min_relevance_floor": 0.0,
     "relevance_ratio": 0.3,
     "max_hits": 10,
@@ -221,8 +221,14 @@ class Settings(BaseModel):
     # QUD-drift-skydd. Om embedding-likhet mellan aktuell fråga och
     # current_qud_text understiger detta värde, överrids en
     # related_to_qud-klassificering till new_main_question.
-    # Värdet är kalibrerat för multilingual-e5-large.
-    qud_drift_threshold: float = 0.55
+    #
+    # OBS: tröskeln måste kalibreras mot den faktiska embeddingregimen.
+    # Med E5-prefix (query:) ligger likheterna i ett annat band än
+    # utan. Kör scripts/calibrate_drift.py efter modell- eller
+    # prefixändring och sätt värdet med
+    # 'urd config set qud_drift_threshold <värde>'. Defaultvärdet här
+    # är en provisorisk nivå för multilingual-e5-large MED prefix.
+    qud_drift_threshold: float = 0.80
 
     # Relevansbaserat hit-urval (ersätter hårdkodat top_k).
     # Strategin: alla hits med score ≥ max(min_relevance_floor,
