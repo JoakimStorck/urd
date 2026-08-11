@@ -9,6 +9,7 @@ os.environ["TYPER_USE_RICH"] = "0"
 
 import hashlib
 import json
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -993,13 +994,20 @@ def test(
         "--pause-ms",
         help="Paus i millisekunder mellan turer i samma sekvens (skyddar servern).",
     ),
+    jsonl: bool = typer.Option(
+        True,
+        "--jsonl/--no-jsonl",
+        help="Skriv fullständigt diagnostikspår som JSONL (en rad per tur, "
+             "inkl. hela debug-blocket med rerank_top). Jämför två körningar "
+             "med scripts/compare_test_runs.py.",
+    ),
 ) -> None:
     """
     Kör testsekvenser mot servern och samla resultat.
 
     Testfilen ska ha formatet:
 
-      {"version": 3, "sequences": [
+      {"version": 4, "sequences": [
         {"name": "...", "description": "...", "turns": [
           {"question": "...", "expect": {...}},
           ...
@@ -1016,9 +1024,21 @@ def test(
       - expect_new_hits (elaboration har hämtat nytt material)
       - expect_verification_status (verification har producerat
         minst en finding med angiven status: supported/unclear/unsupported)
+      - expected_docs (substrängar som ska matcha filnamnen bland de
+        källor som bar svaret)
+      - expected_docs_in_retrieval (substrängar som ska matcha filnamn
+        i retrieval-rankningen, dokumentnivå-hit@k; k styrs med
+        retrieval_top_k, default 5)
+      - answer_must_contain (substrängar som ska finnas i svaret;
+        whitespace-okänslig matchning så att "10 000" matchar "10 000:-")
 
     Kvalitativa fält (notes, known_issue, sequence_role) rapporteras
     men valideras inte.
+
+    Skillnaden mellan expected_docs och expected_docs_in_retrieval är
+    diagnostisk: den första mäter om rätt dokument BAR svaret, den
+    andra om retrieval alls FANN dokumentet. Faller den första men
+    inte den andra sitter felet i urvalet, inte i sökningen.
     """
     import time as time_module
     from datetime import datetime
@@ -1069,10 +1089,40 @@ def test(
     typer.echo(f"Server: {server_url}")
     typer.echo("")
 
+    # Bestäm utdatavägar FÖRE körningen så att JSONL-spåret kan
+    # skrivas löpande, en rad per tur. Kraschar körningen halvvägs
+    # finns spåret fram till dess — det är hela poängen med en
+    # append-logg för diagnostik.
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if output_file is None:
+        results_dir = Path(".urd/results")
+        results_dir.mkdir(parents=True, exist_ok=True)
+        output_file = results_dir / f"results_{timestamp}.json"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    jsonl_file: Path | None = None
+    jsonl_handle = None
+    if jsonl:
+        jsonl_file = output_file.with_suffix(".jsonl")
+        jsonl_handle = open(jsonl_file, "w", encoding="utf-8")
+        jsonl_handle.write(json.dumps({
+            "type": "run_meta",
+            "timestamp": datetime.now().isoformat(),
+            "test_file": str(test_file),
+            "server_url": server_url,
+            "git_commit": _current_git_commit(),
+        }, ensure_ascii=False) + "\n")
+
+    def _write_jsonl(record: dict) -> None:
+        if jsonl_handle is not None:
+            jsonl_handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            jsonl_handle.flush()
+
     # Resultat per sekvens
     sequence_results: list[dict] = []
     # Globala räknare
     total_flags: list[dict] = []
+    all_flags: list[dict] = []
     all_times: list[float] = []
 
     for seq_idx, sequence in enumerate(sequences, start=1):
@@ -1121,6 +1171,11 @@ def test(
                     "expect": expect,
                     "error": "connection_error",
                 })
+                _write_jsonl({
+                    "type": "turn", "sequence": seq_name, "turn": turn_idx,
+                    "question": question, "expect": expect,
+                    "error": "connection_error",
+                })
                 break
             except Exception as e:
                 typer.echo(f"    Fel: {e}")
@@ -1130,6 +1185,10 @@ def test(
                     "expect": expect,
                     "error": str(e),
                 })
+                _write_jsonl({
+                    "type": "turn", "sequence": seq_name, "turn": turn_idx,
+                    "question": question, "expect": expect, "error": str(e),
+                })
                 continue
 
             if not resp.ok:
@@ -1138,6 +1197,11 @@ def test(
                     "turn": turn_idx,
                     "question": question,
                     "expect": expect,
+                    "error": f"HTTP {resp.status_code}",
+                })
+                _write_jsonl({
+                    "type": "turn", "sequence": seq_name, "turn": turn_idx,
+                    "question": question, "expect": expect,
                     "error": f"HTTP {resp.status_code}",
                 })
                 continue
@@ -1195,6 +1259,22 @@ def test(
             # status_counts finns bara när verification körts
             verification_status_counts = synthesis.get("status_counts")
 
+            # Filnamn för dokumentmetrik. source_file_names är de källor
+            # som bar svaret; retrieval_file_names är dokumentnivå-
+            # rankningen ur rerank_top (ordnad efter score, exkl. chunkar
+            # som cross-encodern filtrerat bort, dedupliceras per fil).
+            source_file_names = [
+                s.metadata.file_name for s in response.sources
+            ]
+            retrieval_file_names: list[str] = []
+            _seen_files: set[str] = set()
+            for entry in debug.get("rerank_top", []) or []:
+                fn = entry.get("file_name")
+                if not fn or entry.get("filtered") or fn in _seen_files:
+                    continue
+                _seen_files.add(fn)
+                retrieval_file_names.append(fn)
+
             flags = _evaluate_expect(
                 expect=expect,
                 num_sources=num_sources,
@@ -1203,10 +1283,14 @@ def test(
                 abstained=debug.get("abstained", False),
                 num_new_hits=num_new_hits,
                 verification_status_counts=verification_status_counts,
+                answer=response.answer,
+                source_file_names=source_file_names,
+                retrieval_file_names=retrieval_file_names,
             )
             for flag in flags:
                 icon = "✓" if flag["ok"] else "✗"
                 typer.echo(f"    {icon} {flag['label']}")
+                all_flags.append({"sequence": seq_name, "turn": turn_idx, **flag})
                 if not flag["ok"]:
                     seq_flags.append({
                         "turn": turn_idx,
@@ -1266,6 +1350,29 @@ def test(
                 "flags": flags,
             })
 
+            # JSONL-spåret får HELA debug-blocket (inkl. rerank_top,
+            # evidence_top, synonym_additions m.m.) — det är detta som
+            # gör två körningar diffbara på retrieval-nivå, inte bara
+            # på flaggnivå.
+            _write_jsonl({
+                "type": "turn",
+                "sequence": seq_name,
+                "turn": turn_idx,
+                "question": question,
+                "expect": expect,
+                "answer": response.answer,
+                "sources": [
+                    {
+                        "file_name": s.metadata.file_name,
+                        "section_title": s.metadata.section_title,
+                        "score": round(s.score, 4),
+                    }
+                    for s in response.sources
+                ],
+                "flags": flags,
+                "debug": debug,
+            })
+
             typer.echo("")
 
         sequence_results.append({
@@ -1291,6 +1398,17 @@ def test(
         typer.echo(f"Medeltid per tur:   {sum(all_times) / len(all_times):.1f}s")
         typer.echo(f"Min/max tid:        {min(all_times):.1f}s / {max(all_times):.1f}s")
 
+    if all_flags:
+        by_field: dict[str, list[bool]] = defaultdict(list)
+        for f in all_flags:
+            by_field[f["field"]].append(bool(f["ok"]))
+        typer.echo("")
+        typer.echo("Flaggor per fält (ok/utvärderade)")
+        typer.echo("---------------------------------")
+        for field_name in sorted(by_field):
+            oks = by_field[field_name]
+            typer.echo(f"  {field_name}: {sum(oks)}/{len(oks)}")
+
     if total_flags:
         typer.echo("")
         typer.echo("Avvikelser per sekvens")
@@ -1301,14 +1419,10 @@ def test(
                 for f in seq["failed_flags"]:
                     typer.echo(f"    tur {f['turn']}: {f['label']}")
 
-    # Spara resultat
-    if output_file is None:
-        results_dir = Path(".urd/results")
-        results_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = results_dir / f"results_{timestamp}.json"
+    # Spara resultat (output_file bestämdes före körningen)
+    if jsonl_handle is not None:
+        jsonl_handle.close()
 
-    output_file.parent.mkdir(parents=True, exist_ok=True)
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(
             {
@@ -1328,6 +1442,36 @@ def test(
 
     typer.echo("")
     typer.echo(f"Resultat sparade: {output_file}")
+    if jsonl_file is not None:
+        typer.echo(f"Diagnostikspår:   {jsonl_file}")
+        typer.echo(
+            "Jämför två körningar: "
+            "python -m scripts.compare_test_runs <gammal>.jsonl <ny>.jsonl"
+        )
+
+
+def _current_git_commit() -> str | None:
+    """Bäst-effort: aktuell git-commit för spårbarhet i run_meta."""
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _normalize_for_contains(text: str) -> str:
+    """
+    Normalisera text för substrängsmatchning: ta bort all whitespace
+    och casefolda. Gör att "10 000" matchar "10 000:-", "10  000" och
+    "10000" oavsett hur källan råkar formatera beloppet.
+    """
+    return re.sub(r"\s+", "", text or "").casefold()
 
 
 def _evaluate_expect(
@@ -1338,6 +1482,9 @@ def _evaluate_expect(
     abstained: bool,
     num_new_hits: int | None,
     verification_status_counts: dict | None,
+    answer: str = "",
+    source_file_names: list[str] | None = None,
+    retrieval_file_names: list[str] | None = None,
 ) -> list[dict]:
     """
     Utvärdera observationsbara expect-flaggor.
@@ -1350,8 +1497,14 @@ def _evaluate_expect(
     Parametrarna num_new_hits och verification_status_counts är bara
     meningsfulla för rework-turer (elaboration/verification). För
     andra turer kan de vara None.
+
+    source_file_names är filnamnen för de källor som bar svaret.
+    retrieval_file_names är dokumentnivå-rankningen ur rerank_top
+    (bara retrieval-turer har en; rework-turer skickar tom lista).
     """
     flags: list[dict] = []
+    source_file_names = source_file_names or []
+    retrieval_file_names = retrieval_file_names or []
 
     if "should_find_sources" in expect:
         want = bool(expect["should_find_sources"])
@@ -1450,6 +1603,65 @@ def _evaluate_expect(
             "field": "expect_verification_status",
             "expected": want,
             "actual": actual_count,
+        })
+
+    if "expected_docs" in expect:
+        wanted = [str(x) for x in expect["expected_docs"]]
+        missing = [
+            w for w in wanted
+            if not any(w.casefold() in fn.casefold() for fn in source_file_names)
+        ]
+        ok = not missing
+        if ok:
+            detail = "(alla bland svarets källor)"
+        else:
+            detail = f"(saknas: {missing}; källor: {source_file_names or 'inga'})"
+        flags.append({
+            "label": f"expected_docs={wanted} {detail}",
+            "ok": ok,
+            "field": "expected_docs",
+            "expected": wanted,
+            "actual": source_file_names,
+        })
+
+    if "expected_docs_in_retrieval" in expect:
+        wanted = [str(x) for x in expect["expected_docs_in_retrieval"]]
+        k = int(expect.get("retrieval_top_k", 5))
+        top_docs = retrieval_file_names[:k]
+        missing = [
+            w for w in wanted
+            if not any(w.casefold() in fn.casefold() for fn in top_docs)
+        ]
+        ok = not missing
+        if not retrieval_file_names:
+            detail = "(ingen retrieval-rankning på denna tur)"
+        elif ok:
+            detail = f"(hit@{k} på dokumentnivå)"
+        else:
+            detail = f"(saknas i topp-{k}: {missing}; topp: {top_docs})"
+        flags.append({
+            "label": f"expected_docs_in_retrieval={wanted} {detail}",
+            "ok": ok,
+            "field": "expected_docs_in_retrieval",
+            "expected": wanted,
+            "actual": top_docs,
+        })
+
+    if "answer_must_contain" in expect:
+        needles = [str(x) for x in expect["answer_must_contain"]]
+        haystack = _normalize_for_contains(answer)
+        missing = [
+            n for n in needles
+            if _normalize_for_contains(n) not in haystack
+        ]
+        ok = not missing
+        detail = "(allt finns i svaret)" if ok else f"(saknas i svaret: {missing})"
+        flags.append({
+            "label": f"answer_must_contain={needles} {detail}",
+            "ok": ok,
+            "field": "answer_must_contain",
+            "expected": needles,
+            "actual": missing,
         })
 
     return flags
