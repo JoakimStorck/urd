@@ -47,7 +47,14 @@ class LocalLLM:
                     {"role": "user", "content": prompt},
                 ],
                 "options": {
-                    "temperature": 0.1,
+                    # temperature 0 för reproducerbarhet. Baslinje-
+                    # jämförelsen 2026-08-11 visade att 0.1 räcker för
+                    # att klassificering och frågeoperation ska flippa
+                    # mellan identiska körningar — då går det inte att
+                    # skilja patcheffekt från slump i testbatteriet.
+                    # För en evidenscentrerad assistent är deterministisk
+                    # generering dessutom rätt även i sak.
+                    "temperature": 0.0,
                     "num_ctx": self.num_ctx,
                 },
             }
