@@ -284,8 +284,11 @@ def chat(req: ChatRequest) -> ChatResponse:
             path_label = "related_to_qud"
 
             # Broadening: skriv om den korta följdfrågan till en
-            # fristående retrievalfråga och ankra retrieval lokalt
-            # i de dokument som bar föregående svar.
+            # fristående retrievalfråga. De dokument som bar
+            # föregående svar skickas med som PREFERENS — retrieval
+            # söker globalt och kompletterar med en ankrad pool
+            # (se RagService.answer), så att broadening kan nå
+            # dokument utanför den aktiva kontexten.
             if classification.substyle == "broadening":
                 retrieval_question, was_rewritten = rewrite_followup(
                     req.question,

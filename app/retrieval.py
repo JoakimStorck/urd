@@ -780,16 +780,38 @@ class RagService:
             search_text = question
             rerank_text = question
 
-        # 1. Semantisk sökning via Qdrant. För broadening kan retrievaln
-        # ankras lokalt till tidigare aktiva dokument.
+        # 1. Semantisk sökning via Qdrant.
+        #
+        # preferred_source_paths (broadening: dokumenten som bar
+        # föregående svar) är en PREFERENS, inte ett hårt filter.
+        # Tidigare skickades den som source_paths-filter till Qdrant,
+        # vilket i praktiken låste den semantiska sökningen till de
+        # gamla dokumenten — motsatsen till broadenings syfte att nå
+        # närliggande områden som INTE täcks av tidigare källor. Bara
+        # BM25 var då global, och rätt dokument nåddes bara om det
+        # råkade ordmatcha (sågs i baslinjen 2026-08-11: broadening
+        # till anvisningarna för halvtidsseminarium hittade i stället
+        # ett protokoll som nämner dem).
+        #
+        # Nu görs alltid en global sökning, och de föredragna
+        # dokumenten bidrar med en KOMPLETTERANDE ankrad pool så att
+        # borderline-chunkar ur den aktiva kontexten inte trängs ut
+        # ur den globala toppen. Cross-encodern gör som vanligt den
+        # slutliga relevansbedömningen över hela kandidatmängden.
         query_vector = self.embedder.embed_query(search_text)
         t1 = time.perf_counter()
 
-        semantic_hits = self.store.search(
-            query_vector,
-            limit=15,
-            source_paths=preferred_source_paths,
-        )
+        semantic_hits = self.store.search(query_vector, limit=15)
+        num_semantic_global = len(semantic_hits)
+        num_semantic_anchored = 0
+        if preferred_source_paths:
+            anchored_hits = self.store.search(
+                query_vector,
+                limit=8,
+                source_paths=preferred_source_paths,
+            )
+            num_semantic_anchored = len(anchored_hits)
+            semantic_hits = _merge_candidates(semantic_hits, anchored_hits)
         t2 = time.perf_counter()
 
         # comparison är medvetet begränsad i första versionen.
@@ -887,6 +909,8 @@ class RagService:
                         "top_score": round(all_reranked[0].score, 3) if all_reranked else None,
                     },
                     "num_semantic": len(semantic_hits),
+                    "num_semantic_global": num_semantic_global,
+                    "num_semantic_anchored": num_semantic_anchored,
                     "num_bm25": len(bm25_hits),
                     "num_candidates": len(candidates),
                     "num_expanded": num_expanded,
@@ -979,6 +1003,8 @@ class RagService:
                     ],
                 },                
                 "num_semantic": len(semantic_hits),
+                "num_semantic_global": num_semantic_global,
+                "num_semantic_anchored": num_semantic_anchored,
                 "num_bm25": len(bm25_hits),
                 "num_candidates": len(candidates),
                 "num_expanded": num_expanded,
