@@ -29,6 +29,12 @@ if not logging.getLogger().handlers:
         format="%(levelname)s:     %(message)s",
     )
 
+# Tredjepartsbibliotek som loggar varje HTTP-anrop på INFO-nivå
+# dränker appens egna rader. Dämpa dem till WARNING — deras fel
+# ska fortfarande synas, men inte deras vardagsprat.
+for _noisy in ("httpx", "huggingface_hub", "urllib3", "filelock"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 app = FastAPI(title="Local IIT URD")
 rag = RagService()
 sessions = SessionStore()
