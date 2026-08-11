@@ -182,9 +182,18 @@ Var strikt. Ett påstående som i tidigare svar framställdes som
 säkert men som bara kan härledas via tolkning ska klassas som
 "unclear", inte "supported".
 
-Om användarens prövning handlar om något som INTE nämndes i tidigare
-svar men som finns i källorna, får du lägga till findings om detta
-också — med lämplig status.
+VIKTIGA REGLER:
+- Granska ENDAST påståenden som faktiskt förekommer i det tidigare
+  svaret eller i användarens prövning. Hitta ALDRIG på påståenden
+  som ingen har gjort för att sedan klassificera dem.
+- Om användarens prövning innehåller eller insinuerar ett EGET
+  påstående (t.ex. "stämmer det verkligen att X?"), granska X mot
+  källorna som en egen finding. Saknar X stöd i källorna ska den
+  finding ha status "unsupported" — även om det tidigare svarets
+  påståenden är stödda.
+- Om användarens prövning handlar om något som INTE nämndes i
+  tidigare svar men som står i källorna, får du lägga till findings
+  om detta också — med lämplig status.
 
 Svara ENBART med JSON, utan förklaringar eller markdown:
 {{
