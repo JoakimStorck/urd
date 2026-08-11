@@ -17,6 +17,18 @@ from app.followup import rewrite_followup
 
 logger = logging.getLogger(__name__)
 
+# Uvicorn konfigurerar bara sina egna loggers. Appens loggers (den här
+# modulens, loadernas i synonyms/concepts/question_operations, llm:s
+# trunkeringsvarning) hamnar på rotloggern som saknar handler — och
+# försvinner då tyst. Det underminerar hela poängen med synlig
+# konfigstatus. Konfigurera därför rotloggern här, men bara om ingen
+# handler redan finns (så att en inbäddande process kan styra själv).
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s:     %(message)s",
+    )
+
 app = FastAPI(title="Local IIT URD")
 rag = RagService()
 sessions = SessionStore()
