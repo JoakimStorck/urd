@@ -1277,9 +1277,17 @@ def test(
             # Sammanfattningsrad i terminalen
             parts = [f"{total_time:.1f}s", f"intent={intent_str}", f"path={path}", f"hits={num_sources}"]
             if qud_drift:
+                drift_str = f"drift={qud_drift.get('similarity', '?')}"
+                if qud_drift.get("doc_similarity") is not None:
+                    drift_str += f"/doc={qud_drift.get('doc_similarity')}"
+                if qud_drift.get("drift_detected"):
+                    drift_str += "*"
+                parts.append(drift_str)
+            if debug.get("context_fallback"):
+                cf = debug["context_fallback"]
                 parts.append(
-                    f"drift={qud_drift.get('similarity', '?')}"
-                    f"{'*' if qud_drift.get('drift_detected') else ''}"
+                    "kontextfallback="
+                    + ("räddad" if cf.get("rescued") else "hjälpte ej")
                 )
             if synthesis.get("used_fallback"):
                 parts.append(f"FALLBACK={synthesis.get('fallback_reason', '?')}")

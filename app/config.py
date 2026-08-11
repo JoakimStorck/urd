@@ -32,6 +32,7 @@ DEFAULTS = {
     "expansion_score_threshold": 0.2,
     "expanded_filter_floor": -1.0,
     "qud_drift_threshold": 0.80,
+    "qud_drift_doc_threshold": 0.80,
     "min_relevance_floor": 0.0,
     "relevance_ratio": 0.3,
     "max_hits": 10,
@@ -63,6 +64,7 @@ _ENV_KEYS = {
     "expansion_score_threshold": "EXPANSION_SCORE_THRESHOLD",
     "expanded_filter_floor": "EXPANDED_FILTER_FLOOR",
     "qud_drift_threshold": "QUD_DRIFT_THRESHOLD",
+    "qud_drift_doc_threshold": "QUD_DRIFT_DOC_THRESHOLD",
     "min_relevance_floor": "MIN_RELEVANCE_FLOOR",
     "relevance_ratio": "RELEVANCE_RATIO",
     "max_hits": "MAX_HITS",
@@ -155,6 +157,7 @@ def _build_settings() -> "Settings":
         expansion_score_threshold=f("expansion_score_threshold"),
         expanded_filter_floor=f("expanded_filter_floor"),
         qud_drift_threshold=f("qud_drift_threshold"),
+        qud_drift_doc_threshold=f("qud_drift_doc_threshold"),
         min_relevance_floor=f("min_relevance_floor"),
         relevance_ratio=f("relevance_ratio"),
         max_hits=i("max_hits"),
@@ -229,6 +232,14 @@ class Settings(BaseModel):
     # 'urd config set qud_drift_threshold <värde>'. Defaultvärdet här
     # är en provisorisk nivå för multilingual-e5-large MED prefix.
     qud_drift_threshold: float = 0.80
+
+    # Dokumentbaserad drift: när aktiva chunkar finns avgörs driften
+    # av högsta likheten mellan yttringen (query) och chunktexterna
+    # (passage) — se qud_drift.py. PROVISORISK nivå: båda likheterna
+    # loggas i debug/JSONL vid varje drift-mätning; läs av
+    # fördelningen efter en testkörning och justera med
+    # 'urd config set qud_drift_doc_threshold <värde>'.
+    qud_drift_doc_threshold: float = 0.80
 
     # Relevansbaserat hit-urval (ersätter hårdkodat top_k).
     # Strategin: alla hits med score ≥ max(min_relevance_floor,
