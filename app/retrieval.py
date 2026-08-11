@@ -359,6 +359,51 @@ _SYNTHESIS_MAX_HITS = {
 }
 
 
+def _ensure_comparison_balance(
+    selected: list[SourceHit],
+    all_hits: list[SourceHit],
+    label_sets: list[list[str]],
+) -> list[SourceHit]:
+    """
+    Balansera syntesunderlaget för en jämförelsefråga.
+
+    En jämförelse mellan X och Y kan inte göras om underlaget bara
+    innehåller material om X — vilket lätt händer när frågan som
+    helhet råkar likna X-materialet mest. För varje jämfört begrepp
+    (label_sets: en lista etiketter per begrepp) kontrolleras att
+    minst en vald källa nämner begreppet; saknas det hämtas den
+    högst rankade källan ur hela hit-listan som gör det.
+
+    Kompletteringar läggs till UTÖVER det ordinarie urvalet (kan
+    alltså överskrida operationstaket med som mest ett per begrepp)
+    — en jämförelse utan båda sidorna är värdelös oavsett tak.
+    """
+    if not label_sets:
+        return selected
+
+    result = list(selected)
+    selected_ids = {h.chunk_id for h in result}
+
+    for labels in label_sets:
+        if not labels:
+            continue
+        covered = any(
+            any(_contains_label(h.text, label) for label in labels)
+            for h in result
+        )
+        if covered:
+            continue
+        for hit in all_hits:  # sorterad fallande — första träffen är bäst
+            if hit.chunk_id in selected_ids:
+                continue
+            if any(_contains_label(hit.text, label) for label in labels):
+                result.append(hit)
+                selected_ids.add(hit.chunk_id)
+                break
+
+    return result
+
+
 def _select_hits_for_synthesis(
     hits: list[SourceHit],
     question_operation: str = "direct_lookup",
@@ -861,7 +906,20 @@ class RagService:
         # (se app/synonyms.py). Det påverkar bara BM25 — embedding
         # och cross-encoder-rerank arbetar på den ursprungliga frågan.
         synonym_additions = self.synonyms.expand_terms(search_text)
-        bm25_additions = _ordered_unique(operation_additions + synonym_additions)
+
+        # Broader-expansion: när frågan matchar ett begrepp i
+        # begreppsmodellen läggs de ÖVERORDNADE begreppens etiketter
+        # till BM25-söktexten. Dokument beskriver ofta det specifika
+        # under det generella ("adjungerad lektor" står under rubriken
+        # "adjungerad lärare") — utan expansionen missar ordagrann
+        # matchning subsumtionen. Precis som synonymexpansionen
+        # påverkar detta bara kandidatinsamlingen; cross-encodern
+        # bedömer mot den rena frågan.
+        broader_additions = self.concepts.broader_labels(question)
+
+        bm25_additions = _ordered_unique(
+            operation_additions + synonym_additions + broader_additions
+        )
 
         if bm25_additions:
             bm25_search_text = search_text + " " + " ".join(bm25_additions)
@@ -871,6 +929,48 @@ class RagService:
 
         # 3. Slå ihop till en unik kandidatpool
         candidates = _merge_candidates(semantic_hits, bm25_hits)
+
+        # 3b. Tvåspårig retrieval för jämförelsefrågor. En fråga som
+        # "skillnaden mellan X och Y" liknar som helhet ofta bara den
+        # ena sidans material — enkelspårig retrieval hämtar då X och
+        # jämförelsen faller. För de två första matchade begreppen körs
+        # därför varsitt kompletterande sökspår (semantiskt + BM25)
+        # riktat mot respektive begrepp. Cross-encodern bedömer som
+        # vanligt alla kandidater mot den ursprungliga frågan.
+        comparison_labels: list[list[str]] = []
+        comparison_track_debug: list[dict] = []
+        if (
+            question_operation == "comparison"
+            and matched_concept_ids
+            and len(matched_concept_ids) >= 2
+        ):
+            for concept_id in matched_concept_ids[:2]:
+                concept = self.concepts.concepts.get(concept_id)
+                if concept is None or not concept.labels:
+                    continue
+                label = concept.labels[0]
+                comparison_labels.append(list(concept.labels))
+
+                track_vector = self.embedder.embed_query(
+                    f"{rerank_text} {label}"
+                )
+                track_semantic = self.store.search(track_vector, limit=6)
+
+                track_bm25_text = label
+                if operation_additions:
+                    track_bm25_text += " " + " ".join(operation_additions)
+                track_bm25 = self.bm25_index.top_k(track_bm25_text, k=6)
+
+                before = len(candidates)
+                candidates = _merge_candidates(
+                    candidates, track_semantic + track_bm25
+                )
+                comparison_track_debug.append({
+                    "concept_id": concept_id,
+                    "label": label,
+                    "new_candidates": len(candidates) - before,
+                })
+
         t3 = time.perf_counter()
 
         # 4. Första reranking – använder den rena frågan, inte QUD-ankaret
@@ -975,6 +1075,12 @@ class RagService:
             hits,
             question_operation=question_operation,
         )
+        if comparison_labels:
+            hits_for_synthesis = _ensure_comparison_balance(
+                hits_for_synthesis,
+                hits,
+                comparison_labels,
+            )
         
         synthesis_result = synthesize(
             question,
@@ -1047,7 +1153,9 @@ class RagService:
                 "question_operation": question_operation,
                 "operation_additions": operation_additions,
                 "synonym_additions": synonym_additions,
+                "broader_additions": broader_additions,
                 "bm25_additions": bm25_additions,
+                "comparison_tracks": comparison_track_debug,
                 "related_concepts": related_concepts,
                 
                 "synthesis": synthesis_debug,
