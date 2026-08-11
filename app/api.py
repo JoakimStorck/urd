@@ -14,6 +14,7 @@ from app.intent import classify_utterance, Classification
 from app.social import handle_social
 from app.qud_drift import measure_drift
 from app.followup import rewrite_followup
+from app.question_rules import rule_based_operation
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,19 @@ def chat(req: ChatRequest) -> ChatResponse:
         # 1. Klassificera yttringen inom QUD-modellen.
         classification = classify_utterance(req.question, state, rag.llm)
 
+        # 1a. Regelbaserad föroperation: för frågeoperationer med
+        # entydiga språkliga markörer (comparison, aggregation) avgör
+        # deterministiska regler över LLM-klassificeringen. Intent
+        # berörs inte. Se question_rules.py.
+        operation_source = "llm"
+        rule_operation = rule_based_operation(req.question)
+        if rule_operation is not None:
+            if rule_operation != classification.question_operation:
+                classification.question_operation = rule_operation  # type: ignore[assignment]
+                operation_source = "rule_override"
+            else:
+                operation_source = "rule_confirmed"
+
         # 1b. QUD-drift-skydd: om klassificeraren säger related_to_qud
         # men aktuell yttring ligger semantiskt långt från aktiv QUD,
         # tolka om till new_main_question. Detta fångar fall där
@@ -178,6 +192,7 @@ def chat(req: ChatRequest) -> ChatResponse:
                 "intent": classification.intent,
                 "substyle": classification.substyle,
                 "question_operation": classification.question_operation,
+                "operation_source": operation_source,
                 "reason": classification.reason,
                 "used_fallback": classification.used_fallback,
             },
