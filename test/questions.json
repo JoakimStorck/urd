@@ -95,7 +95,10 @@
           "question": "Jag vill rekrytera en adjungerad lektor. Vilken rutin finns?",
           "expect": {
             "sequence_role": "opening",
-            "notes": "Bör klassas som new_main_question."
+            "notes": "Bör klassas som new_main_question. 'Adjungerad lektor' beskrivs i anställningsordningen under rubriken 'adjungerad lärare' — broader-expansionen (concepts.yaml: adjungerad_lektor ⊂ adjungerad_larare) ska överbrygga subsumtionen så att dokumentet nås i retrieval.",
+            "expected_docs_in_retrieval": [
+              "anstallningsordning"
+            ]
           }
         },
         {

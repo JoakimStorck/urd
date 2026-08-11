@@ -42,3 +42,37 @@ concepts:
     labels:
       - prefekt
       - Head of School
+
+  # Adjungerade lärarkategorier. Anställningsordningen beskriver dem
+  # samlat under rubriken "adjungerad lärare" — broader-relationen är
+  # det som låter en fråga om "adjungerad lektor" nå den sektionen
+  # (BM25-expansion med överordnade etiketter, se retrieval.py).
+  - id: adjungerad_larare
+    labels:
+      - adjungerad lärare
+      - adjungerade lärare
+      - adjunct teacher
+    broader:
+      - teacher
+
+  - id: adjungerad_lektor
+    labels:
+      - adjungerad lektor
+      - adjungerad universitetslektor
+      - adjunct senior lecturer
+    broader:
+      - adjungerad_larare
+
+  - id: adjungerad_adjunkt
+    labels:
+      - adjungerad adjunkt
+      - adjungerad universitetsadjunkt
+    broader:
+      - adjungerad_larare
+
+  - id: adjungerad_professor
+    labels:
+      - adjungerad professor
+      - adjunct professor
+    broader:
+      - adjungerad_larare
