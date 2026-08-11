@@ -158,26 +158,26 @@ def main() -> None:
     print()
 
     # 3. Cross-encoderns bedömning av dokumentets egna chunkar.
-    # filter_floor=-999 så att ALLA scores visas, även de som den
-    # riktiga vägen skulle filtrera bort (< 0).
+    # filter_floor=0.0 så att ALLA sannolikheter visas, även de som
+    # den riktiga vägen skulle filtrera bort (< 0.5).
     doc_chunks = [c for p in matches for c in rag.bm25_index.get_chunks_by_source(p)]
-    reranked, _ = rag.reranker.rerank(question, doc_chunks, filter_floor=-999.0)
+    reranked, _ = rag.reranker.rerank(question, doc_chunks, filter_floor=0.0)
     print(f"3. CROSS-ENCODER: dokumentets {len(doc_chunks)} chunkar mot frågan "
-          "(negativ score = filtreras bort i den riktiga kedjan):")
+          "(sannolikhet < 0.5 = filtreras bort i den riktiga kedjan):")
     for h in reranked[:10]:
-        marker = "  " if h.score >= 0 else "✗ "
-        print(f"   {marker}score={h.score:+.4f}  [{h.metadata.section_title}]")
+        marker = "  " if h.score >= 0.5 else "✗ "
+        print(f"   {marker}prob={h.score:.4f}  [{h.metadata.section_title}]")
     print()
 
     # Sammanfattande slutsats
     in_pool = bool(sem_ranks or bm25_ranks)
-    best_ce = reranked[0].score if reranked else float("-inf")
+    best_ce = reranked[0].score if reranked else 0.0
     print("SLUTSATS:")
     if not in_pool:
         print("  Dokumentet kommer inte in i kandidatpoolen — felet sitter i")
         print("  kandidatinsamlingen (embedding/BM25), inte i rerankern.")
-    elif best_ce < 0:
-        print("  Dokumentet når rerankern men alla chunkar får negativ score —")
+    elif best_ce < 0.5:
+        print("  Dokumentet når rerankern men ingen chunk når sannolikhet 0.5 —")
         print("  cross-encodern bedömer dem som irrelevanta för frågan.")
     else:
         print("  Dokumentet når rerankern och har minst en chunk med positiv")

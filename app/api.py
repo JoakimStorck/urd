@@ -72,7 +72,6 @@ def select_active_hits(hits: list[SourceHit], max_hits: int = 3) -> list[SourceH
 
     top = hits[0]
     top_doc = top.metadata.source_path
-    top_score = top.score
 
     selected = [top]
 
@@ -81,7 +80,9 @@ def select_active_hits(hits: list[SourceHit], max_hits: int = 3) -> list[SourceH
             break
         if hit.metadata.source_path != top_doc:
             continue
-        if hit.score < top_score * 0.5:
+        # Sannolikhetsskala: bara träffar som är mer sannolikt
+        # relevanta än inte får ingå i rework-underlaget.
+        if hit.score < 0.5:
             continue
         selected.append(hit)
 

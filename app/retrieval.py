@@ -5,6 +5,7 @@ Ersätter tidigare heuristisk omrankning med en neural reranker som
 generaliserar över frågetyper utan handskrivna bonusar.
 """
 
+import math
 import re
 import time
 from rank_bm25 import BM25Okapi
@@ -201,7 +202,7 @@ def _boost_evidence_from_text_support(
     supporting_documents: set[str] = set()
 
     for hit in text_hits:
-        if hit.score <= 0:
+        if hit.score < 0.5:
             continue
         path = hit.metadata.source_path
         if not path:
@@ -226,7 +227,11 @@ def _boost_evidence_from_text_support(
             applied = document_boost
             reason = "document_match"
 
-        new_score = original + applied
+        # Sannolikhetsskala: boosten adderas i sannolikhetspoäng och
+        # kapas vid 1.0 — ett evidensobjekt kan lyftas över tröskeln
+        # av sitt textstöd men aldrig hoppa förbi en tydligt bättre
+        # textchunk med mer än boostens storlek.
+        new_score = min(1.0, original + applied)
         debug.append({
             "file_name": hit.metadata.file_name,
             "section_title": section,
@@ -255,24 +260,24 @@ def _boost_evidence_from_text_support(
 
 def _select_evidence_hits(ranked: list[SourceHit], max_hits: int) -> list[SourceHit]:
     """
-    Välj evidensobjekt relativt sin egen toppscore, utan absolut golv.
+    Välj evidensobjekt på sannolikhetsskalan.
 
-    Evidensobjekt inom redan valda dokument ska få företräde även om de
-    individuellt är språkligt svagare än vanliga textchunkar. Därför
-    används en mild relativ cutoff och ett litet maxantal.
+    Evidensobjekt inom redan valda dokument ska få företräde även om
+    de individuellt är språkligt svagare än vanliga textchunkar —
+    därför räknas den textstödsboostade sannolikheten (satt i
+    _boost_evidence_from_text_support), och golvet är detsamma som
+    för textchunkar: 0.5 efter boost. Ett evidensobjekt som inte når
+    dit ens med boost är inte trovärdigt nog att bära svar.
     """
     if not ranked:
         return []
-
-    top_score = ranked[0].score
-    cutoff = top_score * 0.35
 
     selected: list[SourceHit] = []
     seen_keys: set[tuple[str, str | None, str]] = set()
 
     for hit in ranked:
-        if hit.score < cutoff and selected:
-            break
+        if hit.score < 0.5:
+            break  # sorterad fallande — inga fler över golvet
 
         key = (
             hit.metadata.source_path,
@@ -337,77 +342,90 @@ def _merge_with_evidence_precedence(
 
     return selected
 
-def _select_hits_for_synthesis(hits: list[SourceHit]) -> list[SourceHit]:
+# Operationsstyrt tak för antal källor till huvudsyntesen. En
+# direktfråga bärs bäst av ett fåtal tydliga källor; aggregering och
+# jämförelse kräver per definition bredare underlag — en lista som
+# är spridd över fem chunkar kan inte återges komplett från tre.
+# (Proprefekt-testfallet: retrieval fann dokumentet men urvalet gav
+# syntesen 1 chunk → ensatssvar, medan elaboration sedan grävde fram
+# 16 processteg ur samma dokument.)
+_SYNTHESIS_MAX_HITS = {
+    "direct_lookup": 3,
+    "relation_membership": 4,
+    "requirements": 4,
+    "process": 5,
+    "comparison": 6,
+    "aggregation": 8,
+}
+
+
+def _select_hits_for_synthesis(
+    hits: list[SourceHit],
+    question_operation: str = "direct_lookup",
+) -> list[SourceHit]:
     """
-    Välj en snävare delmängd av hits för huvudsyntesen baserat på score-gap.
+    Välj delmängden av hits som får bära huvudsvaret.
 
-    Tanken:
-    - UI kan visa flera källor
-    - huvudsvaret ska i första hand bäras av de tydligast relevanta
-      träffarna, så att LLM:n inte glider till svagare källor
+    Sannolikhetsskalan gör policyn enkel och tolkningsbar:
 
-    Policy:
-    - 1 hit om toppträffen sticker ut mycket tydligt
-    - 2 hits om toppträffen är tydlig men inte ensam
-    - annars 3 hits
+    - ta träffar med sannolikhet ≥ max(0.5, topp − 0.4) — inga
+      tveksamma källor bär svar, och en träff långt under toppen
+      släpps inte in bara för att taket tillåter det;
+    - upp till ett operationsberoende tak (_SYNTHESIS_MAX_HITS).
+
+    De gamla kvotreglerna (score_1 ≥ 2.0 × score_2) opererade på
+    logits där kvoter saknar mening, och ströp ofta syntesen till en
+    enda källa på godtyckliga grunder.
     """
     if not hits:
         return []
 
-    if len(hits) == 1:
-        return hits[:1]
+    max_hits = _SYNTHESIS_MAX_HITS.get(question_operation, 3)
+    floor = max(0.5, hits[0].score - 0.4)
 
-    score_1 = hits[0].score
-    score_2 = hits[1].score
+    selected = [h for h in hits if h.score >= floor][:max_hits]
+    if not selected:
+        selected = hits[:1]
+    return selected
 
-    if score_2 <= 0:
-        return hits[:1]
-
-    if score_1 >= score_2 * 2.0:
-        return hits[:1]
-
-    if score_1 >= score_2 * 1.35:
-        return hits[:2]
-
-    return hits[:3]
-    
 # ---------------------------------------------------------------------------
 # Dedup – undvik dubbletter från samma sektion
 # ---------------------------------------------------------------------------
 
+# Golv för pass 2-påfyllning: chunkar i spannet [0.35, select_min_prob)
+# är osäkra men inte avfärdade — de duger som kompletterande material
+# för elaboration, men inte som primärt svarsunderlag.
+_BACKFILL_MIN_PROB = 0.35
+
+
 def _dedup_and_select(ranked: list[SourceHit]) -> list[SourceHit]:
     """
-    Välj hits baserat på relevans (cross-encoder-score), med dedup
-    per (source_path, section_title).
+    Välj hits på sannolikhetsskalan, med dedup per
+    (source_path, section_title).
 
-    Urvalet görs i två passes:
+    Pass 1 (primärt): alla hits med sannolikhet ≥ select_min_prob
+    (default 0.5 — "mer sannolikt relevant än inte"), upp till
+    max_hits.
 
-    Pass 1 (primärt): ta alla hits med score ≥ max(min_relevance_floor,
-    top_score × relevance_ratio), upp till max_hits.
+    Pass 2 (kompletterande): om färre än min_desired_hits valdes,
+    fyll på till min_desired_hits med hits ≥ _BACKFILL_MIN_PROB.
+    Detta ger elaboration och liknande vägar material att arbeta
+    mot utan att släppa in chunkar cross-encodern aktivt dömt ut.
 
-    Pass 2 (kompletterande): om färre än min_desired_hits valdes i
-    pass 1 men det finns fler positiva hits kvar, fyll på upp till
-    min_desired_hits totalt. Detta ger elaboration och liknande
-    vägar tillräckligt material att arbeta mot, utan att införa
-    ett godtyckligt absolut golv. Endast positiva scores används
-    — vi vill inte släppa in chunkar som cross-encodern aktivt
-    dömt ut.
+    Den gamla relativa cutoffen (top × relevance_ratio) är borttagen:
+    på en sannolikhetsskala är det absoluta värdet redan en
+    bedömning, och kvoter mot en topp nära 1.0 blev i praktiken
+    verkningslösa.
     """
     if not ranked:
         return []
 
-    top_score = ranked[0].score
-    cutoff = max(
-        settings.min_relevance_floor,
-        top_score * settings.relevance_ratio,
-    )
-
     selected: list[SourceHit] = []
     seen_keys: set[tuple[str, str | None]] = set()
 
-    # Pass 1: välj allt över cutoff
+    # Pass 1: allt över primärgolvet
     for hit in ranked:
-        if hit.score < cutoff:
+        if hit.score < settings.select_min_prob:
             break  # listan är sorterad fallande
 
         key = (hit.metadata.source_path, hit.metadata.section_title)
@@ -420,16 +438,14 @@ def _dedup_and_select(ranked: list[SourceHit]) -> list[SourceHit]:
         if len(selected) >= settings.max_hits:
             break
 
-    # Pass 2: fyll på till min_desired_hits om tillräckligt svaga
-    # men positiva hits finns. Hoppar över de redan valda via dedup.
+    # Pass 2: fyll på till min_desired_hits med osäkra-men-inte-
+    # avfärdade hits.
     if len(selected) < settings.min_desired_hits:
         for hit in ranked:
             if len(selected) >= settings.min_desired_hits:
                 break
-            if hit.score <= 0:
-                break  # inga fler positiva kvar
-            if hit.score >= cutoff:
-                continue  # redan övervägd i pass 1
+            if hit.score < _BACKFILL_MIN_PROB:
+                break  # inga fler över backfill-golvet
             key = (hit.metadata.source_path, hit.metadata.section_title)
             if key in seen_keys:
                 continue
@@ -443,6 +459,14 @@ def _dedup_and_select(ranked: list[SourceHit]) -> list[SourceHit]:
 # Cross-encoder reranking
 # ---------------------------------------------------------------------------
 
+def _sigmoid(x: float) -> float:
+    """Logit → sannolikhet. Numeriskt stabil för stora |x|."""
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    ex = math.exp(x)
+    return ex / (1.0 + ex)
+
+
 class Reranker:
     def __init__(self) -> None:
         try:
@@ -453,26 +477,32 @@ class Reranker:
                 f"URD använder endast standardladdning utan remote code. "
                 f"Ursprungligt fel: {type(e).__name__}: {e}"
             ) from e
-            
+
     def rerank(
         self,
         question: str,
         hits: list[SourceHit],
-        filter_floor: float = 0.0,
+        filter_floor: float = 0.5,
     ) -> tuple[list[SourceHit], list[dict]]:
         """
         Rerankar kandidater med cross-encoder.
 
-        Returnerar (sorterade hits, debug-info). Kandidater med score
-        under filter_floor filtreras bort.
+        Cross-encoderns råa logits normaliseras genom sigmoid till
+        RELEVANSSANNOLIKHETER i (0, 1) — det är den skala som alla
+        SourceHit.score, trösklar och boostar nedströms använder.
+        Sigmoiden är monoton, så rangordningen är identisk med
+        logit-ordningen; vinsten är att trösklar blir tolkningsbara
+        (0.5 = "mer sannolikt relevant än inte") och att boostar och
+        kvoter inte längre opererar på en obunden skala.
 
-        filter_floor default är 0.0: cross-encodern bedömer chunkar
-        med negativ score som irrelevanta. För chunkar som kommer
-        från dokument som redan visat sig starkt relevanta (via
-        expansion) kan en lägre floor användas — t.ex. -1.0 — så
-        att borderline-relevanta sektioner från ett relevant dokument
-        inte filtreras bort trots att cross-encodern är osäker på dem
-        individuellt.
+        Returnerar (sorterade hits, debug-info). Kandidater med
+        sannolikhet under filter_floor filtreras bort. Default 0.5
+        motsvarar gamla logit-golvet 0.0. För chunkar från dokument
+        som redan visat sig relevanta (expansion, evidens) används
+        settings.expanded_min_prob som lägre golv.
+
+        Debug innehåller både rå logit (cross_encoder_score) och
+        sannolikheten (relevance_prob).
         """
         if not hits:
             return [], []
@@ -497,21 +527,23 @@ class Reranker:
         debug: list[dict] = []
 
         for ce_score, hit in scored:
+            prob = _sigmoid(float(ce_score))
             debug.append({
                 "file_name": hit.metadata.file_name,
                 "section_title": hit.metadata.section_title,
                 "document_title": hit.metadata.document_title,
                 "cross_encoder_score": round(float(ce_score), 4),
+                "relevance_prob": round(prob, 4),
                 "document_type": hit.metadata.document_type,
-                "filtered": float(ce_score) < filter_floor,
+                "filtered": prob < filter_floor,
             })
 
-            if float(ce_score) < filter_floor:
+            if prob < filter_floor:
                 continue
 
             reranked.append(SourceHit(
                 chunk_id=hit.chunk_id,
-                score=float(ce_score),
+                score=prob,
                 text=hit.text,
                 metadata=hit.metadata,
             ))
@@ -603,14 +635,14 @@ class RagService:
         reranked, debug = self.reranker.rerank(
             rerank_text,
             evidence_candidates,
-            filter_floor=-1.0,
+            filter_floor=settings.expanded_min_prob,
         )
 
         boosted, boost_debug = _boost_evidence_from_text_support(
             reranked,
             text_hits,
-            section_boost=settings.evidence_section_boost,
-            document_boost=settings.evidence_document_boost,
+            section_boost=settings.evidence_section_prob_boost,
+            document_boost=settings.evidence_document_prob_boost,
         )
 
         selected = _select_evidence_hits(boosted, max_hits=min(4, settings.max_hits))
@@ -853,11 +885,11 @@ class RagService:
         if expanded_new:
             # Andra rerankingpasset använder en lägre filtreringströskel
             # eftersom chunkarna kommer från dokument som redan visat
-            # sig starkt relevanta. Se expanded_filter_floor i config.
+            # sig starkt relevanta. Se expanded_min_prob i config.
             exp_reranked, exp_debug = self.reranker.rerank(
                 rerank_text,
                 expanded_new,
-                filter_floor=settings.expanded_filter_floor,
+                filter_floor=settings.expanded_min_prob,
             )
             # Slå ihop med första rankingen och sortera om
             all_reranked = reranked + exp_reranked
@@ -903,8 +935,8 @@ class RagService:
                 sources=[],
                 debug={
                     "selection": {
-                        "min_relevance_floor": settings.min_relevance_floor,
-                        "relevance_ratio": settings.relevance_ratio,
+                        "select_min_prob": settings.select_min_prob,
+                        "backfill_min_prob": _BACKFILL_MIN_PROB,
                         "max_hits": settings.max_hits,
                         "top_score": round(all_reranked[0].score, 3) if all_reranked else None,
                     },
@@ -939,7 +971,10 @@ class RagService:
         # 8. Syntes: enstegsformulering direkt från källorna
         t6 = time.perf_counter()
 
-        hits_for_synthesis = _select_hits_for_synthesis(hits)
+        hits_for_synthesis = _select_hits_for_synthesis(
+            hits,
+            question_operation=question_operation,
+        )
         
         synthesis_result = synthesize(
             question,
@@ -979,17 +1014,13 @@ class RagService:
             sources=hits_for_synthesis,
             debug={
                 "selection": {
-                    "min_relevance_floor": settings.min_relevance_floor,
-                    "relevance_ratio": settings.relevance_ratio,
+                    "select_min_prob": settings.select_min_prob,
+                    "backfill_min_prob": _BACKFILL_MIN_PROB,
                     "max_hits": settings.max_hits,
+                    "synthesis_max_hits": _SYNTHESIS_MAX_HITS.get(
+                        question_operation, 3
+                    ),
                     "top_score": round(all_reranked[0].score, 3) if all_reranked else None,
-                    "cutoff_used": round(
-                        max(
-                            settings.min_relevance_floor,
-                            all_reranked[0].score * settings.relevance_ratio,
-                        ),
-                        3,
-                    ) if all_reranked else None,
                 },
                 "synthesis_input": {
                     "num_hits_for_synthesis": len(hits_for_synthesis),
@@ -1215,13 +1246,10 @@ class RagService:
         if not reranked:
             return []
 
-        top_score = reranked[0].score
-        cutoff = max(
-            settings.min_relevance_floor,
-            top_score * settings.relevance_ratio,
-        )
-
-        selected = [h for h in reranked if h.score >= cutoff][: settings.max_hits]
+        # Sannolikhetsskala: samma primärgolv som huvudvägen.
+        selected = [
+            h for h in reranked if h.score >= settings.select_min_prob
+        ][: settings.max_hits]
         return selected
 
     def _expand_from_top_docs(
@@ -1240,13 +1268,14 @@ class RagService:
         Detta gör expansionen dokumentdriven i stället för att begränsa
         den till ett fast antal toppdokument.
 
-        score_threshold default läses från settings.expansion_score_threshold.
+        score_threshold default läses från settings.expansion_min_prob
+        (sannolikhetsskala).
         """
         if not reranked:
             return []
 
         if score_threshold is None:
-            score_threshold = settings.expansion_score_threshold
+            score_threshold = settings.expansion_min_prob
     
         seen_ids = {h.chunk_id for h in already_seen} | {h.chunk_id for h in reranked}
     

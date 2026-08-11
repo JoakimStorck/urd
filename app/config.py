@@ -29,16 +29,22 @@ DEFAULTS = {
     "qud_background_turns": 1,
     "social_history_turns": 4,
     "classification_history_turns": 2,
-    "expansion_score_threshold": 0.2,
-    "expanded_filter_floor": -1.0,
     "qud_drift_threshold": 0.80,
     "qud_drift_doc_threshold": 0.80,
-    "min_relevance_floor": 0.0,
-    "relevance_ratio": 0.3,
     "max_hits": 10,
     "min_desired_hits": 3,
-    "evidence_section_boost": 3.0,
-    "evidence_document_boost": 0.5,
+    # Sannolikhetsskala (sigmoid på cross-encoderns logits) — se
+    # kommentarer i Settings. Gamla logit-skalade nycklar
+    # (expansion_score_threshold, expanded_filter_floor,
+    # min_relevance_floor, relevance_ratio, evidence_*_boost) är
+    # avsiktligt BORTTAGNA: kvarvarande värden i äldre config.json
+    # ignoreras, så att gamla logit-tal inte tolkas som
+    # sannolikheter.
+    "select_min_prob": 0.5,
+    "expansion_min_prob": 0.55,
+    "expanded_min_prob": 0.27,
+    "evidence_section_prob_boost": 0.15,
+    "evidence_document_prob_boost": 0.05,
 }
 
 # Mapping: config-nyckel → miljövariabel
@@ -61,16 +67,15 @@ _ENV_KEYS = {
     "qud_background_turns": "QUD_BACKGROUND_TURNS",
     "social_history_turns": "SOCIAL_HISTORY_TURNS",
     "classification_history_turns": "CLASSIFICATION_HISTORY_TURNS",
-    "expansion_score_threshold": "EXPANSION_SCORE_THRESHOLD",
-    "expanded_filter_floor": "EXPANDED_FILTER_FLOOR",
     "qud_drift_threshold": "QUD_DRIFT_THRESHOLD",
     "qud_drift_doc_threshold": "QUD_DRIFT_DOC_THRESHOLD",
-    "min_relevance_floor": "MIN_RELEVANCE_FLOOR",
-    "relevance_ratio": "RELEVANCE_RATIO",
     "max_hits": "MAX_HITS",
     "min_desired_hits": "MIN_DESIRED_HITS",
-    "evidence_section_boost": "EVIDENCE_SECTION_BOOST",
-    "evidence_document_boost": "EVIDENCE_DOCUMENT_BOOST",
+    "select_min_prob": "SELECT_MIN_PROB",
+    "expansion_min_prob": "EXPANSION_MIN_PROB",
+    "expanded_min_prob": "EXPANDED_MIN_PROB",
+    "evidence_section_prob_boost": "EVIDENCE_SECTION_PROB_BOOST",
+    "evidence_document_prob_boost": "EVIDENCE_DOCUMENT_PROB_BOOST",
 }
 
 
@@ -154,16 +159,15 @@ def _build_settings() -> "Settings":
         qud_background_turns=i("qud_background_turns"),
         social_history_turns=i("social_history_turns"),
         classification_history_turns=i("classification_history_turns"),
-        expansion_score_threshold=f("expansion_score_threshold"),
-        expanded_filter_floor=f("expanded_filter_floor"),
         qud_drift_threshold=f("qud_drift_threshold"),
         qud_drift_doc_threshold=f("qud_drift_doc_threshold"),
-        min_relevance_floor=f("min_relevance_floor"),
-        relevance_ratio=f("relevance_ratio"),
         max_hits=i("max_hits"),
         min_desired_hits=i("min_desired_hits"),
-        evidence_section_boost=f("evidence_section_boost"),
-        evidence_document_boost=f("evidence_document_boost"),
+        select_min_prob=f("select_min_prob"),
+        expansion_min_prob=f("expansion_min_prob"),
+        expanded_min_prob=f("expanded_min_prob"),
+        evidence_section_prob_boost=f("evidence_section_prob_boost"),
+        evidence_document_prob_boost=f("evidence_document_prob_boost"),
     )
 
 
@@ -210,16 +214,32 @@ class Settings(BaseModel):
     social_history_turns: int = 4
     classification_history_turns: int = 2
 
-    # Retrieval-trösklar.
-    # expansion_score_threshold: minsta cross-encoder-score som krävs
-    #   för att ett dokument ska expanderas. Sänk för att vara mer
-    #   generös med borderline-relevanta dokument.
-    # expanded_filter_floor: lägsta score som tillåts för chunkar som
-    #   kommer från expanderade dokument. Negativt värde betyder att
-    #   även chunkar cross-encodern är osäker på släpps igenom,
-    #   eftersom dokumentet som helhet redan visat sig relevant.
-    expansion_score_threshold: float = 0.2
-    expanded_filter_floor: float = -1.0
+    # -------------------------------------------------------------
+    # Relevansscore i SANNOLIKHETSSKALA.
+    #
+    # Cross-encoderns råa logits normaliseras genom sigmoid till
+    # (0, 1) direkt i rerankern. Alla trösklar och boostar nedan är
+    # därmed tolkningsbara sannolikheter: 0.5 = "mer sannolikt
+    # relevant än inte", 0.27 = sigmoid(-1) ≈ "osäker men inte
+    # avfärdad". Tidigare blandades obundna logits, additiva boostar
+    # (+3.0 på en ±5-skala) och kvotregler som är meningslösa på
+    # logits — med följden att svaga träffar kunde tränga undan
+    # klart bättre, och att syntesen ströps till 1 källa på
+    # godtyckliga grunder.
+    # -------------------------------------------------------------
+
+    # Lägsta relevanssannolikhet för att en chunk ska väljas till
+    # svarsunderlaget (pass 1 i urvalet).
+    select_min_prob: float = 0.5
+
+    # expansion_min_prob: minsta sannolikhet som krävs för att ett
+    #   dokument ska expanderas (motsvarar gamla logit-tröskeln 0.2).
+    # expanded_min_prob: lägsta sannolikhet som tillåts för chunkar
+    #   från expanderade dokument — lägre än select_min_prob eftersom
+    #   dokumentet som helhet redan visat sig relevant (motsvarar
+    #   gamla logit-golvet -1.0).
+    expansion_min_prob: float = 0.55
+    expanded_min_prob: float = 0.27
 
     # QUD-drift-skydd. Om embedding-likhet mellan aktuell fråga och
     # current_qud_text understiger detta värde, överrids en
@@ -241,36 +261,27 @@ class Settings(BaseModel):
     # 'urd config set qud_drift_doc_threshold <värde>'.
     qud_drift_doc_threshold: float = 0.80
 
-    # Relevansbaserat hit-urval (ersätter hårdkodat top_k).
-    # Strategin: alla hits med score ≥ max(min_relevance_floor,
-    # top_score × relevance_ratio) tas med, upp till max_hits.
-    # Om färre än min_desired_hits passerar men fler finns med
-    # positiv score, tas upp till min_desired_hits totalt.
-    #
-    # min_relevance_floor = 0.0 innebär att vi litar på den relativa
-    # cutoff:en. Ett absolut golv används inte — det är den relativa
-    # fördelningen som avgör, precis som en människa skulle göra en
-    # bedömning baserat på hur tydligt bästa träffen sticker ut.
-    min_relevance_floor: float = 0.0
-    relevance_ratio: float = 0.3
+    # Tak respektive golv för antalet valda hits. Pass 2 i urvalet
+    # fyller på till min_desired_hits med chunkar i sannolikhets-
+    # spannet [0.35, select_min_prob) — osäkra men inte avfärdade —
+    # så att elaboration och liknande vägar får material att arbeta
+    # mot.
     max_hits: int = 10
     min_desired_hits: int = 3
 
-    # Evidensboost: evidensobjekt (tabeller, listor, figurer) får
-    # ett pålägg på sin cross-encoder-score när det finns stöd för
-    # att objektet är relevant för just denna fråga, utöver sin
-    # egen språkliga matchning. Pålägg adderas i två steg:
-    #   - evidence_section_boost: evidensobjektet delar sektion med
-    #     en högt rankad textchunk. Stark indikation att den
-    #     förklarande texten hör ihop med objektet.
-    #   - evidence_document_boost: evidensobjektet är från samma
-    #     dokument som en högt rankad textchunk. Svagare indikation
-    #     men ger en lätt förmån åt strukturella objekt i relevanta
-    #     dokument.
-    # Section-boost ges bara, document-boost bara om section inte
-    # redan matchade.
-    evidence_section_boost: float = 3.0
-    evidence_document_boost: float = 0.5
+    # Evidensboost i sannolikhetspoäng (adderas och kapas vid 1.0):
+    #   - evidence_section_prob_boost: evidensobjektet delar sektion
+    #     med en högt rankad textchunk. Stark indikation.
+    #   - evidence_document_prob_boost: samma dokument men annan
+    #     sektion. Svagare indikation.
+    # Section-boost och document-boost är ömsesidigt uteslutande
+    # (sektion vinner). Ett evidensobjekt kan därmed lyftas över
+    # urvalströskeln av sitt textstöd, men aldrig hoppa över en
+    # tydligt bättre textchunk med mer än boostens storlek — till
+    # skillnad från gamla additiva +3.0 på logitskalan, som i
+    # praktiken alltid vann.
+    evidence_section_prob_boost: float = 0.15
+    evidence_document_prob_boost: float = 0.05
 
 
 settings = _build_settings()
