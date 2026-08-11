@@ -368,7 +368,7 @@
     },
     {
       "name": "broadening_nytt_dokument",
-      "description": "Broadening som ska bäras av ett ANNAT dokument än det som bar föregående svar (arvodesbeslutet → anvisningarna för halvtidsseminarium). Med nuvarande hårda källfilter i broadening-retrieval är BM25 enda vägen till det nya dokumentet — testet mäter fas 2 punkt 7.",
+      "description": "Broadening som ska bäras av ett ANNAT dokument än det som bar föregående svar (arvodesbeslutet → anvisningarna för halvtidsseminarium). Mäter att rätt dokument nås oavsett hur turen klassificeras — se designbeslut i tur 2.",
       "turns": [
         {
           "question": "Vilket arvode får en opponent vid en disputation?",
@@ -388,11 +388,13 @@
           "expect": {
             "sequence_role": "followup",
             "should_find_sources": true,
-            "expected_intent": "related_to_qud",
             "expected_docs_in_retrieval": [
               "halvtidsseminarium"
             ],
-            "known_issue": "Broadening låser den semantiska sökningen till föregående svars dokument (hårt Qdrant-filter). Väntas fail på expected_docs_in_retrieval tills fas 2 punkt 7 är åtgärdad."
+            "expected_docs": [
+              "halvtidsseminarium"
+            ],
+            "notes": "DESIGNBESLUT 2026-08-11 (kvalitet före etikett): broadening som kräver ett ANNAT dokument än det som bar föregående svar klassas avsiktligt om till new_main_question av det dokumentbaserade driftmåttet — materialet vi läser bär inte frågan, alltså behandlas den som ny fråga och QUD:n sätts om. Framgångskriteriet är därför expected_docs/expected_docs_in_retrieval, inte intent."
           }
         }
       ]
