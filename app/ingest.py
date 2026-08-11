@@ -109,22 +109,69 @@ def _build_context_prefix(
     return "\n".join(parts) + "\n---\n"
 
 
+# Tillåtna klippunkter för chunkning: efter meningsslut följt av
+# whitespace, eller vid radbrytning (bevarar list- och tabellrader
+# hela). Positionerna är index DÄR nästa segment börjar.
+_CHUNK_BOUNDARY_RE = re.compile(r"(?<=[.!?:;])\s+|\n+")
+
+
 def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 150) -> list[str]:
+    """
+    Dela text i chunkar om ~chunk_size tecken med klipp på menings-
+    eller radgräns.
+
+    Tidigare klipptes texten på exakt teckenposition, vilket delade
+    ord och meningar mitt itu ("...decided by" | "y Vice Chancellor...").
+    Det skadar både cross-encoderns bedömning och syntesens källtrohet.
+
+    Nu väljs klippunkten som den sista tillåtna gränsen (meningsslut
+    eller radbrytning) i intervallet (start + chunk_size/2, start +
+    chunk_size]. Finns ingen gräns där — t.ex. en mycket lång mening
+    eller tabellrad — faller vi tillbaka på hårt klipp vid chunk_size,
+    så att chunkar aldrig växer obegränsat.
+
+    Överlappet är också gränsmedvetet: nästa chunk börjar vid den
+    första gränsen inom [klipp - overlap, klipp), så att upprepad
+    text alltid börjar på en hel mening/rad. Finns ingen gräns i
+    fönstret blir det inget överlapp — ett rent meningsklipp behöver
+    det sällan.
+    """
     text = normalize_chunk_text(text)
     if not text:
         return []
 
-    chunks = []
-    start = 0
     n = len(text)
+    if n <= chunk_size:
+        return [text]
+
+    boundaries = [m.end() for m in _CHUNK_BOUNDARY_RE.finditer(text)]
+
+    chunks: list[str] = []
+    start = 0
     while start < n:
         end = min(start + chunk_size, n)
+        if end < n:
+            candidates = [
+                b for b in boundaries
+                if start + chunk_size // 2 < b <= end
+            ]
+            if candidates:
+                end = candidates[-1]
+
         piece = text[start:end].strip()
         if piece:
             chunks.append(piece)
-        if end == n:
+
+        if end >= n:
             break
-        start = max(end - overlap, start + 1)
+
+        overlap_candidates = [
+            b for b in boundaries
+            if end - overlap <= b < end
+        ]
+        next_start = overlap_candidates[0] if overlap_candidates else end
+        start = max(next_start, start + 1)
+
     return chunks
 
 
