@@ -40,5 +40,5 @@ concepts:
 
   - id: prefekt
     labels:
-        prefekt
-        Head of School
+      - prefekt
+      - Head of School
