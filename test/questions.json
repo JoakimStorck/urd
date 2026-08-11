@@ -1,6 +1,6 @@
 {
-  "version": 3,
-  "description": "URD testbatteri v3 — uppdaterat efter rework-refaktoreringen (elaborate/verify i egen modul, verification använder smal supported/unclear/unsupported-modell, elaboration gör ny retrieval inom aktiva dokument).",
+  "version": 4,
+  "description": "URD testbatteri v4 — utökat i fas 1 med retrieval-metrik (expected_docs, expected_docs_in_retrieval), svarsinnehåll (answer_must_contain) och nya sekvenser för kända svagheter: synonymvarianter, jämförelse, aggregering och broadening till nytt dokument. Tidigare v3-sekvenser oförändrade.",
   "sequences": [
     {
       "name": "forskningsansokan_grund",
@@ -264,6 +264,135 @@
             "sequence_role": "opening",
             "known_issue": "Terminologigap: 'inskrivning' matchar inte dokumentens term 'antagning'.",
             "notes": "Regression-vakt. Förväntat utfall: abstain eller svagt svar. Om systemet PLÖTSLIGT hittar bra källor — utred vad som ändrats."
+          }
+        }
+      ]
+    },
+    {
+      "name": "synonym_lektor",
+      "description": "Synonymtest, del 1: frågan använder 'lektor' men anställningsordningen skriver dominant 'universitetslektor' (44 mot 21 förekomster). Utan fungerande synonymexpansion riskerar retrieval att missa eller ranka fel. Jämför med synonym_universitetslektor — båda ska landa i samma dokument.",
+      "turns": [
+        {
+          "question": "Vilka behörighetskrav gäller för att anställas som lektor?",
+          "expect": {
+            "sequence_role": "opening",
+            "should_find_sources": true,
+            "expected_docs_in_retrieval": [
+              "anstallningsordning"
+            ],
+            "expected_docs": [
+              "anstallningsordning"
+            ],
+            "notes": "Frågeoperationen bör bli requirements. Detta testfall mäter synonymgruppen [lektor, universitetslektor] i .urd/synonyms.yaml — den som var avstängd av YAML-felet före fas 0."
+          }
+        }
+      ]
+    },
+    {
+      "name": "synonym_universitetslektor",
+      "description": "Synonymtest, del 2 (kontrollpar): samma fråga med dokumentets egen term. Om denna lyckas men synonym_lektor misslyckas är det synonymgapet som mäts, inte retrieval i allmänhet.",
+      "turns": [
+        {
+          "question": "Vilka behörighetskrav gäller för att anställas som universitetslektor?",
+          "expect": {
+            "sequence_role": "opening",
+            "should_find_sources": true,
+            "expected_docs_in_retrieval": [
+              "anstallningsordning"
+            ],
+            "expected_docs": [
+              "anstallningsordning"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "jamforelse_lektor_professor",
+      "description": "Jämförelsefråga (comparison): kräver att material för två roller hämtas och ställs mot varandra. Väntas delvis misslyckas med nuvarande enkelspåriga retrieval och 1–3-hitsurval — testet finns för att göra det misslyckandet mätbart (fas 2: operationsstyrt urval, ev. tvåspårig retrieval).",
+      "turns": [
+        {
+          "question": "Vad är skillnaden i behörighetskrav mellan en universitetslektor och en professor?",
+          "expect": {
+            "sequence_role": "opening",
+            "should_find_sources": true,
+            "expected_docs": [
+              "anstallningsordning"
+            ],
+            "known_issue": "comparison v1 gör ingen tvåspårig retrieval — svaret kan sakna den ena rollens krav eller missa själva kontrasteringen."
+          }
+        }
+      ]
+    },
+    {
+      "name": "aggregering_arvoden",
+      "description": "Detaljbevarande med exakta belopp: svaret ska återge båda beloppen ur arvodebeslutet (opponent 10 000 kr, licentiat-/halvtidsgranskare 6 000 kr enligt C 2025/1205). Beloppen står i punktlista — testar även evidensobjektvägen.",
+      "turns": [
+        {
+          "question": "Vilka arvoden gäller för opponent och licentiatgranskare?",
+          "expect": {
+            "sequence_role": "opening",
+            "should_find_sources": true,
+            "expected_docs": [
+              "arvode opponent"
+            ],
+            "answer_must_contain": [
+              "10 000",
+              "6 000"
+            ],
+            "notes": "Om ett belopp saknas eller är förvanskat är det ett syntesfel, inte ett retrievalfel — kontrollera rerank_top i JSONL-spåret."
+          }
+        }
+      ]
+    },
+    {
+      "name": "aggregering_labbansvariga",
+      "description": "Listningsfråga (aggregation) mot ett dokument som i huvudsak är en uppräkning. Med nuvarande 1–3-hitsurval till syntesen väntas listan bli ofullständig — testet ska synliggöra gapet (fas 2: operationsstyrt urval).",
+      "turns": [
+        {
+          "question": "Vilka labbansvariga finns på IIT och för vilka labb?",
+          "expect": {
+            "sequence_role": "opening",
+            "should_find_sources": true,
+            "expected_docs": [
+              "Labbansvariga"
+            ],
+            "answer_must_contain": [
+              "Johan Olsson",
+              "Hans Ersson"
+            ],
+            "known_issue": "Aggregering kan bli ofullständig när bara delar av listan når syntesen. De två namnen (Fysik resp. Elkraft) är stickprov ur olika delar av listan."
+          }
+        }
+      ]
+    },
+    {
+      "name": "broadening_nytt_dokument",
+      "description": "Broadening som ska bäras av ett ANNAT dokument än det som bar föregående svar (arvodesbeslutet → anvisningarna för halvtidsseminarium). Med nuvarande hårda källfilter i broadening-retrieval är BM25 enda vägen till det nya dokumentet — testet mäter fas 2 punkt 7.",
+      "turns": [
+        {
+          "question": "Vilket arvode får en opponent vid en disputation?",
+          "expect": {
+            "sequence_role": "opening",
+            "should_find_sources": true,
+            "expected_docs": [
+              "arvode opponent"
+            ],
+            "answer_must_contain": [
+              "10 000"
+            ]
+          }
+        },
+        {
+          "question": "Vilka anvisningar gäller för halvtidsseminarier?",
+          "expect": {
+            "sequence_role": "followup",
+            "should_find_sources": true,
+            "expected_intent": "related_to_qud",
+            "expected_docs_in_retrieval": [
+              "halvtidsseminarium"
+            ],
+            "known_issue": "Broadening låser den semantiska sökningen till föregående svars dokument (hårt Qdrant-filter). Väntas fail på expected_docs_in_retrieval tills fas 2 punkt 7 är åtgärdad."
           }
         }
       ]
