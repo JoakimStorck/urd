@@ -9,6 +9,7 @@ os.environ["TYPER_USE_RICH"] = "0"
 
 import hashlib
 import json
+import logging
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -16,6 +17,19 @@ from pathlib import Path
 import requests
 import typer
 import uvicorn
+
+# Samma logghantering som i api.py: utan handler på rotloggern
+# försvinner appmodulernas varningar tyst — bl.a. ingest-lagrets
+# "Extraction failed", som är exakt den rad som förklarar varför
+# ett dokument saknas i indexet. Konfigurera bara om ingen handler
+# redan finns, och dämpa pratiga tredjepartsbibliotek.
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s: %(message)s",
+    )
+for _noisy in ("httpx", "huggingface_hub", "urllib3", "filelock"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 from app.config import settings
 from app.embeddings import Embedder
@@ -298,6 +312,11 @@ def ingest(
     skipped = 0
     updated = 0
     created = 0
+    # Dokument som inte kunde indexeras: (source_path, orsak).
+    # Rapporteras samlat i slutet — en enskild rad mitt i hundratals
+    # skip-rader är i praktiken osynlig, och ett dokument som saknas
+    # i indexet är osynligt för all sökning.
+    extraction_failures: list[tuple[str, str]] = []
 
     if sync_delete:
         fs_set = set(fs_map.keys())
@@ -325,7 +344,7 @@ def ingest(
         if needs_evidence_backfill:
             # Chunks är korrekt indexerade men evidens saknas. Lägg
             # bara till evidensobjekt, utan att röra chunks.
-            _, evidence_objects = ingest_path_with_evidence(path, root)
+            _, evidence_objects, _err = ingest_path_with_evidence(path, root)
             if evidence_objects:
                 evidence_vectors = embedder.embed_texts(
                     [e.evidence_text for e in evidence_objects]
@@ -353,9 +372,11 @@ def ingest(
             created += 1
             typer.echo(f"Ingest new: {source_path}")
 
-        chunks, evidence_objects = ingest_path_with_evidence(path, root)
+        chunks, evidence_objects, extract_error = ingest_path_with_evidence(path, root)
         if not chunks:
-            typer.echo(f"Hoppar över {path} (inga chunkar)")
+            reason = extract_error or "inga chunkar producerades"
+            typer.echo(f"MISSLYCKADES: {path} — {reason}")
+            extraction_failures.append((source_path, reason))
             continue
 
         vectors = embedder.embed_texts([c.text for c in chunks])
@@ -377,6 +398,17 @@ def ingest(
         f"Klart. Processade dokument: {total_docs}, chunkar: {total_chunks}, "
         f"skapade: {created}, uppdaterade: {updated}, hoppade över: {skipped}"
     )
+
+    if extraction_failures:
+        typer.echo("")
+        typer.echo(f"VARNING: {len(extraction_failures)} dokument kunde INTE indexeras:")
+        for failed_path, reason in extraction_failures:
+            typer.echo(f"  - {failed_path}")
+            typer.echo(f"      orsak: {reason}")
+        typer.echo(
+            "Dessa dokument är osynliga för all sökning tills de indexerats. "
+            "Ej indexerade dokument försöks om automatiskt vid nästa 'urd ingest'."
+        )
 
     # Om servern körs, uppdatera BM25-indexet
     if total_docs > 0 and _server_is_available("http://127.0.0.1:8000"):

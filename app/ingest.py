@@ -23,6 +23,11 @@ class RawDocument:
     path: Path
     text: str
     title: str | None = None
+    # Satt när extraktionen misslyckades med ett undantag. Tom text
+    # UTAN error betyder att konverteringen lyckades men inte gav
+    # någon text (t.ex. helt bildbaserat dokument utan OCR-träff).
+    # Skillnaden är diagnostiskt viktig och ska visas för användaren.
+    error: str | None = None
 
 
 @dataclass
@@ -66,7 +71,12 @@ def extract_text_with_fallback(path: Path) -> RawDocument:
         logging.getLogger(__name__).warning(
             "Extraction failed for %s: %s: %s", path.name, type(e).__name__, e
         )
-        return RawDocument(path=path, text="", title=path.stem)
+        return RawDocument(
+            path=path,
+            text="",
+            title=path.stem,
+            error=f"{type(e).__name__}: {e}",
+        )
 
 
 def normalize_chunk_text(text: str) -> str:
@@ -483,10 +493,15 @@ def ingest_evidence_path(
 def ingest_path_with_evidence(
     path: Path,
     docs_root: Path,
-) -> tuple[list[DocumentChunk], list[EvidenceObject]]:
+) -> tuple[list[DocumentChunk], list[EvidenceObject], str | None]:
     """
-    Samlad ingest: parsar dokumentet en gång och returnerar både
-    textchunkar och evidensobjekt.
+    Samlad ingest: parsar dokumentet en gång och returnerar
+    (textchunkar, evidensobjekt, felorsak).
+
+    Felorsaken är None när allt gick bra. Vid tomt resultat skiljer
+    den på extraktionsundantag ("<Undantagstyp>: ...") och tyst tom
+    text ("extraktionen gav ingen text") — ett dokument som hamnar
+    utanför indexet ska aldrig göra det osynligt.
 
     Effektivare än att köra ingest_path och ingest_evidence_path
     separat, eftersom docling-konverteringen, sektionsindelningen
@@ -495,7 +510,8 @@ def ingest_path_with_evidence(
     """
     raw = extract_text_with_fallback(path)
     if not raw.text.strip():
-        return [], []
+        reason = raw.error or "extraktionen gav ingen text (tomt konverteringsresultat)"
+        return [], [], reason
 
     document_title = infer_document_title(raw)
     category = infer_category(path, docs_root)
@@ -517,4 +533,4 @@ def ingest_path_with_evidence(
         source_fingerprint=source_fingerprint,
     )
 
-    return chunks, evidence_objects
+    return chunks, evidence_objects, None
