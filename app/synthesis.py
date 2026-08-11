@@ -133,6 +133,13 @@ GRUNDREGLER FÖR KORREKTHET:
   det uttryckligen.
 - Om delar av frågan besvaras av källorna men andra delar inte gör det,
   besvara bara den stödda delen och markera kort vad som inte framgår.
+- Om frågan efterfrågar FLERA uppgifter (flera roller, belopp, delar
+  eller kategorier): besvara varje del som har stöd i källorna.
+  Utelämna ALDRIG en del av svaret som faktiskt står i källorna —
+  ett halvt svar på en tvådelad fråga är ett fel, inte en förkortning.
+- Om olika källor bär olika delar av svaret (t.ex. olika delar av en
+  lista eller olika roller): använd samtliga källor och slå ihop
+  delarna till en helhet.
 
 GRUNDREGLER FÖR RELEVANS:
 
