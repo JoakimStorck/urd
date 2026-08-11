@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -5,6 +6,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
+from app.config_validation import validate_config_files, format_report_lines
 from app.schemas import ChatRequest, ChatResponse, SourceHit
 from app.retrieval import RagService
 from app.session_state import SessionStore
@@ -13,9 +15,31 @@ from app.social import handle_social
 from app.qud_drift import measure_drift
 from app.followup import rewrite_followup
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="Local IIT URD")
 rag = RagService()
 sessions = SessionStore()
+
+# Validera instansens konfigurationsfiler vid uppstart. Trasiga filer
+# stoppar inte servern (tyst fallback i loaders gäller fortfarande),
+# men status ska alltid vara synlig: en rad per fil i startloggen och
+# samma bild i /health. Se app/config_validation.py för bakgrund.
+_config_report = validate_config_files(
+    synonyms_path=settings.synonyms_path,
+    concepts_path=settings.concepts_path,
+    question_operations_path=settings.question_operations_path,
+)
+for _line in format_report_lines(_config_report):
+    if _line.startswith("[FEL]") or _line.strip().startswith("fel:"):
+        logger.warning("konfig: %s", _line)
+    else:
+        logger.info("konfig: %s", _line)
+if not _config_report.ok:
+    logger.warning(
+        "konfig: en eller flera konfigurationsfiler har FEL — kör "
+        "'urd config validate' för detaljer. Berörda funktioner är avstängda."
+    )
 
 static_dir = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -51,8 +75,11 @@ def index():
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict:
+    return {
+        "status": "ok",
+        "config_files": _config_report.as_dict(),
+    }
 
 
 @app.post("/refresh")

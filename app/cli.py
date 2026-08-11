@@ -760,7 +760,7 @@ def stats(
 def config_cmd(
     action: str = typer.Argument(
         "show",
-        help="Åtgärd: show, get, set, reset",
+        help="Åtgärd: show, get, set, reset, validate",
     ),
     key: str | None = typer.Argument(
         None,
@@ -837,9 +837,29 @@ def config_cmd(
         save_config_file(dict(DEFAULTS))
         typer.echo(f"Återställde {CONFIG_FILE} till defaults.")
 
+    elif action == "validate":
+        from app.config_validation import validate_config_files, format_report_lines
+
+        report = validate_config_files(
+            synonyms_path=settings.synonyms_path,
+            concepts_path=settings.concepts_path,
+            question_operations_path=settings.question_operations_path,
+        )
+        for line in format_report_lines(report):
+            typer.echo(line)
+        typer.echo("")
+        if report.ok:
+            typer.echo("Konfigurationen är giltig.")
+        else:
+            typer.echo(
+                "Konfigurationen har FEL. Funktioner med felmarkerade filer "
+                "är helt eller delvis avstängda tills felen rättas."
+            )
+            raise typer.Exit(code=1)
+
     else:
         typer.echo(f"Okänd åtgärd: {action}")
-        typer.echo("Tillgängliga: show, get, set, reset")
+        typer.echo("Tillgängliga: show, get, set, reset, validate")
         raise typer.Exit(code=1)
 
 
