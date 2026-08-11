@@ -75,6 +75,8 @@ Ditt uppdrag är att BYGGA VIDARE på det tidigare svaret med material
 ur dessa nya källor. Upprepa INTE det som redan sades.
 
 KRITISKT för svarets användbarhet:
+- Svara ALLTID på svenska, även när källorna är skrivna på engelska.
+  Blanda inte språk i samma svar.
 - BEVARA ALLA KONKRETA DETALJER från källorna: belopp, gränsvärden,
   roller, tidsfrister, procedurer, villkor, undantag.
 - OM EN KÄLLA INNEHÅLLER EN NUMRERAD LISTA: återge ALLA poster i
