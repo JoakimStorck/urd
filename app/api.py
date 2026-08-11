@@ -145,6 +145,12 @@ def chat(req: ChatRequest) -> ChatResponse:
                 state.current_qud_text,
                 rag.embedder,
                 threshold=settings.qud_drift_threshold,
+                # Dokumentbaserad drift: jämför yttringen även mot
+                # texterna som bar de senaste svaren (fråga-mot-
+                # passage). När sådana finns avgör de beslutet —
+                # se qud_drift.py för motiveringen.
+                active_hit_texts=[h.text for h in state.active_hits],
+                doc_threshold=settings.qud_drift_doc_threshold,
             )
             if drift is not None and drift.drift_detected:
                 classification = Classification(
@@ -194,6 +200,9 @@ def chat(req: ChatRequest) -> ChatResponse:
             base_debug["qud_drift"] = {
                 "similarity": drift.similarity,
                 "threshold": drift.threshold,
+                "doc_similarity": drift.doc_similarity,
+                "doc_threshold": drift.doc_threshold,
+                "decided_by": drift.decided_by,
                 "drift_detected": drift.drift_detected,
             }
 
@@ -253,6 +262,13 @@ def chat(req: ChatRequest) -> ChatResponse:
 
             response.session_id = state.session_id
             return response
+
+        # Spara föregående QUD innan den ev. skrivs över — den behövs
+        # av den kontextuella fallbacken nedan, som ger en tur som
+        # berövats sin kontext (falsk drift, klassificerarflipp) en
+        # andra chans MED kontexten innan systemet abstainar.
+        prev_qud_text = state.current_qud_text
+        prev_qud_index = state.current_qud_turn_index
 
         # 2c. Ny huvudfråga: sätt QUD till ordagrann originaltext FÖRE
         # retrieval, så att den registreras även om den här turen
@@ -316,6 +332,56 @@ def chat(req: ChatRequest) -> ChatResponse:
             matched_concept_ids=matched_concept_ids,
         )
 
+        # Kontextuell fallback vid abstain. En elliptisk följdfråga
+        # ("Vad gäller för medfinansiering?") är per definition bara
+        # begriplig mot samtalets aktiva huvudfråga. Om en sådan tur
+        # har berövats sin kontext — genom drift-överridning eller en
+        # klassificerarflipp till new_main_question — och det
+        # kontextlösa försöket abstainar, körs retrieval om EN gång
+        # med föregående QUD som ankare och samtalsbakgrund, innan
+        # systemet ger upp. Fallbacken kan aldrig göra utfallet sämre
+        # (den aktiveras bara när alternativet är ett tomt svar) och
+        # cross-encodern bedömer fortfarande mot den rena frågan, så
+        # kontexten breddar kandidatpoolen utan att förvränga
+        # relevansbedömningen.
+        #
+        # Villkor: första försöket abstainade, det finns en tidigare
+        # QUD att ankra mot, och första försöket saknade antingen
+        # QUD-ankare eller körde med omskriven retrievalfråga (vars
+        # omskrivning kan ha varit problemet).
+        context_fallback: dict | None = None
+        if (
+            (response.debug or {}).get("abstained")
+            and prev_qud_text
+            and (qud_anchor is None or retrieval_question is not None)
+        ):
+            retry = rag.answer(
+                req.question,
+                qud_anchor=prev_qud_text,
+                background_turns=list(state.turns),
+                background_max_turns=settings.qud_background_turns,
+                question_operation=classification.question_operation,
+                matched_concept_ids=matched_concept_ids,
+            )
+            rescued = not (retry.debug or {}).get("abstained", False)
+            context_fallback = {
+                "triggered": True,
+                "rescued": rescued,
+                "prev_qud": prev_qud_text,
+            }
+            if rescued:
+                response = retry
+                # Turen visade sig vara kontextberoende — den föregående
+                # huvudfrågan är fortfarande samtalets QUD. Återställ den
+                # så att nästa tur ankras rätt.
+                if classification.intent == "new_main_question":
+                    state.current_qud_text = prev_qud_text
+                    state.current_qud_turn_index = prev_qud_index
+                    base_debug["qud"] = {
+                        "text": state.current_qud_text,
+                        "age_turns": state.qud_age_turns,
+                    }
+
         # Uppdatera sessionsstate med dokumentkällorna OCH de faktiska
         # hits som bar svaret — så att nästa elaboration/verification
         # kan återanvända dem.
@@ -338,6 +404,8 @@ def chat(req: ChatRequest) -> ChatResponse:
             response.debug = {}
         response.debug.update(base_debug)
         response.debug["path"] = path_label
+        if context_fallback is not None:
+            response.debug["context_fallback"] = context_fallback
         if background_max_turns > 0:
             response.debug["background_max_turns"] = background_max_turns
         if retrieval_question is not None:
