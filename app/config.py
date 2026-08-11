@@ -19,6 +19,7 @@ DEFAULTS = {
     "reranker_model": "jeffwan/mmarco-mMiniLMv2-L12-H384-v1",
     "ollama_model": "mistral-nemo",
     "preprocess_ollama_model": "mistral",
+    "llm_num_ctx": 8192,
     "preprocess_semantic_version": "v1",
     "top_k": 3,
     "chunk_size": 1200,
@@ -49,6 +50,7 @@ _ENV_KEYS = {
     "reranker_model": "RERANKER_MODEL",
     "ollama_model": "OLLAMA_MODEL",
     "preprocess_ollama_model": "PREPROCESS_OLLAMA_MODEL",
+    "llm_num_ctx": "LLM_NUM_CTX",
     "preprocess_semantic_version": "PREPROCESS_SEMANTIC_VERSION",
     "top_k": "TOP_K",
     "chunk_size": "CHUNK_SIZE",
@@ -140,6 +142,7 @@ def _build_settings() -> "Settings":
         reranker_model=s("reranker_model"),
         ollama_model=s("ollama_model"),
         preprocess_ollama_model=s("preprocess_ollama_model"),
+        llm_num_ctx=i("llm_num_ctx"),
         preprocess_semantic_version=s("preprocess_semantic_version"),
         top_k=i("top_k"),
         chunk_size=i("chunk_size"),
@@ -175,6 +178,15 @@ class Settings(BaseModel):
 
     ollama_model: str = "mistral-nemo"
     preprocess_ollama_model: str = "mistral"
+
+    # Kontextfönster för Ollama-anropen. Ollama har ett lågt default
+    # (2048–4096 tokens beroende på version/modellfil) och TRUNKERAR
+    # TYST prompt som inte får plats — vilket ger exakt de symptom
+    # som annars ser ut som modellfel: fabrikation, ignorerade
+    # instruktioner, svar som bara bygger på delar av källorna.
+    # Därför sätts num_ctx alltid explicit. 8192 rymmer huvudsyntesens
+    # och rework-vägarnas prompter med god marginal för mistral-nemo.
+    llm_num_ctx: int = 8192
 
     preprocess_semantic_version: str = "v1"
 

@@ -92,6 +92,11 @@ Text:
                 ],
                 options={
                     "temperature": 0.0,
+                    # Explicit kontextfönster — se kommentar i config.py
+                    # (llm_num_ctx). Sektionstext klipps vid
+                    # preprocess_max_section_chars, men prompten som
+                    # helhet ska aldrig riskera tyst trunkering.
+                    "num_ctx": settings.llm_num_ctx,
                 },
                 format="json",
             )
