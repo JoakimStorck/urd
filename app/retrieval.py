@@ -21,6 +21,7 @@ from app.schemas import ChatResponse, SourceHit
 from app.synonyms import load_synonyms
 from app.concepts import load_concepts
 from app.question_operations import load_question_operations
+from app.source_guard import check_answer as run_source_guard, format_warning
 
 # ---------------------------------------------------------------------------
 # Boilerplate-filter (behålls – detta är dokumentspecifikt, inte heuristisk
@@ -1090,8 +1091,23 @@ class RagService:
             background_max_turns=background_max_turns,
             question_operation=question_operation,
         )
+
+        # Mekanisk källvakt: deterministisk efterkontroll av svaret
+        # mot exakt de källtexter syntesen fick. Körs FÖRE
+        # relaterade begrepp-suffixet så att bara syntesens egen text
+        # granskas. Obelagda tal ger en synlig varningsrad; hela
+        # rapporten går till debug/JSONL. Se source_guard.py.
+        guard_report = run_source_guard(
+            synthesis_result.answer,
+            [h.text for h in hits_for_synthesis],
+        )
+        guard_warning = format_warning(guard_report)
+        if guard_warning:
+            synthesis_result.answer = (
+                synthesis_result.answer.rstrip() + "\n\n" + guard_warning
+            )
         t7 = time.perf_counter()
-        
+
         related_concepts = self._related_concepts_in_selected_docs(question, hits)
         if related_concepts:
             synthesis_result.answer = (
@@ -1157,6 +1173,7 @@ class RagService:
                 "bm25_additions": bm25_additions,
                 "comparison_tracks": comparison_track_debug,
                 "related_concepts": related_concepts,
+                "source_guard": guard_report.as_dict(),
                 
                 "synthesis": synthesis_debug,
                 "timing_s": {
