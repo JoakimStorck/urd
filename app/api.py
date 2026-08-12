@@ -68,19 +68,25 @@ _docs_root = settings.docs_path.resolve()
 
 
 def select_active_hits(hits: list[SourceHit], max_hits: int = 3) -> list[SourceHit]:
+    """
+    Välj de träffar som blir samtalets aktiva kontext (QUD-underlag,
+    rework-material, driftmätningens dokumentreferens).
+
+    Åtgärd 4.1: inget toppdokumentlås. Tidigare kastades alla träffar
+    från andra dokument än topphiten, vilket gjorde att flerdokumentsvar
+    (jämförelser, aggregeringar) fick en aktiv kontext som bara täckte
+    ett av dokumenten — följdfrågor mot de andra dokumenten tappade då
+    sitt underlag. Sannolikhetsgolvet 0.5 behålls: bara träffar som är
+    mer sannolikt relevanta än inte får ingå.
+    """
     if not hits:
         return []
 
-    top = hits[0]
-    top_doc = top.metadata.source_path
-
-    selected = [top]
+    selected = [hits[0]]
 
     for hit in hits[1:]:
         if len(selected) >= max_hits:
             break
-        if hit.metadata.source_path != top_doc:
-            continue
         # Sannolikhetsskala: bara träffar som är mer sannolikt
         # relevanta än inte får ingå i rework-underlaget.
         if hit.score < 0.5:
