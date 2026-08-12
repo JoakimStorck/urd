@@ -1097,9 +1097,33 @@ class RagService:
         # relaterade begrepp-suffixet så att bara syntesens egen text
         # granskas. Obelagda tal ger en synlig varningsrad; hela
         # rapporten går till debug/JSONL. Se source_guard.py.
+        # Kontrollunderlaget är ALLT syntesen faktiskt såg: källtexterna
+        # plus källhuvudenas metadata (dokumentdatum). Utan datumen
+        # larmar vakten falskt när svaret citerar "daterad 2025-04-29"
+        # ur källhuvudet — datumet är legitimt, det kommer bara inte
+        # ur chunktexten.
+        guard_texts = [h.text for h in hits_for_synthesis]
+        guard_texts.extend(
+            f"daterad {h.metadata.document_date}"
+            for h in hits_for_synthesis
+            if h.metadata.document_date
+        )
+        # Sektionsrubriker och filnamn visas också i källhuvudena —
+        # ett svar som citerar dem ("avsnitt 11.1", dokumentnamnets
+        # datumled) fabricerar inte.
+        guard_texts.extend(
+            h.metadata.section_title
+            for h in hits_for_synthesis
+            if h.metadata.section_title
+        )
+        guard_texts.extend(
+            h.metadata.file_name
+            for h in hits_for_synthesis
+            if h.metadata.file_name
+        )
         guard_report = run_source_guard(
             synthesis_result.answer,
-            [h.text for h in hits_for_synthesis],
+            guard_texts,
         )
         guard_warning = format_warning(guard_report)
         if guard_warning:
