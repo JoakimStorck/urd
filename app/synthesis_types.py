@@ -48,3 +48,6 @@ class SynthesisResult:
     used_fallback: bool = False
     fallback_reason: str | None = None
     timing_s: dict = field(default_factory=dict)
+    # Åtgärd 4.3: antal stycken som klipptes bort som upprepning av
+    # tidigare svar. Sätts endast av elaborate(); 0 för övriga vägar.
+    num_trimmed_paragraphs: int = 0

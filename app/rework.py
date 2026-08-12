@@ -65,6 +65,77 @@ def _format_sources(hits: list[SourceHit]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Mekanisk upprepningsklippning (åtgärd 4.3)
+#
+# Prompten säger "Upprepa INTE det som redan sades", men en 12B-modell
+# lyder inte alltid. I stället för att förlita oss på lydnad klipper vi
+# deterministiskt: stycken i elaborationssvaret vars token-shingles till
+# övervägande del redan förekommer i föregående svar tas bort efteråt.
+# Shingle-jämförelse (n-gram av tokens) är okänslig för småskillnader i
+# interpunktion och citattecken men träffar inte legitima korta
+# återkopplingar ("Utöver det jag nämnde tidigare...") eftersom korta
+# stycken undantas helt.
+# ---------------------------------------------------------------------------
+
+_SHINGLE_N = 6
+_REPEAT_OVERLAP_THRESHOLD = 0.75
+_MIN_TOKENS_FOR_TRIM = 12
+
+
+def _shingles(text: str, n: int = _SHINGLE_N) -> set[tuple[str, ...]]:
+    tokens = re.findall(r"\w+", text.casefold(), flags=re.UNICODE)
+    if len(tokens) < n:
+        return set()
+    return {tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1)}
+
+
+def _strip_repeated_paragraphs(answer: str, previous_answer: str) -> tuple[str, int]:
+    """
+    Ta bort stycken i answer som till ≥75 % består av 6-gram som redan
+    finns i previous_answer. Korta stycken (<12 tokens) rörs aldrig —
+    de är rubriker, övergångar eller källrader, inte upprepat innehåll.
+
+    Returnerar (klippt svar, antal borttagna stycken). Om ALLT skulle
+    klippas returneras originalet oförändrat med räknaren satt — då är
+    hela svaret en upprepning och anroparen bör hellre visa det (eller
+    abstaina) än att visa tom text.
+    """
+    prev_shingles = _shingles(previous_answer)
+    if not prev_shingles:
+        return answer, 0
+
+    paragraphs = re.split(r"\n\s*\n", answer)
+    kept: list[str] = []
+    removed = 0
+
+    for para in paragraphs:
+        tokens = re.findall(r"\w+", para.casefold(), flags=re.UNICODE)
+        if len(tokens) < _MIN_TOKENS_FOR_TRIM:
+            kept.append(para)
+            continue
+        para_shingles = _shingles(para)
+        if not para_shingles:
+            kept.append(para)
+            continue
+        overlap = len(para_shingles & prev_shingles) / len(para_shingles)
+        if overlap >= _REPEAT_OVERLAP_THRESHOLD:
+            removed += 1
+            logger.info(
+                "Elaboration: klippte upprepat stycke (överlapp %.0f%%): %r",
+                overlap * 100,
+                para[:120],
+            )
+            continue
+        kept.append(para)
+
+    trimmed = "\n\n".join(p for p in kept if p.strip()).strip()
+    if not trimmed:
+        # Hela svaret var upprepning — behåll originalet hellre än tomhet.
+        return answer, removed
+    return trimmed, removed
+
+
+# ---------------------------------------------------------------------------
 # Elaboration — direktprompt, ingen mellanrepresentation
 # ---------------------------------------------------------------------------
 
@@ -148,11 +219,18 @@ def elaborate(
     answer = llm.generate(prompt)
     t1 = time.perf_counter()
 
+    # Åtgärd 4.3: mekanisk klippning av stycken som upprepar tidigare
+    # svar. Prompten ber modellen låta bli, men det räcker inte alltid.
+    answer, num_trimmed = _strip_repeated_paragraphs(answer, previous_answer)
+    if num_trimmed:
+        logger.info("Elaboration: %d upprepade stycken borttagna.", num_trimmed)
+
     return SynthesisResult(
         answer=answer,
         verification=None,
         used_fallback=False,
         timing_s={"elaborate": round(t1 - t0, 3)},
+        num_trimmed_paragraphs=num_trimmed,
     )
 
 

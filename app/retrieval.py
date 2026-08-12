@@ -1273,8 +1273,47 @@ class RagService:
             sources_to_show = new_hits if new_hits else hits
             num_new = len(new_hits)
 
+            # Mekanisk källvakt även på elaborationsvägen — samma
+            # kontrollunderlag som huvudvägen: källtexterna plus
+            # källhuvudenas metadata (datum, sektionsrubrik, filnamn).
+            # Elaboration är den väg där Nemo hittills producerat de
+            # grövsta felen (inverterad delegationsordning) utan att
+            # någon vakt slagit larm.
+            guard_report = None
+            if new_hits:
+                guard_texts = [h.text for h in new_hits]
+                guard_texts.extend(
+                    f"daterad {h.metadata.document_date}"
+                    for h in new_hits
+                    if h.metadata.document_date
+                )
+                guard_texts.extend(
+                    h.metadata.section_title
+                    for h in new_hits
+                    if h.metadata.section_title
+                )
+                guard_texts.extend(
+                    h.metadata.file_name
+                    for h in new_hits
+                    if h.metadata.file_name
+                )
+                # Det tidigare svaret är legitim referenspunkt för en
+                # elaboration ("utöver de 15 000 kr jag nämnde...") —
+                # tal därifrån är inte fabricerade av den här turen.
+                guard_texts.append(previous_answer)
+                guard_report = run_source_guard(
+                    synthesis_result.answer,
+                    guard_texts,
+                )
+                guard_warning = format_warning(guard_report)
+                if guard_warning:
+                    synthesis_result.answer = (
+                        synthesis_result.answer.rstrip() + "\n\n" + guard_warning
+                    )
+
         elif mode == "verification":
             new_hits = []
+            guard_report = None
             t1 = time.perf_counter()
 
             synthesis_result = verify(
@@ -1308,6 +1347,10 @@ class RagService:
                 synthesis_debug["verification_json"] = report.raw_json
         if synthesis_result.timing_s:
             synthesis_debug["timing_s"] = synthesis_result.timing_s
+        if synthesis_result.num_trimmed_paragraphs:
+            synthesis_debug["num_trimmed_paragraphs"] = (
+                synthesis_result.num_trimmed_paragraphs
+            )
 
         # Abstain-bedömning skiljer sig mellan elaboration och verification.
         # Elaboration: om ingen ny retrieval gav något eller om elaborate()
@@ -1322,22 +1365,26 @@ class RagService:
                 or not synthesis_result.verification.findings
             )
 
+        debug: dict = {
+            "rework_mode": mode,
+            "num_hits_reused": len(hits),
+            "num_new_hits": num_new,
+            "num_consumed_hits": len(consumed_hit_ids or set()),
+            "abstained": abstained,
+            "synthesis": synthesis_debug,
+            "timing_s": {
+                "retrieve_for_elaboration": round(t1 - t0, 3) if mode == "elaboration" else 0.0,
+                "rework": round(t2 - t1, 3),
+                "total": round(t2 - t0, 3),
+            },
+        }
+        if guard_report is not None:
+            debug["source_guard"] = guard_report.as_dict()
+
         return ChatResponse(
             answer=synthesis_result.answer,
             sources=sources_to_show,
-            debug={
-                "rework_mode": mode,
-                "num_hits_reused": len(hits),
-                "num_new_hits": num_new,
-                "num_consumed_hits": len(consumed_hit_ids or set()),
-                "abstained": abstained,
-                "synthesis": synthesis_debug,
-                "timing_s": {
-                    "retrieve_for_elaboration": round(t1 - t0, 3) if mode == "elaboration" else 0.0,
-                    "rework": round(t2 - t1, 3),
-                    "total": round(t2 - t0, 3),
-                },
-            },
+            debug=debug,
         )
 
     def retrieve_for_elaboration(
