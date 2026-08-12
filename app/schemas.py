@@ -20,7 +20,13 @@ class ChunkMetadata(BaseModel):
     section_title: str | None = None
     section_level: int | None = None
     page_number: int | None = None
+    # Dokumentets gällandedatum (ISO), extraherat ur dokumenthuvudet
+    # i första hand (Beslutsdatum/Revised/Fastställd) och ur
+    # filnamnskonventionen i andra hand. None när inget hittats.
     document_date: str | None = None
+    # Diarienummer ur dokumenthuvudet (t.ex. "C 2025/1205") — nyckel
+    # för framtida versionskedjor ("ersätter C 2022/43").
+    diarienummer: str | None = None
 
     document_type: str | None = None
     keywords: list[str] = Field(default_factory=list)

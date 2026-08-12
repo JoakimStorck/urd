@@ -230,6 +230,101 @@ def split_markdown_sections(md: str) -> list[StructuredSection]:
     ]
 
 
+# ---------------------------------------------------------------------------
+# Datum och diarienummer ur dokumenthuvudet.
+#
+# INNEHÅLLET är primärkälla (dokumentlagret kan i framtiden flyttas
+# från filer till databas — filnamnskonventionen är sekundär).
+# BeHDa-mallen ger 'Beslutsdatum 2025-05-06' och 'Diarienummer
+# C 2025/1205' i dokumentets huvud; bilagor bär 'Revised 2025-03-11';
+# centrala styrdokument har fastställandefraser. Filnamnets
+# '20250311_...' och 'rev20250909' används bara när innehållet inte
+# ger något. Hellre None än gissning.
+# ---------------------------------------------------------------------------
+
+_ISO_DATE = r"(\d{4}-\d{2}-\d{2})"
+
+# Prioritetsordnade innehållsmönster. Revisionsdatum före
+# beslutsdatum — det är revisionen som anger gällande version.
+_CONTENT_DATE_PATTERNS = [
+    re.compile(r"[Rr]evi(?:sed|derad)(?:\s+den)?\s*:?\s*" + _ISO_DATE),
+    re.compile(r"Beslutsdatum\s*:?\s*\n?\s*" + _ISO_DATE),
+    re.compile(
+        r"(?:Fastställd|Fastställt|Beslutad|Beslutat|Gäller från(?:\s+och\s+med)?)"
+        r"(?:\s+den)?\s*:?\s*" + _ISO_DATE,
+    ),
+]
+
+_FILENAME_REV_RE = re.compile(r"rev(\d{8})")
+_FILENAME_DATE_RE = re.compile(r"^(\d{8})[_\s-]|^(\d{4}-\d{2}-\d{2})")
+
+_DIARIENUMMER_RE = re.compile(
+    r"Diarienummer\s*:?\s*\n?\s*([A-ZÅÄÖ][A-Za-zÅÄÖåäö]{0,3}\s?\d{4}\s?[/-]\s?\d+)"
+)
+
+# Hur långt in i dokumentet huvudet får sträcka sig. BeHDa-huvudet
+# ligger först, men docling kan kasta om sektionsordningen något.
+_HEADER_CHARS = 3000
+
+
+def _valid_iso_date(date_str: str) -> bool:
+    try:
+        year, month, day = (int(p) for p in date_str.split("-"))
+    except ValueError:
+        return False
+    return 1990 <= year <= 2100 and 1 <= month <= 12 and 1 <= day <= 31
+
+
+def _compact_to_iso(compact: str) -> str | None:
+    iso = f"{compact[0:4]}-{compact[4:6]}-{compact[6:8]}"
+    return iso if _valid_iso_date(iso) else None
+
+
+def extract_document_header_info(
+    text: str,
+    file_name: str,
+) -> tuple[str | None, str | None, str | None]:
+    """
+    Extrahera (document_date, diarienummer, datumkälla) för ett dokument.
+
+    document_date är ISO-format eller None. datumkälla är "innehåll",
+    "filnamn" eller None — för loggning och tester, lagras inte.
+    """
+    header = text[:_HEADER_CHARS] if text else ""
+
+    document_date: str | None = None
+    date_source: str | None = None
+
+    for pattern in _CONTENT_DATE_PATTERNS:
+        m = pattern.search(header)
+        if m and _valid_iso_date(m.group(1)):
+            document_date = m.group(1)
+            date_source = "innehåll"
+            break
+
+    if document_date is None:
+        m = _FILENAME_REV_RE.search(file_name)
+        if m:
+            document_date = _compact_to_iso(m.group(1))
+        if document_date is None:
+            m = _FILENAME_DATE_RE.match(file_name)
+            if m:
+                raw_date = m.group(1) or m.group(2)
+                document_date = (
+                    _compact_to_iso(raw_date) if len(raw_date) == 8
+                    else (raw_date if _valid_iso_date(raw_date) else None)
+                )
+        if document_date is not None:
+            date_source = "filnamn"
+
+    diarienummer: str | None = None
+    m = _DIARIENUMMER_RE.search(header)
+    if m:
+        diarienummer = re.sub(r"\s+", " ", m.group(1).strip())
+
+    return document_date, diarienummer, date_source
+
+
 def infer_document_title(raw: RawDocument) -> str | None:
     md = raw.text or ""
     for line in md.splitlines():
@@ -444,6 +539,8 @@ def build_chunks_from_sections(
     category: str | None,
     sections: list[StructuredSection],
     source_fingerprint: str,
+    document_date: str | None = None,
+    diarienummer: str | None = None,
 ) -> list[DocumentChunk]:
     chunks: list[DocumentChunk] = []
     global_idx = 0
@@ -466,7 +563,8 @@ def build_chunks_from_sections(
                 section_title=section.title,
                 section_level=section.level,
                 page_number=None,
-                document_date=None,
+                document_date=document_date,
+                diarienummer=diarienummer,
                 document_type=semantic.document_type,
                 keywords=semantic.keywords,
                 roles=semantic.roles,
@@ -502,6 +600,9 @@ def ingest_path(
     if not raw.text.strip():
         return []
 
+    document_date, diarienummer, _date_source = extract_document_header_info(
+        raw.text, path.name
+    )
     document_title = infer_document_title(raw)
     category = infer_category(path, docs_root)
     source_fingerprint = compute_source_fingerprint(path)
@@ -514,6 +615,8 @@ def ingest_path(
         category=category,
         sections=sections,
         source_fingerprint=source_fingerprint,
+        document_date=document_date,
+        diarienummer=diarienummer,
     )
 
 
@@ -560,6 +663,10 @@ def ingest_path_with_evidence(
         reason = raw.error or "extraktionen gav ingen text (tomt konverteringsresultat)"
         return [], [], reason
 
+    document_date, diarienummer, _date_source = extract_document_header_info(
+        raw.text, path.name
+    )
+
     document_title = infer_document_title(raw)
     category = infer_category(path, docs_root)
     source_fingerprint = compute_source_fingerprint(path)
@@ -571,6 +678,8 @@ def ingest_path_with_evidence(
         category=category,
         sections=sections,
         source_fingerprint=source_fingerprint,
+        document_date=document_date,
+        diarienummer=diarienummer,
     )
 
     evidence_objects = extract_evidence_objects_from_sections(
