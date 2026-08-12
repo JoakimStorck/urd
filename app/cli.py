@@ -1326,6 +1326,7 @@ def test(
                 answer=response.answer,
                 source_file_names=source_file_names,
                 retrieval_file_names=retrieval_file_names,
+                source_guard=debug.get("source_guard"),
             )
             for flag in flags:
                 icon = "✓" if flag["ok"] else "✗"
@@ -1525,6 +1526,7 @@ def _evaluate_expect(
     answer: str = "",
     source_file_names: list[str] | None = None,
     retrieval_file_names: list[str] | None = None,
+    source_guard: dict | None = None,
 ) -> list[dict]:
     """
     Utvärdera observationsbara expect-flaggor.
@@ -1685,6 +1687,30 @@ def _evaluate_expect(
             "field": "expected_docs_in_retrieval",
             "expected": wanted,
             "actual": top_docs,
+        })
+
+    if "answer_numbers_must_be_sourced" in expect:
+        want = bool(expect["answer_numbers_must_be_sourced"])
+        if source_guard is None:
+            ok = False
+            detail = "(ingen källvakt kördes på denna tur — fältet gäller bara huvudsyntesvägen)"
+            actual: object = None
+        else:
+            unsourced = source_guard.get("unsourced_numbers") or []
+            got = not unsourced
+            ok = (got == want)
+            checked = source_guard.get("numbers_checked") or []
+            if got:
+                detail = f"(alla {len(checked)} kontrollerade tal belagda)"
+            else:
+                detail = f"(obelagda tal: {unsourced})"
+            actual = unsourced
+        flags.append({
+            "label": f"answer_numbers_must_be_sourced={want} {detail}",
+            "ok": ok,
+            "field": "answer_numbers_must_be_sourced",
+            "expected": want,
+            "actual": actual,
         })
 
     if "answer_must_contain" in expect:

@@ -12,7 +12,8 @@
             "sequence_role": "opening",
             "should_find_sources": true,
             "min_sources": 2,
-            "notes": "Baslinjefråga. Bör hitta forskningsansökan-dokumentet."
+            "notes": "Baslinjefråga. Bör hitta forskningsansökan-dokumentet.",
+            "answer_numbers_must_be_sourced": true
           }
         },
         {
@@ -286,7 +287,8 @@
             "expected_docs": [
               "anstallningsordning"
             ],
-            "notes": "Frågeoperationen bör bli requirements. Detta testfall mäter synonymgruppen [lektor, universitetslektor] i .urd/synonyms.yaml — den som var avstängd av YAML-felet före fas 0."
+            "notes": "Frågeoperationen bör bli requirements. Detta testfall mäter synonymgruppen [lektor, universitetslektor] i .urd/synonyms.yaml — den som var avstängd av YAML-felet före fas 0.",
+            "answer_numbers_must_be_sourced": true
           }
         }
       ]
@@ -343,7 +345,8 @@
               "10 000",
               "6 000"
             ],
-            "notes": "Om ett belopp saknas eller är förvanskat är det ett syntesfel, inte ett retrievalfel — kontrollera rerank_top i JSONL-spåret."
+            "notes": "Om ett belopp saknas eller är förvanskat är det ett syntesfel, inte ett retrievalfel — kontrollera rerank_top i JSONL-spåret.",
+            "answer_numbers_must_be_sourced": true
           }
         }
       ]
@@ -383,7 +386,8 @@
             ],
             "answer_must_contain": [
               "10 000"
-            ]
+            ],
+            "answer_numbers_must_be_sourced": true
           }
         },
         {
