@@ -33,11 +33,19 @@ from app.synthesis_types import SynthesisResult
 # ---------------------------------------------------------------------------
 
 def _format_sources_for_direct(hits: list[SourceHit]) -> str:
-    """Formatera källor för huvudprompten."""
+    """
+    Formatera källor för huvudprompten.
+
+    Dokumentdatum tas med i källhuvudet när det finns — det är
+    underlaget för aktualitetsreglerna i prompten (nyare källa har
+    företräde vid motstridiga uppgifter).
+    """
     blocks = []
     for i, hit in enumerate(hits, start=1):
         meta = hit.metadata
         header = f"[Källa {i}] {meta.file_name} — {meta.section_title}"
+        if meta.document_date:
+            header += f" (daterad {meta.document_date})"
         blocks.append(f"{header}\n{hit.text}")
     return "\n\n".join(blocks)
 
@@ -140,6 +148,15 @@ GRUNDREGLER FÖR KORREKTHET:
 - Om olika källor bär olika delar av svaret (t.ex. olika delar av en
   lista eller olika roller): använd samtliga källor och slå ihop
   delarna till en helhet.
+
+GRUNDREGLER FÖR KÄLLTYP OCH AKTUALITET:
+
+- Normkällor (beslut, regler, anvisningar, ordningar) väger tyngre än
+  historiska protokolluppgifter. Beskriv inte ett protokollpåstående
+  som gällande regel om en normkälla anger den aktuella regeln.
+- Källornas datum anges i källhuvudet. Om källor med olika datum ger
+  motstridiga uppgifter har den nyare företräde — redovisa i så fall
+  båda datumen i svaret så att skillnaden är synlig.
 
 GRUNDREGLER FÖR RELEVANS:
 

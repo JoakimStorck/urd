@@ -53,11 +53,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _format_sources(hits: list[SourceHit]) -> str:
-    """Formatera källor för prompter."""
+    """Formatera källor för prompter, med dokumentdatum när det finns."""
     blocks = []
     for i, hit in enumerate(hits, start=1):
         meta = hit.metadata
         header = f"[Källa {i}] {meta.file_name} — {meta.section_title}"
+        if meta.document_date:
+            header += f" (daterad {meta.document_date})"
         blocks.append(f"{header}\n{hit.text}")
     return "\n\n".join(blocks)
 
