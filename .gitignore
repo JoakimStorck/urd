@@ -21,6 +21,12 @@ data/
 # Jupyter
 .ipynb_checkpoints/
 
+# Patches
+*.patch
+
+# Archives
+*.tar.gz
+
 # Test / coverage / build artifacts
 .pytest_cache/
 .coverage

@@ -5,6 +5,7 @@ Ersätter tidigare heuristisk omrankning med en neural reranker som
 generaliserar över frågetyper utan handskrivna bonusar.
 """
 
+import logging
 import math
 import re
 import time
@@ -22,6 +23,8 @@ from app.synonyms import load_synonyms
 from app.concepts import load_concepts
 from app.question_operations import load_question_operations
 from app.source_guard import check_answer as run_source_guard, format_warning
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Boilerplate-filter (behålls – detta är dokumentspecifikt, inte heuristisk
@@ -1027,7 +1030,41 @@ class RagService:
 
         t5 = time.perf_counter()
 
+        # Diagnostiklistor byggs FÖRE abstain-kontrollen. Vid abstain är
+        # de den enda källan till varför inget gick igenom: all_reranked
+        # innehåller bara kandidater över golvet och är då tomt, medan
+        # rerank_debug har varje bedömd kandidat med sin sannolikhet och
+        # sin filtered-flagga.
+        rerank_top = sorted(
+            rerank_debug,
+            key=lambda d: d.get("cross_encoder_score", -999),
+            reverse=True,
+        )[: settings.max_hits + 5]
+        evidence_top = sorted(
+            evidence_debug,
+            key=lambda d: d.get("cross_encoder_score", -999),
+            reverse=True,
+        )[: 6]
+        evidence_boost_top = sorted(
+            evidence_boost_debug,
+            key=lambda d: d.get("boosted_score", -999),
+            reverse=True,
+        )[: 6]
+        top_candidate_prob = (
+            rerank_top[0].get("relevance_prob") if rerank_top else None
+        )
+
         if not hits:
+            # Abstain är ett legitimt svar, men det får inte vara stumt.
+            # Raden visar hur nära golvet den bästa kandidaten låg, vilket
+            # skiljer "inget relevant fanns" från "golvet var för högt".
+            logger.info(
+                "abstain: %d kandidater bedömda, bästa %.3f mot golv %.2f (%s)",
+                len(rerank_debug),
+                top_candidate_prob if top_candidate_prob is not None else -1.0,
+                settings.select_min_prob,
+                rerank_top[0].get("section_title") if rerank_top else "ingen kandidat",
+            )
             return ChatResponse(
                 answer=(
                     "Jag hittar inget tydligt stöd i de indexerade dokumenten "
@@ -1040,6 +1077,7 @@ class RagService:
                         "backfill_min_prob": _BACKFILL_MIN_PROB,
                         "max_hits": settings.max_hits,
                         "top_score": round(all_reranked[0].score, 3) if all_reranked else None,
+                        "top_candidate_prob": top_candidate_prob,
                     },
                     "num_semantic": len(semantic_hits),
                     "num_semantic_global": num_semantic_global,
@@ -1050,13 +1088,18 @@ class RagService:
                     "expanded_docs": expanded_doc_paths,
                     "num_evidence_candidates": len(evidence_hits),
                     "evidence_docs": evidence_source_paths,
+                    "num_scored": len(rerank_debug),
+                    "num_reranked": len(all_reranked),
+                    "num_hits": 0,
                     "abstained": True,
                     "qud_anchor_used": qud_anchor is not None,
                     "retrieval_question_used": retrieval_question is not None,
                     "question_operation": question_operation,
                     "operation_additions": operation_additions,
                     "synonym_additions": synonym_additions,
+                    "broader_additions": broader_additions,
                     "bm25_additions": bm25_additions,
+                    "comparison_tracks": comparison_track_debug,
                     "preferred_source_paths": preferred_source_paths,
                     "timing_s": {
                         "embed_query": round(t1 - t0, 3),
@@ -1066,6 +1109,9 @@ class RagService:
                         "expand_and_rerank_2": round(t5 - t4, 3),
                         "total": round(t5 - t0, 3),
                     },
+                    "rerank_top": rerank_top,
+                    "evidence_top": evidence_top,
+                    "evidence_boost": evidence_boost_top,
                 },
             )
 
@@ -1210,21 +1256,10 @@ class RagService:
                     "related_concepts":  round(t8 - t7, 3),
                     "total": round(t8 - t0, 3),
                 },
-                "rerank_top": sorted(
-                    rerank_debug,
-                    key=lambda d: d.get("cross_encoder_score", -999),
-                    reverse=True,
-                )[: settings.max_hits + 5],
-                "evidence_top": sorted(
-                    evidence_debug,
-                    key=lambda d: d.get("cross_encoder_score", -999),
-                    reverse=True,
-                )[: 6],
-                "evidence_boost": sorted(
-                    evidence_boost_debug,
-                    key=lambda d: d.get("boosted_score", -999),
-                    reverse=True,
-                )[: 6],
+                "num_scored": len(rerank_debug),
+                "rerank_top": rerank_top,
+                "evidence_top": evidence_top,
+                "evidence_boost": evidence_boost_top,
             },
         )
 
