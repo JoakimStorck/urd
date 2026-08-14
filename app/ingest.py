@@ -7,6 +7,8 @@ import re
 
 from docling.document_converter import DocumentConverter
 
+from app.config import settings
+
 from app.schemas import (
     DocumentChunk,
     ChunkMetadata,
@@ -643,7 +645,11 @@ def build_chunks_from_sections(
     number_titles = build_number_titles(sections, full_text)
 
     for section in sections:
-        pieces = chunk_text(section.text)
+        pieces = chunk_text(
+            section.text,
+            chunk_size=settings.chunk_size,
+            overlap=settings.chunk_overlap,
+        )
         ancestors = section_ancestors(section.title, number_titles)
         context_prefix = _build_context_prefix(
             document_title, section.title, ancestors

@@ -22,7 +22,6 @@ DEFAULTS = {
     "llm_num_ctx": 8192,
     "llm_think": False,
     "preprocess_semantic_version": "v1",
-    "top_k": 3,
     "chunk_size": 1200,
     "chunk_overlap": 150,
     "preprocess_max_section_chars": 6000,
@@ -61,7 +60,6 @@ _ENV_KEYS = {
     "llm_num_ctx": "LLM_NUM_CTX",
     "llm_think": "LLM_THINK",
     "preprocess_semantic_version": "PREPROCESS_SEMANTIC_VERSION",
-    "top_k": "TOP_K",
     "chunk_size": "CHUNK_SIZE",
     "chunk_overlap": "CHUNK_OVERLAP",
     "preprocess_max_section_chars": "PREPROCESS_MAX_SECTION_CHARS",
@@ -160,7 +158,6 @@ def _build_settings() -> "Settings":
         llm_num_ctx=i("llm_num_ctx"),
         llm_think=b("llm_think"),
         preprocess_semantic_version=s("preprocess_semantic_version"),
-        top_k=i("top_k"),
         chunk_size=i("chunk_size"),
         chunk_overlap=i("chunk_overlap"),
         preprocess_max_section_chars=i("preprocess_max_section_chars"),
@@ -217,7 +214,6 @@ class Settings(BaseModel):
 
     preprocess_semantic_version: str = "v1"
 
-    top_k: int = 3
 
     chunk_size: int = 1200
     chunk_overlap: int = 150

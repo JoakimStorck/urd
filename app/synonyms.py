@@ -34,6 +34,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.morphology import is_inflection_of
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,63 +51,6 @@ def _tokenize(text: str) -> list[str]:
         if len(tok) >= 2
     ]
 
-
-# ---------------------------------------------------------------------------
-# Flexibel matchning genom prefix
-# ---------------------------------------------------------------------------
-
-# Ett frågeord räknas som en böjning av en term om frågeordet börjar
-# med termen och "resten" är en känd svensk böjningsändelse. Listan
-# behöver inte vara uttömmande för svensk morfologi — den behöver
-# bara täcka de vanliga böjningsformerna för substantiv och bestämda
-# former som förekommer i sökfrågor.
-_VALID_ENDINGS = {
-    "",        # oböjd form
-    "s",       # genitiv: lektors
-    "er",      # pluralt: lektorer
-    "ers",     # pluralt genitiv
-    "erna",    # bestämt pluralt: lektorerna
-    "ernas",   # bestämt pluralt genitiv
-    "en",      # bestämd singular: lektorn kan också stavas lektoren i äldre texter
-    "ens",     # bestämd singular genitiv
-    "et",      # neutrum bestämd: ärendet
-    "ets",
-    "n",       # bestämd singular: lektorn
-    "ns",      # lektorns
-    "na",      # bestämt pluralt svag böjning
-    "nas",
-    "ar",      # pluralt: stolar
-    "ars",
-    "arna",
-    "arnas",
-    "or",      # pluralt: flickor — förekommer
-    "orna",
-    "e",       # adjektivböjning: stora, biträdande
-}
-
-
-def _is_inflection_of(word: str, term: str) -> bool:
-    """
-    Returnerar True om `word` är en böjd form av `term`.
-
-    Logik: word börjar med term (case-insensitive), och resten av word
-    efter termen är en känd böjningsändelse. Detta är asymmetriskt —
-    vi testar om frågeordet är en böjning av synonymlistans term, inte
-    tvärtom.
-
-    Exempel:
-    - word="lektorer", term="lektor" -> True (ändelse "er")
-    - word="lektor", term="lektor" -> True (ändelse "")
-    - word="lektorn", term="lektor" -> True (ändelse "n")
-    - word="universitetslektor", term="lektor" -> False (börjar inte med term)
-    - word="lekt", term="lektor" -> False (börjar inte med hela term)
-    """
-    word_lower = word.lower()
-    term_lower = term.lower()
-    if not word_lower.startswith(term_lower):
-        return False
-    tail = word_lower[len(term_lower):]
-    return tail in _VALID_ENDINGS
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +75,7 @@ class SynonymIndex:
     # För varje grupp (index), lista av term-ord-listor.
     # Varje term är en lista av ord (ett för enordstermer, flera för
     # sammansatta uttryck). Orden lagras i originalform och jämförs
-    # med _is_inflection_of mot frågeord.
+    # med is_inflection_of mot frågeord (se app/morphology.py).
     _group_term_words: list[list[list[str]]]
 
     @classmethod
@@ -154,7 +99,7 @@ class SynonymIndex:
         if not term_words:
             return False
         for term_word in term_words:
-            if not any(_is_inflection_of(qt, term_word) for qt in q_tokens):
+            if not any(is_inflection_of(qt, term_word) for qt in q_tokens):
                 return False
         return True
 

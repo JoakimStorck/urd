@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.morphology import is_inflection_of
+
 logger = logging.getLogger(__name__)
 
 
@@ -16,38 +18,6 @@ def _tokenize(text: str) -> list[str]:
     ]
 
 
-_VALID_ENDINGS = {
-    "",
-    "s",
-    "er",
-    "ers",
-    "erna",
-    "ernas",
-    "en",
-    "ens",
-    "et",
-    "ets",
-    "n",
-    "ns",
-    "na",
-    "nas",
-    "ar",
-    "ars",
-    "arna",
-    "arnas",
-    "or",
-    "orna",
-    "e",
-}
-
-
-def _is_inflection_of(word: str, term: str) -> bool:
-    word_lower = word.lower()
-    term_lower = term.lower()
-    if not word_lower.startswith(term_lower):
-        return False
-    tail = word_lower[len(term_lower):]
-    return tail in _VALID_ENDINGS
 
 
 @dataclass
@@ -106,7 +76,7 @@ class ConceptIndex:
         if not label_tokens:
             return False
         for label_token in label_tokens:
-            if not any(_is_inflection_of(qt, label_token) for qt in q_tokens):
+            if not any(is_inflection_of(qt, label_token) for qt in q_tokens):
                 return False
         return True
 
@@ -169,10 +139,6 @@ class ConceptIndex:
                 continue
             labels.append(concept.labels[0])
         return labels
-
-    def first_two_matching_concept_ids(self, question: str) -> list[str]:
-        return self.find_matching_concept_ids(question)[:2]
-
 
 def load_concepts(path: Path) -> ConceptIndex:
     if not path.exists():

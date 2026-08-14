@@ -212,9 +212,7 @@ def chat(req: ChatRequest) -> ChatResponse:
 
         matched_concept_ids = rag.concepts.find_matching_concept_ids(req.question)
         matched_concept_labels = rag.concepts.labels_for_concept_ids(matched_concept_ids)
-        relation_pair_ids = rag.concepts.first_two_matching_concept_ids(req.question)
-        relation_pair_labels = rag.concepts.labels_for_concept_ids(relation_pair_ids)
-        
+
         # Grund-debug som alla vägar lägger till
         base_debug = {
             "session_id": state.session_id,
@@ -229,9 +227,7 @@ def chat(req: ChatRequest) -> ChatResponse:
             "concepts": {
                 "matched_ids": matched_concept_ids,
                 "matched_labels": matched_concept_labels,
-                "relation_pair_ids": relation_pair_ids,
-                "relation_pair_labels": relation_pair_labels,
-            },            
+            },
             "qud": {
                 "text": state.current_qud_text,
                 "age_turns": state.qud_age_turns,

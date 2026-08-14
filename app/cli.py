@@ -150,19 +150,10 @@ def serve(
         "--autoreload/--no-autoreload",
         help="Ladda om servern automatiskt vid kodändringar.",
     ),
-    top_k: int | None = typer.Option(
-        None,
-        "--top-k",
-        help="Antal källträffar att använda (överskriver TOP_K i config).",
-    ),
 ) -> None:
     """
     Starta den lokala backend-servern för API och webbgränssnitt.
     """
-    if top_k is not None:
-        os.environ["TOP_K"] = str(top_k)
-        typer.echo(f"top_k satt till {top_k}")
-
     uvicorn.run("app.api:app", host=host, port=port, reload=autoreload)
 
 
