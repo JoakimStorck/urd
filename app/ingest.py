@@ -89,6 +89,7 @@ def normalize_chunk_text(text: str) -> str:
 def _build_context_prefix(
     document_title: str | None,
     section_title: str | None,
+    ancestors: list[str] | None = None,
 ) -> str:
     """
     Bygg ett kontextuellt prefix som bäddas in i chunk-texten.
@@ -96,12 +97,21 @@ def _build_context_prefix(
     Detta gör att embeddings fångar dokumentets kontext, inte bara
     den isolerade textbiten. En chunk som säger "detta gäller" får
     nu med sig *vad* och *var* i sin vektorrepresentation.
+
+    Avsnittsraden bär hela rubrikkedjan när den är känd, så att
+    "7.2 Behörighet" och "8.2 Behörighet" blir olika texter för
+    embeddingmodellen och cross-encodern i stället för två nästan
+    identiska strängar.
     """
     parts = []
     if document_title:
         parts.append(f"Dokument: {document_title}")
+
+    chain = [t for t in (ancestors or []) if t]
     if section_title:
-        parts.append(f"Avsnitt: {section_title}")
+        chain = chain + [section_title]
+    if chain:
+        parts.append("Avsnitt: " + " > ".join(chain))
 
     if not parts:
         return ""
@@ -533,6 +543,90 @@ def extract_evidence_objects_from_sections(
     return evidence_objects
 
 
+# ---------------------------------------------------------------------------
+# Rubrikhierarki ur avsnittsnumrering.
+#
+# Docling ger inte pålitliga rubriknivåer: i anställningsordningen
+# ligger samtliga 188 rubriker på nivå 2, och 158 av dem bär en
+# rubrik som är semantiskt icke-unik inom dokumentet ("Behörighet"
+# 16 gånger, "Bedömningsgrunder" 16, "Ansökan" 16). En chunk som
+# bara märks med närmaste rubrik blir därmed oskiljbar från femton
+# andra — cross-encodern kan inte välja rätt kapitel annat än av
+# slump, och ett svar om lektor kan byggas på biträdande lektors
+# behörighetskrav.
+#
+# Numreringen bär den hierarki som nivåfältet saknar: 8.5.2 hör
+# under 8.5 som hör under 8. Föräldratiteln hämtas i tur och
+# ordning ur (1) en sektion med matchande nummer och (2) dokumentets
+# egen innehållsförteckning. Steg 2 behövs eftersom extraktionen
+# tappar hela kapitelrubriker — kapitel 2, 7, 10 och 14 saknas i
+# anställningsordningen, och kapitel 7 är universitetslektor.
+# Hellre ingen kedja än en gissad: saknas numret i båda källorna
+# utelämnas den nivån.
+# ---------------------------------------------------------------------------
+
+_SECTION_NUMBER_RE = re.compile(r"^\s*(\d+(?:\.\d+)*)[.:)]?\s+(\S.*)$")
+
+# Innehållsförteckningsrad: nummer, titel, minst fyra punktledare.
+# Punktledarna är signaturen — de förekommer inte i brödtext.
+_TOC_ENTRY_RE = re.compile(r"(\d+(?:\.\d+)*)[.:)]?\s+([^|]{3,}?)\s*\.{4,}")
+
+
+def section_number(title: str | None) -> tuple[int, ...] | None:
+    """Numreringen i en rubrik som tupel: '8.5.2 Sakkunnigbedömning' -> (8,5,2)."""
+    if not title:
+        return None
+    m = _SECTION_NUMBER_RE.match(title)
+    if not m:
+        return None
+    return tuple(int(p) for p in m.group(1).split("."))
+
+
+def build_number_titles(
+    sections: list["StructuredSection"],
+    full_text: str | None = None,
+) -> dict[tuple[int, ...], str]:
+    """
+    Avbilda avsnittsnummer på rubriktitel för ett dokument.
+
+    Sektionstitlarna är primärkälla. Innehållsförteckningen fyller
+    bara luckor — den är mindre tillförlitlig (radbrytningar,
+    tabellformatering) och får aldrig skriva över en rubrik som
+    faktiskt finns som sektion.
+    """
+    number_titles: dict[tuple[int, ...], str] = {}
+
+    for section in sections:
+        num = section_number(section.title)
+        if num and num not in number_titles and section.title:
+            number_titles[num] = section.title.strip()
+
+    if full_text:
+        for m in _TOC_ENTRY_RE.finditer(full_text):
+            num = tuple(int(p) for p in m.group(1).split("."))
+            title = m.group(2).strip().rstrip(".").strip()
+            if num in number_titles or not title:
+                continue
+            number_titles[num] = f"{m.group(1)} {title}"
+
+    return number_titles
+
+
+def section_ancestors(
+    title: str | None,
+    number_titles: dict[tuple[int, ...], str],
+) -> list[str]:
+    """Föräldrarubriker till en sektion, från yttersta nivån och inåt."""
+    num = section_number(title)
+    if not num or len(num) < 2:
+        return []
+    return [
+        number_titles[num[:depth]]
+        for depth in range(1, len(num))
+        if num[:depth] in number_titles
+    ]
+
+
 def build_chunks_from_sections(
     path: Path,
     document_title: str | None,
@@ -541,13 +635,22 @@ def build_chunks_from_sections(
     source_fingerprint: str,
     document_date: str | None = None,
     diarienummer: str | None = None,
+    full_text: str | None = None,
 ) -> list[DocumentChunk]:
     chunks: list[DocumentChunk] = []
     global_idx = 0
 
+    number_titles = build_number_titles(sections, full_text)
+
     for section in sections:
         pieces = chunk_text(section.text)
-        context_prefix = _build_context_prefix(document_title, section.title)
+        ancestors = section_ancestors(section.title, number_titles)
+        context_prefix = _build_context_prefix(
+            document_title, section.title, ancestors
+        )
+        section_path = " > ".join(
+            [t for t in ancestors if t] + ([section.title] if section.title else [])
+        ) or None
 
         for piece in pieces:
             semantic = section.semantic or SectionSemanticMetadata()
@@ -562,6 +665,7 @@ def build_chunks_from_sections(
                 category=category,
                 section_title=section.title,
                 section_level=section.level,
+                section_path=section_path,
                 page_number=None,
                 document_date=document_date,
                 diarienummer=diarienummer,
@@ -617,6 +721,7 @@ def ingest_path(
         source_fingerprint=source_fingerprint,
         document_date=document_date,
         diarienummer=diarienummer,
+        full_text=raw.text,
     )
 
 
@@ -680,6 +785,7 @@ def ingest_path_with_evidence(
         source_fingerprint=source_fingerprint,
         document_date=document_date,
         diarienummer=diarienummer,
+        full_text=raw.text,
     )
 
     evidence_objects = extract_evidence_objects_from_sections(

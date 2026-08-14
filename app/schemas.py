@@ -19,6 +19,10 @@ class ChunkMetadata(BaseModel):
     category: str | None = None
     section_title: str | None = None
     section_level: int | None = None
+    # Full rubrikkedja ("7. Anställning av universitetslektor >
+    # 7.2 Behörighet"), byggd ur avsnittsnumreringen vid ingest.
+    # None när dokumentet saknar numrerad struktur.
+    section_path: str | None = None
     page_number: int | None = None
     # Dokumentets gällandedatum (ISO), extraherat ur dokumenthuvudet
     # i första hand (Beslutsdatum/Revised/Fastställd) och ur

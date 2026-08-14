@@ -125,8 +125,27 @@ def _attach_chains(sections: list[dict]) -> list[dict]:
 
 def _print_sections(chunks) -> None:
     """Skriv rubrikträd i dokumentordning plus rapport över kollisioner."""
+    from app.ingest import build_number_titles, section_ancestors
+
     sections = _attach_chains(_sections_in_order(chunks))
     no_level = sum(1 for s in sections if s["level"] is None)
+
+    # Kedjan byggs som vid ingest: ur avsnittsnumreringen, med
+    # dokumentets innehållsförteckning som andrahandskälla för
+    # kapitelrubriker som extraktionen tappat. Fulltexten
+    # rekonstrueras ur chunkarna, så förhandsgranskningen kan köras
+    # mot det befintliga indexet utan omindexering.
+    class _S:
+        def __init__(self, title):
+            self.title = title
+
+    full_text = "\n".join(c.text for c in chunks)
+    number_titles = build_number_titles(
+        [_S(s["title"]) for s in sections], full_text
+    )
+    for s in sections:
+        ancestors = section_ancestors(s["title"], number_titles)
+        s["numbered_chain"] = ancestors + ([s["title"]] if s["title"] else [])
 
     print(f"STRUKTUR: {len(sections)} sektioner, {len(chunks)} chunkar")
     if no_level:
@@ -168,7 +187,9 @@ def _print_sections(chunks) -> None:
         print(f"  {key!r} förekommer {len(group)} gånger:")
         chains = []
         for s in group:
-            chain = " > ".join(_strip_numbering(t) for t in s["chain"]) or key
+            chain = " > ".join(
+                _strip_numbering(t) for t in s["numbered_chain"]
+            ) or key
             chains.append(chain)
             print(f"     {chain}   [{s['chunks']} chunkar]")
         total += len(group)
@@ -178,8 +199,19 @@ def _print_sections(chunks) -> None:
 
     print(f"  {total} sektioner bär en semantiskt icke-unik rubrik "
           f"av totalt {len(sections)}.")
-    print(f"  {resolved} av dem blir särskiljbara med full rubrikkedja "
+    print(f"  {resolved} blir särskiljbara med numreringsbaserad rubrikkedja "
           f"({total - resolved} förblir tvetydiga även då).")
+
+    orphans = [
+        s for s in sections
+        if len(s["numbered_chain"]) <= 1 and _strip_numbering(s["title"] or "") in collisions
+    ]
+    if orphans:
+        print()
+        print(f"  {len(orphans)} av dem saknar föräldrarubrik helt "
+              "(varken sektion eller innehållsförteckning bär numret):")
+        for s in orphans[:15]:
+            print(f"     {s['title']}")
 
 
 def main() -> None:

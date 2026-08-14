@@ -580,6 +580,7 @@ class Reranker:
             debug.append({
                 "file_name": hit.metadata.file_name,
                 "section_title": hit.metadata.section_title,
+                "section_path": hit.metadata.section_path,
                 "document_title": hit.metadata.document_title,
                 "cross_encoder_score": round(float(ce_score), 4),
                 "relevance_prob": round(prob, 4),
