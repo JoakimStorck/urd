@@ -798,7 +798,10 @@ def config_cmd(
     """
     Visa eller ändra konfiguration.
     """
-    from app.config import DEFAULTS, CONFIG_FILE, _load_file_config, save_config_file, _ENV_KEYS
+    from app.config import (
+        DEFAULTS, CONFIG_FILE, _load_file_config, save_config_file, _ENV_KEYS,
+        parse_bool as _parse_bool, _BOOL_TRUE, _BOOL_FALSE,
+    )
 
     if action == "show":
         file_config = _load_file_config()
@@ -843,14 +846,31 @@ def config_cmd(
         file_config = _load_file_config()
         default = DEFAULTS[key]
         try:
-            if isinstance(default, int):
+            # bool MÅSTE prövas före int: bool är en subklass till int i
+            # Python, så isinstance(True, int) är sant. Utan den här
+            # ordningen hamnar booleska nycklar i int()-grenen, och
+            # 'urd config set predication_enabled true' fallerar med
+            # "Ogiltigt värde: true (förväntar bool)" — ett felmeddelande
+            # som beskriver rätt typ men ändå vägrar den.
+            if isinstance(default, bool):
+                typed_value = _parse_bool(value)
+            elif isinstance(default, int):
                 typed_value = int(value)
             elif isinstance(default, float):
                 typed_value = float(value)
             else:
                 typed_value = value
         except ValueError:
-            typer.echo(f"Ogiltigt värde: {value} (förväntar {type(default).__name__})")
+            if isinstance(default, bool):
+                typer.echo(
+                    f"Ogiltigt värde: {value} (förväntar bool — "
+                    f"{', '.join(sorted(_BOOL_TRUE))} eller "
+                    f"{', '.join(sorted(_BOOL_FALSE))})"
+                )
+            else:
+                typer.echo(
+                    f"Ogiltigt värde: {value} (förväntar {type(default).__name__})"
+                )
             raise typer.Exit(code=1)
 
         file_config[key] = typed_value

@@ -2,7 +2,10 @@ from pathlib import Path
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import json
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -126,6 +129,25 @@ def _resolve_value(key: str, file_config: dict) -> str | int | float:
     return DEFAULTS[key]
 
 
+_BOOL_TRUE = {"1", "true", "yes", "ja", "on", "sant"}
+_BOOL_FALSE = {"0", "false", "no", "nej", "off", "falskt"}
+
+
+def parse_bool(value: str) -> bool:
+    """
+    Tolka en boolesk konfigsträng. Kastar ValueError vid okänt värde.
+
+    Delas av miljövariabeltolkningen och 'urd config set' så att de två
+    vägarna aldrig kan hamna i otakt om vad som räknas som sant.
+    """
+    v = value.strip().lower()
+    if v in _BOOL_TRUE:
+        return True
+    if v in _BOOL_FALSE:
+        return False
+    raise ValueError(f"okänt booleskt värde: {value!r}")
+
+
 def _build_settings() -> "Settings":
     """Bygg Settings med rätt prioritetsordning."""
     _ensure_config_file()
@@ -144,7 +166,17 @@ def _build_settings() -> "Settings":
         raw = _resolve_value(key, file_config)
         if isinstance(raw, bool):
             return raw
-        return str(raw).strip().lower() in ("1", "true", "yes", "ja", "on")
+        try:
+            return parse_bool(str(raw))
+        except ValueError:
+            # Tyst fallback till False vore samma sorts osynliga fel som
+            # den trasiga synonyms.yaml: en felstavad miljövariabel skulle
+            # stänga av en funktion utan att någon märkte det.
+            logger.warning(
+                "config: %s har ogiltigt booleskt värde %r — använder %r.",
+                key, raw, DEFAULTS[key],
+            )
+            return bool(DEFAULTS[key])
 
     server = s("server").strip() or None
 
