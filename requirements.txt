@@ -10,3 +10,4 @@ python-multipart
 ollama
 typer
 rank-bm25
+stanza>=1.10,<2

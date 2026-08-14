@@ -19,6 +19,7 @@ dependencies = [
   "qdrant-client",
   "docling",
   "rank-bm25",
+  "stanza>=1.10,<2",
 ]
 
 [project.scripts]

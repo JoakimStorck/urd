@@ -23,6 +23,7 @@ from app.synonyms import load_synonyms
 from app.concepts import load_concepts
 from app.question_operations import load_question_operations
 from app.source_guard import check_answer as run_source_guard, format_warning
+from app.predication import analyze as analyze_predications
 
 logger = logging.getLogger(__name__)
 
@@ -1177,6 +1178,14 @@ class RagService:
             synthesis_result.answer = (
                 synthesis_result.answer.rstrip() + "\n\n" + guard_warning
             )
+        # Predikationslagret, steg 0: skuggläge. Kör EFTER källvakten och
+        # påverkar ingenting — svaret är redan formulerat och lämnas
+        # orört. Se app/predication.py. Avstängt som default; hela
+        # anropet returnerar direkt när predication_enabled är False.
+        predication_debug = analyze_predications(
+            question, synthesis_result.answer, hits_for_synthesis,
+        )
+
         t7 = time.perf_counter()
 
         related_concepts = self._related_concepts_in_selected_docs(question, hits)
@@ -1245,6 +1254,7 @@ class RagService:
                 "comparison_tracks": comparison_track_debug,
                 "related_concepts": related_concepts,
                 "source_guard": guard_report.as_dict(),
+                "predication": predication_debug,
                 
                 "synthesis": synthesis_debug,
                 "timing_s": {

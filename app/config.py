@@ -21,6 +21,7 @@ DEFAULTS = {
     "preprocess_ollama_model": "mistral",
     "llm_num_ctx": 8192,
     "llm_think": False,
+    "predication_enabled": False,
     "preprocess_semantic_version": "v1",
     "chunk_size": 1200,
     "chunk_overlap": 150,
@@ -59,6 +60,7 @@ _ENV_KEYS = {
     "preprocess_ollama_model": "PREPROCESS_OLLAMA_MODEL",
     "llm_num_ctx": "LLM_NUM_CTX",
     "llm_think": "LLM_THINK",
+    "predication_enabled": "PREDICATION_ENABLED",
     "preprocess_semantic_version": "PREPROCESS_SEMANTIC_VERSION",
     "chunk_size": "CHUNK_SIZE",
     "chunk_overlap": "CHUNK_OVERLAP",
@@ -157,6 +159,7 @@ def _build_settings() -> "Settings":
         preprocess_ollama_model=s("preprocess_ollama_model"),
         llm_num_ctx=i("llm_num_ctx"),
         llm_think=b("llm_think"),
+        predication_enabled=b("predication_enabled"),
         preprocess_semantic_version=s("preprocess_semantic_version"),
         chunk_size=i("chunk_size"),
         chunk_overlap=i("chunk_overlap"),
@@ -211,6 +214,13 @@ class Settings(BaseModel):
     # given text tillför resonemang ingenting; uppgiften är att
     # återge, inte att härleda.
     llm_think: bool = False
+
+    # Predikationslagret (app/grammar.py + app/predication.py).
+    # AV som default: i nuvarande version är det ett skuggläge som
+    # bara skriver till debugspåret. Kräver att stanza och den
+    # svenska modellen är installerade; saknas de loggas det en
+    # gång och lagret förblir inaktivt.
+    predication_enabled: bool = False
 
     preprocess_semantic_version: str = "v1"
 
