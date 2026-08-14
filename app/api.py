@@ -60,6 +60,22 @@ if not _config_report.ok:
         "'urd config validate' för detaljer. Berörda funktioner är avstängda."
     )
 
+# Aktiv modell och LLM-inställningar i startloggen.
+#
+# Modellen sätts i .urd/config.json men kan överstyras av OLLAMA_MODEL,
+# och think/num_ctx avgör både svarskvalitet och svarstid. Utan den här
+# raden går det inte att se vad som faktiskt kör: 2026-08-14 kostade det
+# en hel testkörning att upptäcka att gemma4:12b hade resonemang påslaget
+# (107,6 s median per tur mot 9,0 s med det avstängt), och en körning
+# till att reda ut om en modellväxling ens hade slagit igenom.
+logger.info(
+    "modell: %s | think=%s | num_ctx=%d | enrich-modell=%s",
+    settings.ollama_model,
+    settings.llm_think,
+    settings.llm_num_ctx,
+    settings.preprocess_ollama_model,
+)
+
 static_dir = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -105,6 +121,14 @@ def health() -> dict:
     return {
         "status": "ok",
         "config_files": _config_report.as_dict(),
+        # Klienten (och urd connect) ska kunna se vad servern faktiskt
+        # kör utan att läsa serverloggen.
+        "llm": {
+            "model": settings.ollama_model,
+            "think": settings.llm_think,
+            "num_ctx": settings.llm_num_ctx,
+            "enrich_model": settings.preprocess_ollama_model,
+        },
     }
 
 
