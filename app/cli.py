@@ -1063,6 +1063,10 @@ def test(
         retrieval_top_k, default 5)
       - answer_must_contain (substrängar som ska finnas i svaret;
         whitespace-okänslig matchning så att "10 000" matchar "10 000:-")
+      - answer_must_not_contain (substrängar som INTE får finnas i
+        svaret; samma normalisering. För felbindningar: ett namn eller
+        en roll som svaret bevisligen inte ska tillskriva frågans
+        subjekt)
 
     Kvalitativa fält (notes, known_issue, sequence_role) rapporteras
     men valideras inte.
@@ -1711,6 +1715,23 @@ def _evaluate_expect(
             "field": "answer_numbers_must_be_sourced",
             "expected": want,
             "actual": actual,
+        })
+
+    if "answer_must_not_contain" in expect:
+        needles = [str(x) for x in expect["answer_must_not_contain"]]
+        haystack = _normalize_for_contains(answer)
+        present = [
+            n for n in needles
+            if _normalize_for_contains(n) in haystack
+        ]
+        ok = not present
+        detail = "(inget förbjudet i svaret)" if ok else f"(förekommer i svaret: {present})"
+        flags.append({
+            "label": f"answer_must_not_contain={needles} {detail}",
+            "ok": ok,
+            "field": "answer_must_not_contain",
+            "expected": needles,
+            "actual": present,
         })
 
     if "answer_must_contain" in expect:

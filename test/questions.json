@@ -1,6 +1,6 @@
 {
-  "version": 4,
-  "description": "URD testbatteri v4 — utökat i fas 1 med retrieval-metrik (expected_docs, expected_docs_in_retrieval), svarsinnehåll (answer_must_contain) och nya sekvenser för kända svagheter: synonymvarianter, jämförelse, aggregering och broadening till nytt dokument. Tidigare v3-sekvenser oförändrade.",
+  "version": 5,
+  "description": "URD testbatteri v5 — utökat med rollbindningsfall (vem har vilket uppdrag) och aktualitetsfall (uppdrag som bytt innehavare). Dessa mäter en felklass som v4 inte kunde se: att svaret binder rätt entitet till frågans roll, och att en äldre utnämning inte presenteras som gällande. Nytt expect-fält: answer_must_not_contain. v4-sekvenserna oförändrade.",
   "sequences": [
     {
       "name": "forskningsansokan_grund",
@@ -402,6 +402,63 @@
               "halvtidsseminarium"
             ],
             "notes": "DESIGNBESLUT 2026-08-11 (kvalitet före etikett): broadening som kräver ett ANNAT dokument än det som bar föregående svar klassas avsiktligt om till new_main_question av det dokumentbaserade driftmåttet — materialet vi läser bär inte frågan, alltså behandlas den som ny fråga och QUD:n sätts om. Framgångskriteriet är därför expected_docs/expected_docs_in_retrieval, inte intent."
+          }
+        }
+      ]
+    },
+    {
+      "name": "rollbindning_proprefekt",
+      "description": "Rollfråga mot protokoll- och beslutsbeståndet. Bekräftat fel 2026-08-14: systemet svarade 'Proprefekt vid IIT är Thomas Bodegrim' ur ett beslut om nomineringskommitté för proprefektuppdraget. Bodegrim är HR-specialist och har berett ärenden som rör uppdraget — hans namn står nära rollordet utan att bära det. Retrievalen hittade rätt dokument; syntesen band fel entitet till rollen. Källvakten såg inget: inga ohemulade tal, giltig källreferens.",
+      "turns": [
+        {
+          "question": "Vem är proprefekt vid IIT?",
+          "expect": {
+            "sequence_role": "opening",
+            "answer_must_contain": [
+              "Ewa Wäckelgård"
+            ],
+            "answer_must_not_contain": [
+              "Thomas Bodegrim"
+            ],
+            "answer_numbers_must_be_sourced": true,
+            "notes": "Abstain är ett godtaget utfall om beståndet inte binder namnet till rollen — men fel namn är det inte. answer_must_contain fångar abstain som miss; läs svarstexten innan den bokförs som fel. Fyll i expected_docs när det dokument som faktiskt utser proprefekten är identifierat."
+          }
+        },
+        {
+          "question": "Vilken roll har Thomas Bodegrim i det ärendet?",
+          "expect": {
+            "sequence_role": "followup",
+            "answer_must_not_contain": [
+              "proprefekt vid IIT är Thomas"
+            ],
+            "notes": "Prövar att systemet kan hålla isär två personer i samma dokument. Korrekt svar knyter Bodegrim till beredning/HR, eller abstainar. Fel svar upprepar rollförväxlingen från tur 1."
+          }
+        }
+      ]
+    },
+    {
+      "name": "aktualitet_studierektor",
+      "description": "Aktualitetsfall: uppdraget som studierektor för grundutbildningen har bytt innehavare. Alexander Karlsson utsågs för ett år sedan och har slutat; Anna Skogbergs har nyligen tillträtt. Båda besluten ligger i beståndet. Detta är precis den situation aktualitetsmålet finns för — och den fungerar inte idag, eftersom document_type är osatt och normkälle-/aktualitetsregeln därmed saknar underlag (åtgärd 6). Testet ska misslyckas tydligt tills dess.",
+      "turns": [
+        {
+          "question": "Vem är studierektor för grundutbildningen vid IIT?",
+          "expect": {
+            "sequence_role": "opening",
+            "answer_must_contain": [
+              "Anna Skogbergs"
+            ],
+            "known_issue": "Väntas falla tills aktualitetshanteringen biter: det äldre beslutet om Alexander Karlsson kan bära svaret utan att datumen jämförs.",
+            "notes": "Att nämna företrädaren är INTE fel — 'Anna Skogbergs, som efterträdde Alexander Karlsson' är ett bättre svar än enbart namnet. Därför ingen answer_must_not_contain här. Felet som ska fångas är att Karlsson presenteras som nuvarande innehavare, vilket answer_must_contain fångar eftersom Skogbergs då saknas. Fyll i expected_docs med de två beslutsdokumentens filnamn."
+          }
+        },
+        {
+          "question": "Har någon annan haft det uppdraget tidigare?",
+          "expect": {
+            "sequence_role": "followup",
+            "answer_must_contain": [
+              "Alexander Karlsson"
+            ],
+            "notes": "Prövar att företrädaren finns kvar som historisk uppgift och inte har filtrerats bort av aktualitetsregeln. Aktualitet ska rangordna, inte radera. Faller båda turerna på samma namn är det ett tecken på att systemet inte skiljer på nu och då över huvud taget."
           }
         }
       ]
