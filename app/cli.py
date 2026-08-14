@@ -1147,6 +1147,11 @@ def test(
             "test_file": str(test_file),
             "server_url": server_url,
             "git_commit": _current_git_commit(),
+            # Modell och resonemangsläge i spåret: två körningar med
+            # samma commit kan annars inte skiljas åt i efterhand.
+            "ollama_model": settings.ollama_model,
+            "llm_think": settings.llm_think,
+            "llm_num_ctx": settings.llm_num_ctx,
         }, ensure_ascii=False) + "\n")
 
     def _write_jsonl(record: dict) -> None:

@@ -20,6 +20,7 @@ DEFAULTS = {
     "ollama_model": "mistral-nemo",
     "preprocess_ollama_model": "mistral",
     "llm_num_ctx": 8192,
+    "llm_think": False,
     "preprocess_semantic_version": "v1",
     "top_k": 3,
     "chunk_size": 1200,
@@ -58,6 +59,7 @@ _ENV_KEYS = {
     "ollama_model": "OLLAMA_MODEL",
     "preprocess_ollama_model": "PREPROCESS_OLLAMA_MODEL",
     "llm_num_ctx": "LLM_NUM_CTX",
+    "llm_think": "LLM_THINK",
     "preprocess_semantic_version": "PREPROCESS_SEMANTIC_VERSION",
     "top_k": "TOP_K",
     "chunk_size": "CHUNK_SIZE",
@@ -138,6 +140,12 @@ def _build_settings() -> "Settings":
     def f(key: str) -> float:
         return float(_resolve_value(key, file_config))
 
+    def b(key: str) -> bool:
+        raw = _resolve_value(key, file_config)
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).strip().lower() in ("1", "true", "yes", "ja", "on")
+
     server = s("server").strip() or None
 
     return Settings(
@@ -150,6 +158,7 @@ def _build_settings() -> "Settings":
         ollama_model=s("ollama_model"),
         preprocess_ollama_model=s("preprocess_ollama_model"),
         llm_num_ctx=i("llm_num_ctx"),
+        llm_think=b("llm_think"),
         preprocess_semantic_version=s("preprocess_semantic_version"),
         top_k=i("top_k"),
         chunk_size=i("chunk_size"),
@@ -194,6 +203,17 @@ class Settings(BaseModel):
     # Därför sätts num_ctx alltid explicit. 8192 rymmer huvudsyntesens
     # och rework-vägarnas prompter med god marginal för mistral-nemo.
     llm_num_ctx: int = 8192
+
+    # Resonemangsläge ("thinking") i modeller som stödjer det.
+    # AV som default. Uppmätt 2026-08-14 med gemma4:12b: påslaget
+    # resonemang gav 107,6 s median per tur mot Nemos 3,2 s — och
+    # KORTARE svar, eftersom tankespåret kostar generering men
+    # returneras i ett eget fält som URD inte läser. Effekten på
+    # kvaliteten var förödande: answer_must_contain föll 0/6, alla
+    # belopp försvann ur arvodessvaret. För källbunden syntes ur
+    # given text tillför resonemang ingenting; uppgiften är att
+    # återge, inte att härleda.
+    llm_think: bool = False
 
     preprocess_semantic_version: str = "v1"
 

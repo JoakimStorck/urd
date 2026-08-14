@@ -21,6 +21,11 @@ class LocalLLM:
     def __init__(self) -> None:
         self.model = settings.ollama_model
         self.num_ctx = settings.llm_num_ctx
+        self.think = settings.llm_think
+        # Äldre versioner av ollama-python känner inte till think.
+        # Sätts till False första gången ett anrop avvisas på den
+        # grunden, så att fallbacken bara kostar ett försök.
+        self._think_supported = True
 
     def generate(self, prompt: str, format: str | None = None) -> str:
         # Logga promptstorlek och varna om prompten riskerar att
@@ -61,7 +66,29 @@ class LocalLLM:
             if format is not None:
                 kwargs["format"] = format
 
-            response = ollama.chat(**kwargs)
+            # think sätts ALLTID explicit, av samma skäl som num_ctx:
+            # defaultbeteendet varierar mellan modeller och Ollama-
+            # versioner, och skillnaden är inte subtil. Se kommentaren
+            # vid settings.llm_think.
+            if self._think_supported:
+                try:
+                    response = ollama.chat(think=self.think, **kwargs)
+                except TypeError as e:
+                    if "think" not in str(e):
+                        raise
+                    logger.warning(
+                        "Installerad ollama-klient stödjer inte think-"
+                        "parametern. Resonemangsläget styrs då av "
+                        "modellens default och llm_think=%s får ingen "
+                        "effekt. Uppgradera ollama-paketet om modellen "
+                        "har resonemang påslaget.",
+                        self.think,
+                    )
+                    self._think_supported = False
+                    response = ollama.chat(**kwargs)
+            else:
+                response = ollama.chat(**kwargs)
+
             return response["message"]["content"].strip()
         except Exception as e:
             raise LLMUnavailableError(
