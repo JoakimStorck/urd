@@ -41,6 +41,7 @@ def load_run(path: Path) -> tuple[dict, dict[tuple, dict]]:
     en dict nycklad på (sekvens, turnummer, fråga).
     """
     meta: dict = {}
+    summary: dict = {}
     turns: dict[tuple, dict] = {}
 
     with open(path, encoding="utf-8") as f:
@@ -56,6 +57,11 @@ def load_run(path: Path) -> tuple[dict, dict[tuple, dict]]:
 
             if record.get("type") == "run_meta":
                 meta = record
+            elif record.get("type") == "run_summary":
+                # Skrivs sist av 'urd test'. Bär bland annat
+                # incomplete-flaggan för körningar där turer aldrig
+                # producerade svar.
+                summary = record
             elif record.get("type") == "turn":
                 key = (
                     record.get("sequence", "?"),
@@ -64,6 +70,8 @@ def load_run(path: Path) -> tuple[dict, dict[tuple, dict]]:
                 )
                 turns[key] = record
 
+    # run_summary saknas i spår från äldre körningar; tom dict då.
+    meta = {**meta, "run_summary": summary}
     return meta, turns
 
 
@@ -208,11 +216,50 @@ def main() -> None:
     )
     parser.add_argument("old", type=Path, help="Baslinjens JSONL-fil")
     parser.add_argument("new", type=Path, help="Den nya körningens JSONL-fil")
+    parser.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help=(
+            "Jämför även om en körning saknar svar på en eller flera turer. "
+            "Använd bara när du vet vilka turer som fattas och varför."
+        ),
+    )
     args = parser.parse_args()
 
     for path in (args.old, args.new):
         if not path.exists():
             print(f"Filen finns inte: {path}", file=sys.stderr)
+            raise SystemExit(2)
+
+    # Spärr mot ofullständiga körningar. En tur utan svar utvärderas
+    # aldrig mot sina expect-fält, så den kan varken bli en avvikelse
+    # eller en förbättring — den försvinner ur jämförelsen och får
+    # körningen att se bättre ut än den är.
+    if not args.allow_incomplete:
+        blocked = False
+        for label, path in (("gammal", args.old), ("ny", args.new)):
+            meta, _ = load_run(path)
+            summary = meta.get("run_summary") or {}
+            if summary.get("incomplete"):
+                n = summary.get("num_failed_turns", "?")
+                print(
+                    f"{label} körning ({path.name}) är OFULLSTÄNDIG: "
+                    f"{n} tur(er) saknar svar.",
+                    file=sys.stderr,
+                )
+                for ft in summary.get("failed_turns", []):
+                    print(
+                        f"    {ft.get('sequence')} tur {ft.get('turn')}: "
+                        f"{ft.get('error')}",
+                        file=sys.stderr,
+                    )
+                blocked = True
+        if blocked:
+            print(
+                "\nJämförelsen avbruten. Kör om körningen, eller tvinga med "
+                "--allow-incomplete.",
+                file=sys.stderr,
+            )
             raise SystemExit(2)
 
     raise SystemExit(compare(args.old, args.new))

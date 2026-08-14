@@ -1160,6 +1160,14 @@ def test(
     total_flags: list[dict] = []
     all_flags: list[dict] = []
     all_times: list[float] = []
+    # Turer som aldrig producerade ett svar (nätverksfel, HTTP-fel,
+    # otolkbart svar). En sådan tur utvärderas inte mot sina expect-
+    # fält och får därför aldrig en avvikande flagga — utan egen
+    # räkning blir den osynlig i sammanfattningen, och körningen ser
+    # normal ut trots att turer saknas. Bekräftat 2026-08-14: en
+    # omstart av ollama mitt i en körning dödade två turer utan att
+    # något syntes i summeringen.
+    failed_turns: list[dict] = []
 
     for seq_idx, sequence in enumerate(sequences, start=1):
         seq_name = sequence.get("name", f"sequence_{seq_idx}")
@@ -1215,6 +1223,12 @@ def test(
                 break
             except Exception as e:
                 typer.echo(f"    Fel: {e}")
+                failed_turns.append({
+                    "sequence": seq_name,
+                    "turn": turn_idx,
+                    "question": question,
+                    "error": str(e),
+                })
                 turn_results.append({
                     "turn": turn_idx,
                     "question": question,
@@ -1229,6 +1243,12 @@ def test(
 
             if not resp.ok:
                 typer.echo(f"    Serverfel {resp.status_code}")
+                failed_turns.append({
+                    "sequence": seq_name,
+                    "turn": turn_idx,
+                    "question": question,
+                    "error": f"HTTP {resp.status_code}",
+                })
                 turn_results.append({
                     "turn": turn_idx,
                     "question": question,
@@ -1246,6 +1266,12 @@ def test(
                 response = ChatResponse.model_validate(resp.json())
             except Exception as e:
                 typer.echo(f"    Kunde inte tolka svaret: {e}")
+                failed_turns.append({
+                    "sequence": seq_name,
+                    "turn": turn_idx,
+                    "question": question,
+                    "error": f"parse_error: {e}",
+                })
                 turn_results.append({
                     "turn": turn_idx,
                     "question": question,
@@ -1438,6 +1464,8 @@ def test(
     typer.echo(f"Sekvenser körda:    {len(sequence_results)}")
     typer.echo(f"Turer körda:        {sum(len(s['turns']) for s in sequence_results)}")
     typer.echo(f"Avvikande flaggor:  {len(total_flags)}")
+    if failed_turns:
+        typer.echo(f"Uteblivna svar:     {len(failed_turns)}  ← KÖRNINGEN ÄR OFULLSTÄNDIG")
 
     if all_times:
         typer.echo(f"Medeltid per tur:   {sum(all_times) / len(all_times):.1f}s")
@@ -1464,7 +1492,31 @@ def test(
                 for f in seq["failed_flags"]:
                     typer.echo(f"    tur {f['turn']}: {f['label']}")
 
+    if failed_turns:
+        typer.echo("")
+        typer.echo("Uteblivna svar (turen utvärderades aldrig)")
+        typer.echo("-----------------------------------------")
+        for ft in failed_turns:
+            typer.echo(f"  {ft['sequence']} tur {ft['turn']}: {ft['error']}")
+        typer.echo("")
+        typer.echo(
+            "  Dessa turer saknar svar och är därför inte utvärderade mot sina\n"
+            "  expect-fält. Körningen kan INTE användas som baslinje eller\n"
+            "  jämförelsepunkt. Vanlig orsak: ollama startades om under\n"
+            "  körningen (uppdatering, modellbyte, systemctl restart)."
+        )
+
     # Spara resultat (output_file bestämdes före körningen)
+    # run_summary skrivs sist i JSONL: compare_test_runs läser den för
+    # att kunna vägra jämföra mot en ofullständig körning.
+    _write_jsonl({
+        "type": "run_summary",
+        "num_turns": sum(len(s["turns"]) for s in sequence_results),
+        "num_flag_failures": len(total_flags),
+        "num_failed_turns": len(failed_turns),
+        "incomplete": bool(failed_turns),
+        "failed_turns": failed_turns,
+    })
     if jsonl_handle is not None:
         jsonl_handle.close()
 
@@ -1477,6 +1529,9 @@ def test(
                 "num_sequences": len(sequence_results),
                 "num_turns": sum(len(s["turns"]) for s in sequence_results),
                 "num_flag_failures": len(total_flags),
+                "num_failed_turns": len(failed_turns),
+                "incomplete": bool(failed_turns),
+                "failed_turns": failed_turns,
                 "mean_time_s": round(sum(all_times) / len(all_times), 3) if all_times else None,
                 "sequences": sequence_results,
             },
