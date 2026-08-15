@@ -214,25 +214,40 @@ def _is_meta_sentence(text: str) -> bool:
     return any(m in low for m in _META_MARKERS)
 
 
+# En rad som bär subjekt och finit verb är en sats även om den är kort
+# eller inleds av en listmarkör. Uppmätt 2026-08-15: det gamla filtret
+# (>=25 tecken, ingen listmarkör) sållade bort "Prefekt och HR-expert
+# Thomas Bodegrim presenterade ärendet." i vissa chunkar och samtliga
+# föredragande- och närvaroförteckningar — alltså exakt den textform
+# där rollbindningar lever. Källidentiteterna låg därför kvar på 169
+# trots att titeluttaget bevisligen fungerar på verkliga träd.
+_MIN_SENTENCE_LEN = 12
+
+
 def sentence_like_lines(text: str) -> list[str]:
     """
-    Behåll bara rader som liknar löpande meningar.
+    Behåll rader som kan bära en sats.
 
-    Tabellrader och punktlistor undantas medvetet: en dependensparser på
-    OCR-bruten tabellstruktur producerar skräp med hög konfidens, vilket är
-    värre än inget resultat alls. Evidensobjektmodellen är rätt mekanism
-    för strukturerat material och fungerar redan.
+    Tabellrader undantas fortfarande: en dependensparser på OCR-bruten
+    tabellstruktur producerar skräp med hög konfidens, vilket är värre
+    än inget resultat alls. Evidensobjektmodellen är rätt mekanism för
+    strukturerat material och fungerar redan.
+
+    Listmarkören strippas i stället för att diskvalificera raden.
+    Numrerade processteg i beslutsdokument ("3. Prefekt föredrar
+    slutgiltigt förslag i IL.") är fullständiga satser med agens, och
+    de är bland de mest informationsrika raderna i beståndet.
     """
     out: list[str] = []
     for line in text.splitlines():
         stripped = strip_citations(line).strip()
-        if len(stripped) < 25:
-            continue
-        if _is_meta_sentence(stripped):
-            continue
         if any(m in stripped for m in _TABLE_MARKERS):
             continue
-        if _LIST_LINE.match(stripped):
+        # Listmarkören är formatering, inte innehåll.
+        stripped = _LIST_LINE.sub("", stripped).strip()
+        if len(stripped) < _MIN_SENTENCE_LEN:
+            continue
+        if _is_meta_sentence(stripped):
             continue
         if not re.search(r"[a-zåäöA-ZÅÄÖ]{3}", stripped):
             continue
@@ -269,13 +284,22 @@ def extract_features(text: str, max_sentences: int = 40) -> list[Feature]:
     max_sentences begränsar arbetet per anrop; en chunk på 1200 tecken
     rymmer sällan fler.
     """
+    # Parentetiska appositioner ("vicekansler (Vice Chancellor)")
+    # utvinns med regex på RÅTEXTEN, före radfiltret och oberoende av
+    # parsern. De sitter ofta i tabellceller och rubriker som aldrig
+    # når dependensparsningen, och de är beståndets egen tvåspråkiga
+    # termordlista — den som de tolv handskrivna synonymgrupperna
+    # saknar. Uppmätt 2026-08-15: samtliga sådana par extraherades ur
+    # SVAREN men var obelagda, eftersom källsidan filtrerades bort.
+    parenthetical = _parenthetical_identity(text)
+
     nlp = _get_pipeline()
     if nlp is None:
-        return []
+        return parenthetical
 
     lines = sentence_like_lines(text)
     if not lines:
-        return []
+        return parenthetical
 
     try:
         doc = nlp("\n".join(lines))
@@ -296,13 +320,55 @@ def extract_features(text: str, max_sentences: int = 40) -> list[Feature]:
         # inte; gränsriktning är fortfarande en verklig felklass och
         # kan återaktiveras om ett testfall visar att den behövs.
         # features.extend(_quantity(words, stext))
-    features.extend(_parenthetical_identity(text))
+    features.extend(parenthetical)
     return features
 
 
 # Nominala ordklasser. Identitet kräver att BÅDA leden är nominala:
 # utan kravet plockas relativsatser upp som appositioner, vilket gav
 # draget "som -> nuvarande proprefekten" i mätningen 2026-08-15.
+# Disjunktionsmarkörer. "Examinatorn (alternativt betygsnämnd)" är
+# INTE en identitet — ordet säger uttryckligen att de är olika
+# alternativ. Uppmätt 2026-08-15 extraherades två sådana som
+# identiteter, alltså med rakt motsatt innebörd mot källans.
+_DISJUNCTION_MARKERS = {
+    "alternativt", "respektive", "eller", "resp", "ev", "eventuellt",
+}
+
+# Lagreferenser. "HF 4 kap. 4 §" gav draget "HF -> kap." — numrerade
+# hänvisningar är inte påståenden om entiteter.
+_LEGAL_REF = re.compile(
+    r"\b(HF|SFS|kap\.?|§|dnr|C\s*\d{4}/\d+)\b", re.I
+)
+
+# Abstrakta platshållare bär inte referens i sig: "rollen", "kraven",
+# "ersättningen" är relationsplatser, inte entiteter. Uppmätt gav de
+# drag som "följande krav -> professor" och "Ersättningen -> opponent".
+# Listan är sluten och grammatisk till sin natur — orden är
+# relationssubstantiv — men den är en ordlista och ska hållas kort.
+# Bär vänsterledet ett av dessa ord som huvudord söks referenten via
+# verbets subjekt i stället (se predikativregeln).
+_PLACEHOLDER_HEADS = {
+    "roll", "rollen", "uppdrag", "uppdraget", "krav", "kraven",
+    "ersättning", "ersättningen", "befattning", "befattningen",
+    "funktion", "funktionen", "post", "posten", "titel", "titeln",
+}
+
+
+def _has_disjunction(words, idx: int) -> bool:
+    """Ingår ledet i en uppräkning av ALTERNATIV snarare än likheter?"""
+    for x in words:
+        if x.head == idx and x.deprel in ("cc", "advmod", "mark"):
+            if x.text.lower().rstrip(".") in _DISJUNCTION_MARKERS:
+                return True
+    return False
+
+
+def _is_placeholder(phrase: str) -> bool:
+    tokens = [t.lower() for t in re.findall(r"[\wÅÄÖåäö\-]+", phrase)]
+    return bool(tokens) and any(t in _PLACEHOLDER_HEADS for t in tokens)
+
+
 _NOMINAL_UPOS = {"NOUN", "PROPN"}
 
 # Predikativmarkörer i sluten klass. "som" och "till" är funktionsord,
@@ -387,8 +453,14 @@ def _title_identity(words, stext: str) -> list[Feature]:
         # Preposition mellan leden => inte en titelkonstruktion.
         if any(x.head == w.id and x.deprel == "case" for x in words):
             continue
+        if _has_disjunction(words, w.id):
+            continue
 
         name = _phrase(words, w.head)
+        if _LEGAL_REF.search(name) or _LEGAL_REF.search(_phrase(words, w.id)):
+            continue
+        if _is_placeholder(name):
+            continue
         titles = [w] + [
             x for x in words if x.head == w.id and x.deprel == "conj"
         ]
@@ -438,6 +510,8 @@ def _identity(words, stext: str) -> list[Feature]:
             pred = w.head
             if not _is_nominal(words, pred):
                 continue
+            if _has_disjunction(words, pred):
+                continue
             subj = next(
                 (x.id for x in words
                  if x.head == pred and x.deprel in ("nsubj", "nsubj:pass")
@@ -483,7 +557,7 @@ def _identity(words, stext: str) -> list[Feature]:
                  and _is_nominal(words, x.id)),
                 None,
             )
-            if subj:
+            if subj and not _has_disjunction(words, w.id):
                 # Samordnade predikativ ger egna drag: "rollen som
                 # prefekt och HR-expert" är två påståenden som ska
                 # kunna prövas var för sig. Till skillnad från
@@ -545,6 +619,12 @@ def _parenthetical_identity(text: str) -> list[Feature]:
         # "(se ovan)", "(jfr bilaga 2)" är hänvisningar, inte
         # appositioner. En apposition har ett nominalt huvudord.
         if b.split()[0].lower() in _REFERENCE_MARKERS | _FUNCTION_WORDS:
+            continue
+        if b.split()[0].lower().rstrip(".") in _DISJUNCTION_MARKERS:
+            continue
+        if _LEGAL_REF.search(a) or _LEGAL_REF.search(b):
+            continue
+        if _is_placeholder(a):
             continue
         out.append(Feature(
             kind="identitet", a=a, b=b, relation="parentes",
