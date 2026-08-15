@@ -205,6 +205,37 @@ _META_MARKERS = (
 )
 
 
+# Kontextprefixet som ingest lägger på varje chunk:
+#
+#     Dokument: 20250603_Information och teknik_protokoll
+#     Avsnitt: 13 Beslut: nomineringskommitté för uppdrag som proprefekt IIT
+#     ---
+#     <källtext>
+#
+# Detta är URD:s EGEN metadata, inte källtext, och den får inte
+# generera drag. Uppmätt 2026-08-15: rubrikraden flöt ihop med den
+# efterföljande meningen och gav den fabricerade identiteten
+# "IIT Prefekt -> proprefekt", samtidigt som samordningen i
+# "Prefekt och HR-expert Thomas Bodegrim" bröts sönder — draget för
+# prefekt försvann helt och HR-expert tappade sin tvetydighetsflagga.
+#
+# Med prefixet strippat ger samma text båda dragen med ambiguous=True.
+# Radvis parsning prövades och gav identiskt resultat, alltså behövs
+# den inte.
+#
+# Dokumentkontexten går inte förlorad: den finns i chunkens metadata
+# (document_title, section_path) och hämtas därifrån när ett drag ska
+# knytas till sin källa.
+_CONTEXT_PREFIX = re.compile(
+    r"\A(?:(?:Dokument|Avsnitt|Document|Section):[^\n]*\n)+---\n",
+)
+
+
+def strip_context_prefix(text: str) -> str:
+    """Ta bort ingest-prefixet före parsning."""
+    return _CONTEXT_PREFIX.sub("", text, count=1)
+
+
 def strip_citations(text: str) -> str:
     return _CITATION.sub(" ", text)
 
@@ -291,6 +322,7 @@ def extract_features(text: str, max_sentences: int = 40) -> list[Feature]:
     # termordlista — den som de tolv handskrivna synonymgrupperna
     # saknar. Uppmätt 2026-08-15: samtliga sådana par extraherades ur
     # SVAREN men var obelagda, eftersom källsidan filtrerades bort.
+    text = strip_context_prefix(text)
     parenthetical = _parenthetical_identity(text)
 
     nlp = _get_pipeline()
@@ -353,6 +385,36 @@ _PLACEHOLDER_HEADS = {
     "ersättning", "ersättningen", "befattning", "befattningen",
     "funktion", "funktionen", "post", "posten", "titel", "titeln",
 }
+
+
+# Rums- och objektskoder är inte titlar. Uppmätt 2026-08-15 gav det
+# öppnade radfiltret drag som "B422 -> Tomas Person" och
+# "B422 -> B421" ur labbansvarigdokumentet: en kod bunden till ett
+# namn ser strukturellt ut som en titelkonstruktion.
+#
+# Villkoret är formmässigt, inte en lista: ett titelled är ett ord med
+# gemener som inte är dominerat av siffror. "Prefekt", "HR-expert" och
+# "proprefekt" passerar; "B422", "5.1.1.3" och "§13" gör det inte.
+def _is_code_like(phrase: str) -> bool:
+    """
+    Är frasen en kod snarare än ett namn eller en titel?
+
+    Skiljelinjen går vid SIFFROR, inte vid versaler. Rena
+    versalförkortningar (IL, RL, HR) är legitima termer och utgör
+    dessutom kärnan i beståndets egen ordlista — "Institutionens
+    ledningsråd (IL)". Koder blandar versaler med siffror (B422) eller
+    domineras av siffror (5.1.1.3, §13).
+    """
+    if not re.search(r"[\wÅÄÖåäö]", phrase):
+        return True
+    digits = sum(c.isdigit() for c in phrase)
+    letters = sum(c.isalpha() for c in phrase)
+    if digits == 0:
+        return False
+    if digits >= letters:
+        return True
+    # Siffror i en fras utan gemener: rumskod, paragrafnummer.
+    return not re.search(r"[a-zåäö]", phrase)
 
 
 def _has_disjunction(words, idx: int) -> bool:
@@ -460,6 +522,8 @@ def _title_identity(words, stext: str) -> list[Feature]:
         if _LEGAL_REF.search(name) or _LEGAL_REF.search(_phrase(words, w.id)):
             continue
         if _is_placeholder(name):
+            continue
+        if _is_code_like(name) or _is_code_like(_phrase(words, w.id)):
             continue
         titles = [w] + [
             x for x in words if x.head == w.id and x.deprel == "conj"
@@ -625,6 +689,8 @@ def _parenthetical_identity(text: str) -> list[Feature]:
         if _LEGAL_REF.search(a) or _LEGAL_REF.search(b):
             continue
         if _is_placeholder(a):
+            continue
+        if _is_code_like(a) or _is_code_like(b):
             continue
         out.append(Feature(
             kind="identitet", a=a, b=b, relation="parentes",
