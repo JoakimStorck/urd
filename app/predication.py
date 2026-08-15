@@ -237,9 +237,11 @@ def classify_answer_feature(f: Feature, source_features: list[Feature]) -> dict:
     """
     Klassificera ett drag i svaret mot källornas drag.
 
-    belagd   — källan bär samma drag
-    motsagd  — källan bär ett oförenligt drag
-    obelagd  — ingen källa bär draget
+    belagd    — källan bär samma drag
+    tvetydig  — källan bär draget, men i en konstruktion som tillåter
+                mer än en läsning
+    motsagd   — källan bär ett oförenligt drag
+    obelagd   — ingen källa bär draget
 
     Motsägelse prövas FÖRE stöd. En källa som håller uttrycken isär väger
     tyngre än en annan källa som råkar para ihop dem, eftersom
@@ -257,9 +259,29 @@ def classify_answer_feature(f: Feature, source_features: list[Feature]) -> dict:
         if contra:
             return contra
 
-    for g in source_features:
-        if _is_supporting(f, g):
-            return {"status": "belagd", "via": g.relation, "strength": g.strength}
+    supporting = [g for g in source_features if _is_supporting(f, g)]
+    if supporting:
+        # Tvetydighet är information och får inte tystas av att en
+        # läsning skulle ge stöd. "Prefekt och HR-expert Thomas
+        # Bodegrim presenterade ärendet" tillåter två läsningar — en
+        # person med två titlar, eller två personer varav en onämnd.
+        # Stanza väljer den första; i det verkliga protokollet avsågs
+        # den andra. Tvetydigheten sitter i källan, och ett system som
+        # tvingar fram en läsning ur en tvetydig mening är sämre än ett
+        # som redovisar att meningen tillåter två.
+        #
+        # Bär NÅGON stödjande källa tvetydigheten räcker det: svaret
+        # vilar då på en mening som inte entydigt binder påståendet.
+        ambiguous = [g for g in supporting if g.ambiguous]
+        if ambiguous:
+            return {
+                "status": "tvetydig",
+                "via": ambiguous[0].relation,
+                "strength": ambiguous[0].strength,
+                "kalla": ambiguous[0].sentence,
+            }
+        g = supporting[0]
+        return {"status": "belagd", "via": g.relation, "strength": g.strength}
 
     return {"status": "obelagd"}
 

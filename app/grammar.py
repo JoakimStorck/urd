@@ -67,6 +67,8 @@ class Feature:
     relation  vilken konstruktion som bar draget (UD-relation eller mönster)
     sentence  meningen draget kom ur, för spårbarhet
     strength  'asserterad' eller 'presupponerad' — se nedan
+    ambiguous draget kommer ur en konstruktion som tillåter mer än en
+              läsning; se _title_identity
     """
     kind: str
     a: str
@@ -74,6 +76,7 @@ class Feature:
     relation: str = ""
     sentence: str = ""
     strength: str = "asserterad"
+    ambiguous: bool = False
     extra: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
@@ -312,6 +315,93 @@ def _is_nominal(words, idx: int) -> bool:
     return 0 < idx <= len(words) and words[idx - 1].upos in _NOMINAL_UPOS
 
 
+def _governing_verb(words, idx: int, max_steps: int = 6) -> int | None:
+    """Följ head-kedjan uppåt till närmaste verb. 1-baserat id, eller None."""
+    seen = 0
+    cur = idx
+    while seen < max_steps and 0 < cur <= len(words):
+        head = words[cur - 1].head
+        if head == 0:
+            return cur if words[cur - 1].upos in ("VERB", "AUX") else None
+        if words[head - 1].upos in ("VERB", "AUX"):
+            return head
+        cur = head
+        seen += 1
+    return None
+
+
+def _title_identity(words, stext: str) -> list[Feature]:
+    """
+    Titel bunden till egennamn.
+
+    UPPMÄTT PARSERBETEENDE 2026-08-15 (Stanza, sv):
+
+        Proprefekt Ewa Wäckelgård föredrog ärendet.
+          1 Proprefekt  NOUN  head=2 nmod       <- titel FÖRE namn: nmod
+          2 Ewa         PROPN head=4 nsubj
+          3 Wäckelgård  PROPN head=2 flat:name
+
+        Thomas Bodegrim, HR-specialist, presenterade ärendet.
+          1 Thomas      PROPN head=6 nsubj
+          4 HR-specialist NOUN head=1 appos     <- titel EFTER namn: appos
+
+    Samma semantiska relation, två UD-etiketter beroende på ordföljd —
+    och i båda fallen hänger titeln UNDER namnet. Den tidigare regeln
+    letade bara appos och var därför blind för den vanligaste svenska
+    formen: obestämd titel före namn. Det förklarar varför Ewa
+    Wäckelgård aldrig extraherades ur beståndet trots att hon
+    förekommer som föredragande i ett stort antal protokoll.
+
+    Konstruktionen är stabil oavsett satsroll: i passiv form ("Ärendet
+    föredrogs av proprefekt Ewa Wäckelgård") hänger titeln likadant
+    under namnet, som i sin tur är obl:agent.
+
+    CASE-KRAVET. nmod under egennamn är inte alltid en titel:
+    "rapporten om Bodegrim" ger samma relation. Titelkonstruktionen
+    saknar preposition mellan titel och namn, medan om/av/från alltid
+    ger en case-markör. Kravet skiljer konstruktionerna åt utan att
+    veta vad orden betyder.
+
+    TVETYDIGHET. "Prefekt och HR-expert Thomas Bodegrim presenterade
+    ärendet" har två giltiga läsningar:
+
+        [Prefekt och HR-expert] Thomas Bodegrim   -> en person, två titlar
+        [Prefekt] och [HR-expert Thomas Bodegrim] -> två personer
+
+    Stanza väljer den första; i det verkliga protokollet avsågs den
+    andra. Tvetydigheten sitter i källan, inte i parsern, och den kan
+    inte avgöras ur meningen ensam. Drag för båda titlarna produceras
+    därför med ambiguous=True — att välja en läsning vore att gissa,
+    och systemet ska avstå hellre än gissa.
+    """
+    out: list[Feature] = []
+    for w in words:
+        if w.deprel not in ("nmod", "appos"):
+            continue
+        if not _is_nominal(words, w.id):
+            continue
+        # Huvudordet ska vara ett egennamn: det är namnet titeln
+        # tillskrivs.
+        if not (0 < w.head <= len(words)) or words[w.head - 1].upos != "PROPN":
+            continue
+        # Preposition mellan leden => inte en titelkonstruktion.
+        if any(x.head == w.id and x.deprel == "case" for x in words):
+            continue
+
+        name = _phrase(words, w.head)
+        titles = [w] + [
+            x for x in words if x.head == w.id and x.deprel == "conj"
+        ]
+        ambiguous = len(titles) > 1
+        for t in titles:
+            out.append(Feature(
+                kind="identitet", a=name, b=_phrase(words, t.id),
+                relation="titel:" + w.deprel, sentence=stext,
+                strength=PRESUPPOSED, ambiguous=ambiguous,
+            ))
+    return out
+
+
 def _identity(words, stext: str) -> list[Feature]:
     """
     Identitet uttryckt som villkor på dependensrelationer.
@@ -341,14 +431,8 @@ def _identity(words, stext: str) -> list[Feature]:
        som prefekt" gav ingen identitet alls.
     """
     out: list[Feature] = []
+    out.extend(_title_identity(words, stext))
     for w in words:
-        if w.deprel == "appos":
-            if not (_is_nominal(words, w.head) and _is_nominal(words, w.id)):
-                continue
-            out.append(Feature(
-                kind="identitet", a=_phrase(words, w.head), b=_phrase(words, w.id),
-                relation="appos", sentence=stext, strength=PRESUPPOSED,
-            ))
 
         if w.deprel == "cop":
             pred = w.head
@@ -366,8 +450,22 @@ def _identity(words, stext: str) -> list[Feature]:
                     relation="cop", sentence=stext, strength=ASSERTED,
                 ))
 
-        # Predikativ med markör
-        if w.deprel in ("xcomp", "obl", "obl:arg", "nmod") and _is_nominal(words, w.id):
+        # Predikativ med markör.
+        #
+        # UPPMÄTT 2026-08-15: "Thomas Bodegrim har rollen som prefekt"
+        # ger prefekt som appos under rollen, med som som mark — inte
+        # xcomp/obl under verbet. Titelregeln ovan hoppar över det
+        # (huvudordet är inget egennamn), och den här grenen fångade det
+        # tidigare med fel vänsterled: draget blev "rollen -> prefekt"
+        # i stället för "Thomas Bodegrim -> prefekt".
+        #
+        # Rättningen: när ledet är markerat med som/till söks subjektet
+        # via kedjan uppåt till närmaste verb, inte via det omedelbara
+        # huvudordet. Ord som rollen, uppdraget, befattningen är
+        # platshållare för en relation, inte referenter — men det
+        # behöver inte sägas som ordlista: det följer av att söka
+        # subjektet till verbet.
+        if w.deprel in ("xcomp", "obl", "obl:arg", "nmod", "appos") and _is_nominal(words, w.id):
             mark = next(
                 (x for x in words
                  if x.head == w.id and x.deprel in ("mark", "case")
@@ -376,19 +474,31 @@ def _identity(words, stext: str) -> list[Feature]:
             )
             if not mark:
                 continue
-            head = w.head
+            verb = _governing_verb(words, w.id)
+            if not verb:
+                continue
             subj = next(
                 (x.id for x in words
-                 if x.head == head and x.deprel in ("nsubj", "nsubj:pass")
+                 if x.head == verb and x.deprel in ("nsubj", "nsubj:pass")
                  and _is_nominal(words, x.id)),
                 None,
             )
             if subj:
-                out.append(Feature(
-                    kind="identitet", a=_phrase(words, subj), b=_phrase(words, w.id),
-                    relation=f"predikativ:{mark.text.lower()}", sentence=stext,
-                    strength=ASSERTED,
-                ))
+                # Samordnade predikativ ger egna drag: "rollen som
+                # prefekt och HR-expert" är två påståenden som ska
+                # kunna prövas var för sig. Till skillnad från
+                # titelkonstruktionen är detta INTE tvetydigt — här
+                # står samordningen efter markören och kan bara syfta
+                # på samma subjekt.
+                preds = [w] + [
+                    x for x in words if x.head == w.id and x.deprel == "conj"
+                ]
+                for pr in preds:
+                    out.append(Feature(
+                        kind="identitet", a=_phrase(words, subj), b=_phrase(words, pr.id),
+                        relation=f"predikativ:{mark.text.lower()}", sentence=stext,
+                        strength=ASSERTED,
+                    ))
     return out
 
 
