@@ -482,18 +482,70 @@ def _governing_verb(words, idx: int, max_steps: int = 6) -> int | None:
 # är inte proprefekten (Moudud Alam mot Ewa Wäckelgård), och
 # biträdande lektor är en annan lärarkategori än lektor — hela
 # kapitelskillnaden i anställningsordningen.
+_EMAIL = re.compile(r"[\w.+-]+@[\w.-]+")
+
 _TITLE_MODIFIERS = {
     "vår", "vårt", "våra", "nye", "nya", "ny", "nytt",
     "den", "det", "de", "en", "ett",
 }
 
 
-def normalize_title(title: str) -> str:
-    """Strippa bestämningar framför ett titelled."""
+def normalize_title(title: str, lemma: str | None = None) -> str:
+    """
+    Strippa bestämningar och normalisera till grundform.
+
+    Bestämd form och plural är BÖJNING, inte olika roller.
+    Handklassningen 2026-08-15 skrev genomgående om
+    "HR-specialisterna" till "HR-specialist", "avdelningschefen" till
+    "avdelningschef", "Doktoranden" till "doktorand". Utan
+    normalisering splittras beläggningen: samma roll räknas som flera,
+    och för uppdrag med en innehavare i taget blir intervallmodellen
+    fel.
+
+    Lemmat från parsern används när det finns — det är riktig
+    morfologi, till skillnad från prefixheuristiken i morphology.py.
+    """
     parts = title.split()
     while parts and parts[0].lower().strip(".") in _TITLE_MODIFIERS:
         parts.pop(0)
-    return " ".join(parts).strip() or title.strip()
+    out = " ".join(parts).strip() or title.strip()
+    # Enordstitlar ersätts av sitt lemma; flerordiga lämnas, eftersom
+    # lemmat då bara gäller huvudordet.
+    if lemma and len(out.split()) == 1 and lemma.strip():
+        return lemma.strip()
+    return out
+
+
+def _conj_chain(words, head_id: int) -> list[int]:
+    """
+    Följ samordningskedjan TRANSITIVT från ett huvudord.
+
+    I kommaseparerade uppräkningar hänger inte alla led direkt under
+    det första: "Forskningssamordnarna Chris Bales, Kumar Babu
+    Surreddi och Xiaoyun Zhao" ger conj under conj. Ett enda steg
+    fångar bara det andra ledet — uppmätt 2026-08-15 stod den formen
+    för fyra av åtta titelfel, alltid genom att bara en av tre
+    personer band till titeln.
+
+    Det underskattar beläggningen systematiskt, och för roller med
+    flera innehavare är det just den siffran som avgör om rollen
+    bedöms unik.
+    """
+    chain = [head_id]
+    frontier = [head_id]
+    while frontier:
+        nxt = []
+        for hid in frontier:
+            for x in words:
+                if (
+                    x.head == hid and x.deprel == "conj"
+                    and words[x.id - 1].upos == "PROPN"
+                    and x.id not in chain
+                ):
+                    chain.append(x.id)
+                    nxt.append(x.id)
+        frontier = nxt
+    return chain
 
 
 def _title_identity(words, stext: str) -> list[Feature]:
@@ -601,19 +653,23 @@ def _title_identity(words, stext: str) -> list[Feature]:
         #
         # Detta är INTE samma tvetydighet som samordnade titlar framför
         # ett namn: här är det entydigt att båda personerna bär titeln.
-        names = [w.head] + [
-            x.id for x in words
-            if x.head == w.head and x.deprel == "conj"
-            and words[x.id - 1].upos == "PROPN"
-        ]
+        names = _conj_chain(words, w.head)
         for nid in names:
             n = _phrase(words, nid)
             if _is_code_like(n) or _is_placeholder(n):
                 continue
+            # "Mats Rönnelid, mrd@du.se" gav "Mats Rönnelid ->
+            # mrd@du.se" — en e-postadress är ingen titel och inget
+            # namn. Uppmätt 2026-08-15.
+            if _EMAIL.search(n):
+                continue
             for t in titles:
                 out.append(Feature(
                     kind="identitet", a=n,
-                    b=normalize_title(_phrase(words, t.id)),
+                    b=normalize_title(
+                        _phrase(words, t.id),
+                        getattr(words[t.id - 1], "lemma", None),
+                    ),
                     relation="titel:" + w.deprel, sentence=stext,
                     strength=PRESUPPOSED, ambiguous=ambiguous,
                 ))
