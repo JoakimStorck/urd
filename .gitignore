@@ -46,3 +46,6 @@ Thumbs.db
 
 # Local logs
 *.log
+
+# Dokumentyta — instansens data, aldrig i versionshantering
+docs/
