@@ -926,6 +926,15 @@ def attest_build(
         False, "--only-changed",
         help="Hoppa över dokument vars fingerprint är oförändrat (inkrementellt).",
     ),
+    pattern: str = typer.Option(
+        "", "--pattern",
+        help=(
+            "Bygg bara dokument vars sökväg innehåller denna substräng. "
+            "--limit ensamt tar de alfabetiskt första, vilket i beståndet "
+            "ger enbart regeldokument — konstruktionerna skiljer sig "
+            "mellan textsorter, så pröva mot t.ex. 'IL-protokoll'."
+        ),
+    ),
 ) -> None:
     from app import attest
     from app.retrieval import RagService
@@ -933,6 +942,9 @@ def attest_build(
     typer.echo("Laddar RagService (kräver att servern är avstängd)...")
     rag = RagService()
     chunks = rag.bm25_index.hits
+    if pattern:
+        chunks = [c for c in chunks if pattern.lower() in c.metadata.source_path.lower()]
+        typer.echo(f"Filtrerat på {pattern!r}: {len(chunks)} chunkar")
     conn = attest.connect()
 
     def progress(i, total, path, n):
@@ -954,6 +966,48 @@ def attest_build(
     typer.echo(f"Tid:                {result['seconds']}s")
     typer.echo("")
     typer.echo(f"Totalt i indexet:   {attest.stats(conn)}")
+
+
+@app.command(
+    "attest-sample",
+    help=(
+        "Slumpa observationer för HANDKLASSNING. Precision per "
+        "konstruktion måste mätas innan en konstruktion får användas."
+    ),
+)
+def attest_sample(
+    n: int = typer.Option(30, "--n", help="Antal observationer att slumpa."),
+    kind: str = typer.Option("identitet", "--kind", help="Dragtyp."),
+    construction: str = typer.Option("", "--construction", help="Filtrera på konstruktion."),
+) -> None:
+    from app import attest
+    import sqlite3
+
+    conn = attest.connect()
+    conn.row_factory = sqlite3.Row
+    sql = "SELECT * FROM observations WHERE kind = ?"
+    args = [kind]
+    if construction:
+        sql += " AND construction = ?"
+        args.append(construction)
+    sql += " ORDER BY RANDOM() LIMIT ?"
+    args.append(n)
+
+    rows = list(conn.execute(sql, args))
+    if not rows:
+        typer.echo("Inga observationer matchade.")
+        return
+
+    for i, r in enumerate(rows, start=1):
+        typer.echo(f"{i:3}. [{r['construction']}] {r['subject']}  ->  {r['object']}")
+        typer.echo(f"     {(r['sentence'] or '')[:120]}")
+        typer.echo(f"     {r['file_name']}")
+        typer.echo("")
+    typer.echo(
+        f"{len(rows)} observationer. Klassa varje som korrekt eller inte och\n"
+        "räkna precision per konstruktion. Under 90 % bör konstruktionen\n"
+        "strykas ur uttaget — bedömning på stickprov, inte på intryck."
+    )
 
 
 @app.command(

@@ -436,7 +436,19 @@ _NOMINAL_UPOS = {"NOUN", "PROPN"}
 # Predikativmarkörer i sluten klass. "som" och "till" är funktionsord,
 # inte en lista över verb — det är skillnaden mot att räkna upp
 # "har rollen som", "innehar uppdraget som", "utses till".
-_PREDICATIVE_MARKS = {"som", "till"}
+# ENDAST "som". "till" togs bort 2026-08-15 efter mätning: den gav 175
+# av 427 identitetsdrag i ett urval om 20 dokument, och nästan
+# uteslutande skräp — "Nomineringar -> prefekt" ur "Nomineringar lämnas
+# enskilt till prefekt", "Försäkringskassan -> arbete", "erfarenhet ->
+# disputation".
+#
+# Antagandet att "till" fungerar som "som" i "utses till X" var fel.
+# "som" är i predikativ ställning en identitetsmarkör; "till" är
+# framför allt en riktnings- och mottagarpreposition, och att skilja
+# tillsättningsverb från övriga kräver kunskap om vad verbet betyder —
+# vilket lagret medvetet inte har. Konstruktionen "utses till X" fångas
+# ändå som agens.
+_PREDICATIVE_MARKS = {"som"}
 
 
 def _is_nominal(words, idx: int) -> bool:
@@ -532,9 +544,27 @@ def _title_identity(words, stext: str) -> list[Feature]:
             continue
         if not _is_nominal(words, w.id):
             continue
-        # Huvudordet ska vara ett egennamn: det är namnet titeln
-        # tillskrivs.
+        # Huvudordet ska vara ett PERSONNAMN, inte bara ett PROPN.
+        #
+        # Mätning 2026-08-15: kravet på PROPN ensamt gav "Diarienummer C
+        # -> Rektor" och "Universitetsadjunkt -> gästlärare" i
+        # regeltext, eftersom Stanza taggar rolltitlar och beteckningar
+        # som egennamn där. Titelkonstruktionen är dessutom en
+        # PROTOKOLLföreteelse: i regeltext står roller i generisk form
+        # utan namn, så regeln har där inget legitimt utfall alls.
+        #
+        # Villkoret är formmässigt: ett personnamn i svensk
+        # förvaltningstext skrivs ut med minst två namnled, vilket i UD
+        # ger ett PROPN med minst ett flat:name-barn. "Ewa Wäckelgård"
+        # och "Thomas Bodegrim" uppfyller det; "Rektor" och
+        # "Diarienummer C" gör det inte.
         if not (0 < w.head <= len(words)) or words[w.head - 1].upos != "PROPN":
+            continue
+        if not any(
+            x.head == w.head and x.deprel in ("flat", "flat:name")
+            and words[x.id - 1].upos == "PROPN"
+            for x in words
+        ):
             continue
         # Preposition mellan leden => inte en titelkonstruktion.
         if any(x.head == w.id and x.deprel == "case" for x in words):

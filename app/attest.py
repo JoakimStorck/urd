@@ -128,11 +128,20 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 # Byggning
 # ---------------------------------------------------------------------------
 
+# Åtskillnadsdrag lagras INTE. De är kvadratiska i antalet
+# verbargument — 1 922 av 4 560 rader i ett urval om 20 dokument — och
+# de säger ingenting om beläggning, bara om att två led är olika. De
+# behövs enbart som motsägelse vid klassificering av ett enskilt svar,
+# och där finns de redan via predication.py. Att utesluta dem halverar
+# tabellen utan att förlora något Attest använder.
+_STORED_KINDS = {"identitet", "agens", "modalitet"}
+
+
 def _observations_from_chunk(chunk) -> list[dict]:
     md = chunk.metadata
     rows: list[dict] = []
     for f in extract_features(chunk.text):
-        if f.b is None:
+        if f.b is None or f.kind not in _STORED_KINDS:
             continue
         rows.append({
             "subject": f.a, "subject_key": _key(f.a),
