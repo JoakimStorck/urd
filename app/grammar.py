@@ -343,6 +343,8 @@ def extract_features(text: str, max_sentences: int = 40) -> list[Feature]:
     for sent in doc.sentences[:max_sentences]:
         words = sent.words
         stext = sent.text
+        if not _has_finite_verb(words):
+            continue
         features.extend(_identity(words, stext))
         features.extend(_distinction(words, stext))
         features.extend(_agency(words, stext))
@@ -598,6 +600,38 @@ def _title_identity(words, stext: str) -> list[Feature]:
     return out
 
 
+def _has_finite_verb(words) -> bool:
+    """
+    Innehåller satsen ett predikat?
+
+    En teckensekvens utan finit verb är inte ett påstående, och ingen
+    parsning kan utvinna en relation ur något som inte påstår något.
+
+    Detta träffar en konkret och vanlig felkälla: signaturblock och
+    närvarolistor i protokoll. "Vid protokollet / Annette Lenne /
+    Joakim Storck" är en LAYOUTstruktur — sannolikt två kolumner eller
+    en tabell i PDF:en — som Docling platt ut till radbrytningar. I
+    handklassningen 2026-08-15 stod sju av elva titelfel för den
+    formen, med drag som "Annette Lenne Joakim Storck -> protokollet".
+
+    Att Annette Lenne var sekreterare är sant, men det följer av
+    genrekunskap om svensk mötesformalia, inte av texten. Att låta
+    parsern gissa det vore att producera belägg som ser lästa ut men
+    är härledda. Ska närvaro och sekreterarskap fångas är rätt väg en
+    egen behandling av protokollens standardsektioner vid ingest, där
+    formatet används i stället för att en dependensparser gissar.
+
+    Villkoret är grammatiskt och textsortsoberoende: samtliga korrekta
+    drag i stickprovet stod i fullständiga satser.
+    """
+    for w in words:
+        if w.upos in ("VERB", "AUX"):
+            feats = w.feats or ""
+            if "VerbForm=Fin" in feats or "Mood=" in feats or "Tense=" in feats:
+                return True
+    return False
+
+
 def _identity(words, stext: str) -> list[Feature]:
     """
     Identitet uttryckt som villkor på dependensrelationer.
@@ -648,55 +682,22 @@ def _identity(words, stext: str) -> list[Feature]:
                     relation="cop", sentence=stext, strength=ASSERTED,
                 ))
 
-        # Predikativ med markör.
+        # PREDIKATIV MED MARKÖR — BORTTAGEN 2026-08-15.
         #
-        # UPPMÄTT 2026-08-15: "Thomas Bodegrim har rollen som prefekt"
-        # ger prefekt som appos under rollen, med som som mark — inte
-        # xcomp/obl under verbet. Titelregeln ovan hoppar över det
-        # (huvudordet är inget egennamn), och den här grenen fångade det
-        # tidigare med fel vänsterled: draget blev "rollen -> prefekt"
-        # i stället för "Thomas Bodegrim -> prefekt".
+        # Konstruktionen "föreslås som ersättare", "hälsades välkommen
+        # som ny kollegial ledamot" gav 2 rätt av 5 i handklassningen.
+        # Felen är inte parsningsfel utan semantiska: "ersättare" är
+        # ingen roll utan en relation till en annan roll — personen får
+        # det uppdrag som blev ledigt. Att skilja de fallen från
+        # "Frank Fiedler som ämnesansvarig" kräver kunskap om vad
+        # orden betyder, och den kunskapen kan bara komma från en
+        # ordlista över rollord. Det är precis den specialfallsdjungel
+        # lagret ska undvika.
         #
-        # Rättningen: när ledet är markerat med som/till söks subjektet
-        # via kedjan uppåt till närmaste verb, inte via det omedelbara
-        # huvudordet. Ord som rollen, uppdraget, befattningen är
-        # platshållare för en relation, inte referenter — men det
-        # behöver inte sägas som ordlista: det följer av att söka
-        # subjektet till verbet.
-        if w.deprel in ("xcomp", "obl", "obl:arg", "nmod", "appos") and _is_nominal(words, w.id):
-            mark = next(
-                (x for x in words
-                 if x.head == w.id and x.deprel in ("mark", "case")
-                 and x.text.lower() in _PREDICATIVE_MARKS),
-                None,
-            )
-            if not mark:
-                continue
-            verb = _governing_verb(words, w.id)
-            if not verb:
-                continue
-            subj = next(
-                (x.id for x in words
-                 if x.head == verb and x.deprel in ("nsubj", "nsubj:pass")
-                 and _is_nominal(words, x.id)),
-                None,
-            )
-            if subj and not _has_disjunction(words, w.id):
-                # Samordnade predikativ ger egna drag: "rollen som
-                # prefekt och HR-expert" är två påståenden som ska
-                # kunna prövas var för sig. Till skillnad från
-                # titelkonstruktionen är detta INTE tvetydigt — här
-                # står samordningen efter markören och kan bara syfta
-                # på samma subjekt.
-                preds = [w] + [
-                    x for x in words if x.head == w.id and x.deprel == "conj"
-                ]
-                for pr in preds:
-                    out.append(Feature(
-                        kind="identitet", a=_phrase(words, subj), b=_phrase(words, pr.id),
-                        relation=f"predikativ:{mark.text.lower()}", sentence=stext,
-                        strength=ASSERTED,
-                    ))
+        # Funktionen _governing_verb behålls: den används av inget
+        # annat idag men kostar inget och är rätt mekanism om
+        # konstruktionen återinförs med bättre avgränsning.
+
     return out
 
 
@@ -721,6 +722,45 @@ def _strip_leading_function_words(phrase: str) -> str:
     while words and words[0].lower() in _FUNCTION_WORDS:
         words.pop(0)
     return " ".join(words).strip()
+
+
+# Parentesen bär tre SKILDA relationer, som handklassningen
+# 2026-08-15 blandade ihop:
+#
+#   Linus Kallin (Studentrepresentant)   -> roll
+#   Mats Rönnelid (HDa)                  -> organisationstillhörighet
+#   Utvärderingsutskotten (UUU)          -> förkortning
+#
+# Alla tre var korrekta observationer, men de betyder olika saker.
+# Sju av de tolv rätta i stickprovet var (HDa) — att räkna dem som
+# identiteter gör aggregeringen missvisande: "Joakim Storck -> HDa"
+# och "Joakim Storck -> prefekt" är inte samma slags påstående, och
+# en rollfråga får inte besvaras med en arbetsplats.
+#
+# Formen skiljer dem åt utan ordlista: en versalförkortning är en
+# förkortning; ett känt organisationssuffix eller en känd
+# organisationsform är tillhörighet; övrigt är roll.
+_ORG_MARKERS = (
+    "universitet", "högskola", "högskolan", "institut", "avdelning",
+    "myndighet", "kommun", "region", "ab", "hb", "kb",
+)
+
+
+def _parenthesis_kind(b: str) -> str:
+    """Vilken relation bär parentesen?"""
+    stripped = b.strip()
+    letters = [c for c in stripped if c.isalpha()]
+    # Förkortning: kort, ett enda led, övervägande versaler. Kravet är
+    # ÖVERVÄGANDE och inte enbart — "HDa" (Högskolan Dalarna) och
+    # "SÄVA" är båda förkortningar trots blandat skiftläge.
+    if (
+        letters and " " not in stripped and len(stripped) <= 6
+        and sum(c.isupper() for c in letters) >= len(letters) / 2
+    ):
+        return "forkortning"
+    if any(m in stripped.lower() for m in _ORG_MARKERS):
+        return "tillhorighet"
+    return "identitet"
 
 
 def _parenthetical_identity(text: str) -> list[Feature]:
@@ -753,7 +793,8 @@ def _parenthetical_identity(text: str) -> list[Feature]:
         if _is_code_like(a) or _is_code_like(b):
             continue
         out.append(Feature(
-            kind="identitet", a=a, b=b, relation="parentes",
+            kind=_parenthesis_kind(b), a=a, b=b,
+            relation="parentes:" + _parenthesis_kind(b).split(":")[-1],
             sentence=m.group(0), strength=PRESUPPOSED,
         ))
     return out

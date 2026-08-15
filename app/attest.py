@@ -134,7 +134,12 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 # behövs enbart som motsägelse vid klassificering av ett enskilt svar,
 # och där finns de redan via predication.py. Att utesluta dem halverar
 # tabellen utan att förlora något Attest använder.
-_STORED_KINDS = {"identitet", "agens", "modalitet"}
+# forkortning och tillhorighet lagras men är INTE identiteter:
+# "Joakim Storck -> HDa" är en arbetsplats, "Utvärderingsutskotten ->
+# UUU" en termdefinition. Båda är korrekta observationer och värdefulla
+# — förkortningarna är beståndets egen ordlista — men en rollfråga får
+# aldrig besvaras med dem.
+_STORED_KINDS = {"identitet", "agens", "modalitet", "forkortning", "tillhorighet"}
 
 
 def _observations_from_chunk(chunk) -> list[dict]:
