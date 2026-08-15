@@ -458,6 +458,30 @@ def _governing_verb(words, idx: int, max_steps: int = 6) -> int | None:
     return None
 
 
+# Bestämningar framför en titel bär ingen egen betydelse: "Vår nye
+# HR-specialist" och "HR-specialist" är samma roll. Utan normalisering
+# räknas de som skilda titlar och beläggen splittras — uppmätt
+# 2026-08-15 gav beståndet tre HR-specialist-belägg varav ett i den
+# längre formen.
+# ENDAST semantiskt tomma bestämningar. "tillförordnad", "tf" och
+# "biträdande" ÄNDRAR rollen och får aldrig strippas: en tf proprefekt
+# är inte proprefekten (Moudud Alam mot Ewa Wäckelgård), och
+# biträdande lektor är en annan lärarkategori än lektor — hela
+# kapitelskillnaden i anställningsordningen.
+_TITLE_MODIFIERS = {
+    "vår", "vårt", "våra", "nye", "nya", "ny", "nytt",
+    "den", "det", "de", "en", "ett",
+}
+
+
+def normalize_title(title: str) -> str:
+    """Strippa bestämningar framför ett titelled."""
+    parts = title.split()
+    while parts and parts[0].lower().strip(".") in _TITLE_MODIFIERS:
+        parts.pop(0)
+    return " ".join(parts).strip() or title.strip()
+
+
 def _title_identity(words, stext: str) -> list[Feature]:
     """
     Titel bunden till egennamn.
@@ -525,13 +549,19 @@ def _title_identity(words, stext: str) -> list[Feature]:
             continue
         if _is_code_like(name) or _is_code_like(_phrase(words, w.id)):
             continue
+        # En titel är inte ett namn. Närvarolistor ("Thomas Bodegrim,
+        # Xingxing Zhang, Moudud Alam") tolkas annars som appositioner
+        # och gav drag som "Thomas Bodegrim -> Moudud Alam" — uppmätt
+        # 2026-08-15. Titelledet ska vara ett vanligt substantiv.
+        if words[w.id - 1].upos == "PROPN":
+            continue
         titles = [w] + [
             x for x in words if x.head == w.id and x.deprel == "conj"
         ]
         ambiguous = len(titles) > 1
         for t in titles:
             out.append(Feature(
-                kind="identitet", a=name, b=_phrase(words, t.id),
+                kind="identitet", a=name, b=normalize_title(_phrase(words, t.id)),
                 relation="titel:" + w.deprel, sentence=stext,
                 strength=PRESUPPOSED, ambiguous=ambiguous,
             ))

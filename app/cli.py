@@ -911,6 +911,91 @@ _cli_active_session_id: str | None = None
 
 
 @app.command(
+    "attest-build",
+    help=(
+        "Bygg Attest-indexet: grammatiska observationer ur hela beståndet. "
+        "Kräver att servern är avstängd."
+    ),
+)
+def attest_build(
+    limit: int = typer.Option(
+        0, "--limit",
+        help="Bygg bara de N första dokumenten (för att pröva innan full körning).",
+    ),
+    only_changed: bool = typer.Option(
+        False, "--only-changed",
+        help="Hoppa över dokument vars fingerprint är oförändrat (inkrementellt).",
+    ),
+) -> None:
+    from app import attest
+    from app.retrieval import RagService
+
+    typer.echo("Laddar RagService (kräver att servern är avstängd)...")
+    rag = RagService()
+    chunks = rag.bm25_index.hits
+    conn = attest.connect()
+
+    def progress(i, total, path, n):
+        typer.echo(f"  [{i}/{total}] {Path(path).name}: {n} observationer")
+
+    try:
+        result = attest.build(
+            chunks, conn, only_changed=only_changed,
+            limit=limit or None, progress=progress,
+        )
+    except RuntimeError as e:
+        typer.echo(str(e))
+        raise typer.Exit(code=1)
+
+    typer.echo("")
+    typer.echo(f"Dokument byggda:    {result['documents']}")
+    typer.echo(f"Överhoppade:        {result['skipped']}")
+    typer.echo(f"Observationer:      {result['observations']}")
+    typer.echo(f"Tid:                {result['seconds']}s")
+    typer.echo("")
+    typer.echo(f"Totalt i indexet:   {attest.stats(conn)}")
+
+
+@app.command(
+    "attest-lookup",
+    help="Slå upp vad beståndet belägger om en term.",
+)
+def attest_lookup(
+    term: str = typer.Argument(..., help="Roll eller namn att slå upp."),
+    by: str = typer.Option(
+        "object", "--by",
+        help="'object' för 'vem är X', 'subject' för 'vad är X'.",
+    ),
+) -> None:
+    from app import attest
+
+    conn = attest.connect()
+    fn = attest.lookup_object if by == "object" else attest.lookup_subject
+    cands = fn(conn, term)
+
+    if not cands:
+        typer.echo(f"Inga observationer för {term!r}.")
+        return
+
+    unique = attest.role_is_unique(cands)
+    label = {True: "UNIK", False: "ICKE-UNIK", None: "OBESTÄMD"}[unique]
+    typer.echo(f"{term!r} — {len(cands)} kandidat(er). "
+               f"Rollens unikhet i beståndet: {label}.")
+    typer.echo("")
+    for c in cands:
+        flag = "  [ENDAST TVETYDIGA BELÄGG]" if c.ambiguous_only else ""
+        span = f"{c.first_date or '?'} – {c.last_date or '?'}"
+        typer.echo(f"  {c.subject}  ->  {c.object}{flag}")
+        typer.echo(f"      {c.documents} dokument, {c.observations} observationer, {span}")
+        typer.echo(f"      konstruktioner: {', '.join(c.constructions)}")
+        for sent in c.sentences[:2]:
+            typer.echo(f"      \"{sent[:100]}\"")
+        typer.echo("")
+    typer.echo("Beläggning är inte sanning: siffrorna mäter hur ofta något")
+    typer.echo("skrivits i beståndet, inte om det stämmer.")
+
+
+@app.command(
     "ask",
     help="Ställ en fråga till dokumentchatten och visa svar med källor.",
 )
