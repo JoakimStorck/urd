@@ -30,6 +30,7 @@ ingen ny extraktion. Cachen är en cache över parsningar, inte en tabell
 from __future__ import annotations
 
 import logging
+import re
 import time
 
 from app.config import settings
@@ -82,22 +83,47 @@ def features_for_hits(hits) -> tuple[list[Feature], dict]:
 # Jämförelse mellan svarets och källornas drag
 # ---------------------------------------------------------------------------
 
+_STOPWORDS = {
+    "den", "det", "de", "en", "ett", "som", "vilken", "vilket", "vilka",
+    "denna", "detta", "dessa", "han", "hon", "hen", "man", "sitt", "sin",
+}
+
+
+def _content_words(phrase: str) -> set[str]:
+    """Innehållsord i en fras: allt utom pronomen och artiklar."""
+    return {
+        w for w in re.findall(r"[\wÅÄÖåäö\-]+", phrase.lower())
+        if len(w) >= 3 and w not in _STOPWORDS
+    }
+
+
 def _terms_match(a: str, b: str) -> bool:
     """
-    Tolerant termjämförelse: identisk, delmängd, eller böjningsvariant.
+    Termjämförelse på innehållsord, med böjningstolerans.
 
-    Tolerant vid sammanvägning, ordagrann vid återgivning. Beståndet
-    innehåller "Anna Skogberg" i labbansvarigbeslutet och "Anna Skogbergs"
-    som studierektor — en felstavning i källan. URD ska återge vad källan
-    säger, inte tyst rätta den, men jämförelsen får inte räkna två
-    stavningar som två personer.
+    SKÄRPT 2026-08-15. Tidigare version accepterade delsträngsmatchning
+    i båda riktningarna ("rollen" matchade "rollen som prefekt",
+    "beslut" matchade "beslutsmöte"). Med hundratals åtskillnadsdrag i
+    kandidatpoolen blev slumpmässiga överlappningar oundvikliga, och
+    samtliga tre motsägelser i mätningen var falsklarm — en av dem
+    citerade dessutom en källmening utan samband med påståendet.
+
+    Nu krävs att minst ett INNEHÅLLSORD sammanfaller, jämfört ordagrant
+    eller som böjningsvariant. Böjningstoleransen behövs för att
+    beståndet innehåller "Anna Skogberg" i labbansvarigbeslutet och
+    "Anna Skogbergs" som studierektor — en felstavning i källan. URD
+    ska återge vad källan säger, inte tyst rätta den, men jämförelsen
+    får inte räkna två stavningar som två personer.
     """
-    a_l, b_l = a.lower().strip(), b.lower().strip()
-    if not a_l or not b_l:
+    aw, bw = _content_words(a), _content_words(b)
+    if not aw or not bw:
         return False
-    if a_l == b_l or a_l in b_l or b_l in a_l:
+    if aw & bw:
         return True
-    return is_inflection_of(a_l, b_l) or is_inflection_of(b_l, a_l)
+    return any(
+        is_inflection_of(x, y) or is_inflection_of(y, x)
+        for x in aw for y in bw
+    )
 
 
 def _pair_match(f: Feature, g: Feature) -> bool:
@@ -134,20 +160,55 @@ def _is_supporting(f: Feature, g: Feature) -> bool:
     return _pair_match(f, g)
 
 
+def _both_terms_match(f: Feature, g: Feature) -> bool:
+    """
+    Strikt parmatchning: BÅDA leden måste sammanfalla.
+
+    _pair_match räcker inte för motsägelser. Ett falsklarm i mätningen
+    2026-08-15 parade ihop svarets påstående om ett beslutsmötes längd
+    med en källmening om prefektens beredning, enbart för att ett led
+    överlappade. En motsägelse är en stark flagga och måste vila på att
+    källan talar om samma två saker.
+    """
+    if f.b is None or g.b is None:
+        return False
+    return (
+        (_terms_match(f.a, g.a) and _terms_match(f.b, g.b))
+        or (_terms_match(f.a, g.b) and _terms_match(f.b, g.a))
+    )
+
+
 def _contradiction(f: Feature, g: Feature) -> dict | None:
-    """Bär källdraget g något som är oförenligt med svarsdraget f?"""
+    """
+    Bär källdraget g något som är oförenligt med svarsdraget f?
+
+    SKÄRPT 2026-08-15: samtliga tre motsägelser i första mätningen var
+    falsklarm. Kraven är nu att båda leden matchar och att källdraget
+    har en meningskontext att visa upp — en flagga som citerar fel
+    mening är värre än ingen flagga, eftersom felet blir svårt att
+    genomskåda.
+    """
+    if not g.sentence:
+        return None
     # Identitet mot åtskillnad: "TB är prefekt" mot "prefekten uppdrog
     # åt HR-specialist TB". Detta är det bekräftade felet 2026-08-14.
-    if f.kind == "identitet" and g.kind == "atskillnad" and _pair_match(f, g):
+    if f.kind == "identitet" and g.kind == "atskillnad" and _both_terms_match(f, g):
         return {"status": "motsagd", "via": g.relation, "kalla": g.sentence}
 
     # Omvänd agens: "Vice rektor har delegerat till rektor".
     if f.kind == "agens" and g.kind == "agens" and f.relation == g.relation:
-        if f.a and g.b and _terms_match(f.a, g.b) and not _terms_match(f.a, g.a):
+        # Kräv att BÅDA dragen har objekt. Ett falsklarm i mätningen
+        # utlöstes av ett källdrag utan objekt, ur en mening som
+        # klippts mitt i satsen.
+        if (
+            f.a and f.b and g.a and g.b
+            and _terms_match(f.a, g.b) and _terms_match(f.b, g.a)
+            and not _terms_match(f.a, g.a)
+        ):
             return {"status": "motsagd", "via": "omvänd_agens", "kalla": g.sentence}
 
     # Kravnivå: svaret säger "ska" där källan säger "bör".
-    if f.kind == "modalitet" and g.kind == "modalitet" and _pair_match(f, g):
+    if f.kind == "modalitet" and g.kind == "modalitet" and _both_terms_match(f, g):
         if f.extra.get("nivå") != g.extra.get("nivå"):
             return {
                 "status": "motsagd", "via": "kravnivå",

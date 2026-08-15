@@ -182,6 +182,34 @@ def is_available() -> bool:
 _TABLE_MARKERS = ("[Tabell]", "|")
 _LIST_LINE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
 
+# Källhänvisningar är systemets egen notation, inte innehåll. Utan
+# sanering parsas "[Källa 1]" som text och ger drag av typen
+# "har -> 1" — uppmätt 2026-08-15. Mönstret tillåter förvanskade
+# varianter ("[Käur 4]", "[Klla 1]") som gemma4 producerar.
+# Ett kort ord följt av en siffra inom hakparentes. Bredare än
+# "Källa N" med flit: gemma4 producerar förvanskade varianter, och
+# att matcha formen i stället för ordet gör mönstret robust mot
+# stavningar vi inte sett.
+_CITATION = re.compile(r"\[\s*[^\]\d]{0,12}\d+(?:\s*[,;]\s*[^\]\d]{0,12}\d+)*\s*\]")
+
+# Metapåståenden om underlaget är systemets tal om sig självt, inte
+# påståenden om verkligheten: "Det framgår inte i källorna att ...".
+# Uppmätt gav de drag som "Det -> källorna", vilka aldrig kan ha stöd
+# eftersom de handlar om källmängden och inte om dess innehåll.
+_META_MARKERS = (
+    "källorna", "källan", "källtexten", "de tillgängliga källorna",
+    "de indexerade dokumenten", "tidigare svar",
+)
+
+
+def strip_citations(text: str) -> str:
+    return _CITATION.sub(" ", text)
+
+
+def _is_meta_sentence(text: str) -> bool:
+    low = text.lower()
+    return any(m in low for m in _META_MARKERS)
+
 
 def sentence_like_lines(text: str) -> list[str]:
     """
@@ -194,8 +222,10 @@ def sentence_like_lines(text: str) -> list[str]:
     """
     out: list[str] = []
     for line in text.splitlines():
-        stripped = line.strip()
+        stripped = strip_citations(line).strip()
         if len(stripped) < 25:
+            continue
+        if _is_meta_sentence(stripped):
             continue
         if any(m in stripped for m in _TABLE_MARKERS):
             continue
@@ -258,37 +288,113 @@ def extract_features(text: str, max_sentences: int = 40) -> list[Feature]:
         features.extend(_distinction(words, stext))
         features.extend(_agency(words, stext))
         features.extend(_modality(words, stext))
-        features.extend(_quantity(words, stext))
+        # Kvantitet gav 2 drag av 291 i mätningen 2026-08-15 och bär
+        # inte sin underhållskostnad. Funktionen behålls men anropas
+        # inte; gränsriktning är fortfarande en verklig felklass och
+        # kan återaktiveras om ett testfall visar att den behövs.
+        # features.extend(_quantity(words, stext))
     features.extend(_parenthetical_identity(text))
     return features
 
 
+# Nominala ordklasser. Identitet kräver att BÅDA leden är nominala:
+# utan kravet plockas relativsatser upp som appositioner, vilket gav
+# draget "som -> nuvarande proprefekten" i mätningen 2026-08-15.
+_NOMINAL_UPOS = {"NOUN", "PROPN"}
+
+# Predikativmarkörer i sluten klass. "som" och "till" är funktionsord,
+# inte en lista över verb — det är skillnaden mot att räkna upp
+# "har rollen som", "innehar uppdraget som", "utses till".
+_PREDICATIVE_MARKS = {"som", "till"}
+
+
+def _is_nominal(words, idx: int) -> bool:
+    return 0 < idx <= len(words) and words[idx - 1].upos in _NOMINAL_UPOS
+
+
 def _identity(words, stext: str) -> list[Feature]:
-    """Apposition (presupponerad) och kopula (asserterad)."""
+    """
+    Identitet uttryckt som villkor på dependensrelationer.
+
+    Tre konstruktioner, alla formulerade som satser om syntax:
+
+    1. APPOSITION (appos), båda leden nominala.
+       "Proprefekt Ewa Wäckelgård föredrog ärendet."
+       Presupponerad: rollen påstås inte, den förutsätts — vilket syns
+       på att den överlever negation.
+
+    2. KOPULA (cop), predikativet nominalt.
+       "Ewa Wäckelgård är proprefekt." Asserterad.
+
+    3. PREDIKATIV MED MARKÖR: ett verb som tar ett nominalt led inlett
+       av "som" eller "till", bundet till verbets subjekt.
+       "Thomas Bodegrim har rollen som prefekt", "N utses till X",
+       "N tjänstgör som X", "N verkar som X".
+
+       Verbets betydelse används INTE. Det som gör konstruktionen till
+       en identitet är att predikativet är nominalt och inlett av en
+       markör ur en sluten klass — inte vilket verb som råkar stå där.
+       Därmed täcks även konstruktioner vi inte har sett.
+
+       Mätningen 2026-08-15 visade att avsaknaden av denna regel gjorde
+       lagret blint för sitt eget testfall: "Thomas Bodegrim har rollen
+       som prefekt" gav ingen identitet alls.
+    """
     out: list[Feature] = []
     for w in words:
-        # appos: "Proprefekt Ewa Wäckelgård" / "Thomas Bodegrim, HR-specialist"
         if w.deprel == "appos":
+            if not (_is_nominal(words, w.head) and _is_nominal(words, w.id)):
+                continue
             out.append(Feature(
                 kind="identitet", a=_phrase(words, w.head), b=_phrase(words, w.id),
                 relation="appos", sentence=stext, strength=PRESUPPOSED,
             ))
-        # kopula: "Ewa Wäckelgård är proprefekt" — cop hänger under
-        # predikativet, vars nsubj är subjektet
+
         if w.deprel == "cop":
             pred = w.head
-            subj = next((x.id for x in words if x.head == pred and x.deprel in ("nsubj", "nsubj:pass")), None)
+            if not _is_nominal(words, pred):
+                continue
+            subj = next(
+                (x.id for x in words
+                 if x.head == pred and x.deprel in ("nsubj", "nsubj:pass")
+                 and _is_nominal(words, x.id)),
+                None,
+            )
             if subj:
                 out.append(Feature(
                     kind="identitet", a=_phrase(words, subj), b=_phrase(words, pred),
                     relation="cop", sentence=stext, strength=ASSERTED,
                 ))
+
+        # Predikativ med markör
+        if w.deprel in ("xcomp", "obl", "obl:arg", "nmod") and _is_nominal(words, w.id):
+            mark = next(
+                (x for x in words
+                 if x.head == w.id and x.deprel in ("mark", "case")
+                 and x.text.lower() in _PREDICATIVE_MARKS),
+                None,
+            )
+            if not mark:
+                continue
+            head = w.head
+            subj = next(
+                (x.id for x in words
+                 if x.head == head and x.deprel in ("nsubj", "nsubj:pass")
+                 and _is_nominal(words, x.id)),
+                None,
+            )
+            if subj:
+                out.append(Feature(
+                    kind="identitet", a=_phrase(words, subj), b=_phrase(words, w.id),
+                    relation=f"predikativ:{mark.text.lower()}", sentence=stext,
+                    strength=ASSERTED,
+                ))
     return out
 
 
 # Sluten klass av svenska funktionsord. Att stryka dem framför en
-# parentes är en sats om syntax (prepositioner och konjunktioner kan inte
-# vara appositionens huvudord), inte en lista över domänfall.
+# parentes är en sats om syntax (prepositioner och konjunktioner kan
+# inte vara appositionens huvudord), inte en lista över domänfall.
 _FUNCTION_WORDS = {
     "av", "för", "till", "i", "på", "med", "hos", "om", "som", "och",
     "efter", "vid", "från", "genom", "att", "den", "det", "en", "ett",
