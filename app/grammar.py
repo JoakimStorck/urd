@@ -591,12 +591,32 @@ def _title_identity(words, stext: str) -> list[Feature]:
             x for x in words if x.head == w.id and x.deprel == "conj"
         ]
         ambiguous = len(titles) > 1
-        for t in titles:
-            out.append(Feature(
-                kind="identitet", a=name, b=normalize_title(_phrase(words, t.id)),
-                relation="titel:" + w.deprel, sentence=stext,
-                strength=PRESUPPOSED, ambiguous=ambiguous,
-            ))
+
+        # Samordnade PERSONNAMN delar titeln. "Studierektorerna Mia
+        # Xiaoyun Zhao och Xingxing Zhang presenterade läget" band
+        # tidigare bara den första — uppmätt 2026-08-15. Det
+        # underskattar beläggningen systematiskt, och just för roller
+        # med flera innehavare är det den siffran som avgör om rollen
+        # bedöms unik.
+        #
+        # Detta är INTE samma tvetydighet som samordnade titlar framför
+        # ett namn: här är det entydigt att båda personerna bär titeln.
+        names = [w.head] + [
+            x.id for x in words
+            if x.head == w.head and x.deprel == "conj"
+            and words[x.id - 1].upos == "PROPN"
+        ]
+        for nid in names:
+            n = _phrase(words, nid)
+            if _is_code_like(n) or _is_placeholder(n):
+                continue
+            for t in titles:
+                out.append(Feature(
+                    kind="identitet", a=n,
+                    b=normalize_title(_phrase(words, t.id)),
+                    relation="titel:" + w.deprel, sentence=stext,
+                    strength=PRESUPPOSED, ambiguous=ambiguous,
+                ))
     return out
 
 
@@ -634,94 +654,34 @@ def _has_finite_verb(words) -> bool:
 
 def _identity(words, stext: str) -> list[Feature]:
     """
-    Identitet uttryckt som villkor på dependensrelationer.
+    Identitet i en sats.
 
-    Tre konstruktioner, alla formulerade som satser om syntax:
+    Kvar står EN konstruktion: titel bunden till personnamn, via nmod
+    (titel före namn) eller appos (titel efter namn med komma). Se
+    _title_identity.
 
-    1. APPOSITION (appos), båda leden nominala.
-       "Proprefekt Ewa Wäckelgård föredrog ärendet."
-       Presupponerad: rollen påstås inte, den förutsätts — vilket syns
-       på att den överlever negation.
+    KOPULA BORTTAGEN 2026-08-15. Handklassning av 40 observationer gav
+    1 rätt av 14. Kopula i löptext uttrycker vilken predikation som
+    helst, inte identitet mellan entiteter: "samarbete är en viktig
+    del", "två år är en kort tid", "Utgångspunkten för arbetet är
+    material som togs fram". Att den gav 3/3 i det första stickprovet
+    var slumpen i ett litet urval — vilket är hela skälet till att
+    precision mäts per konstruktion i stället för bedöms på intryck.
 
-    2. KOPULA (cop), predikativet nominalt.
-       "Ewa Wäckelgård är proprefekt." Asserterad.
+    Riktiga identiteter i kopulaform ("Ewa är adjungerad ledamot i XU")
+    finns, men de går inte att skilja från övriga predikationer utan
+    att veta vad orden betyder.
 
-    3. PREDIKATIV MED MARKÖR: ett verb som tar ett nominalt led inlett
-       av "som" eller "till", bundet till verbets subjekt.
-       "Thomas Bodegrim har rollen som prefekt", "N utses till X",
-       "N tjänstgör som X", "N verkar som X".
+    PREDIKATIV MED MARKÖR BORTTAGEN samma dag: 2 rätt av 5. "Föreslås
+    som ersättare" betyder att personen får den roll som blev ledig —
+    "ersättare" är ingen roll. Att skilja det från "Frank Fiedler som
+    ämnesansvarig" kräver en ordlista över rollord.
 
-       Verbets betydelse används INTE. Det som gör konstruktionen till
-       en identitet är att predikativet är nominalt och inlett av en
-       markör ur en sluten klass — inte vilket verb som råkar stå där.
-       Därmed täcks även konstruktioner vi inte har sett.
-
-       Mätningen 2026-08-15 visade att avsaknaden av denna regel gjorde
-       lagret blint för sitt eget testfall: "Thomas Bodegrim har rollen
-       som prefekt" gav ingen identitet alls.
+    Funktionerna _governing_verb och _has_disjunction behålls: de
+    kostar inget och är rätt mekanismer om konstruktionerna återinförs
+    med bättre avgränsning.
     """
-    out: list[Feature] = []
-    out.extend(_title_identity(words, stext))
-    for w in words:
-
-        if w.deprel == "cop":
-            pred = w.head
-            if not _is_nominal(words, pred):
-                continue
-            if _has_disjunction(words, pred):
-                continue
-            subj = next(
-                (x.id for x in words
-                 if x.head == pred and x.deprel in ("nsubj", "nsubj:pass")
-                 and _is_nominal(words, x.id)),
-                None,
-            )
-            if subj:
-                out.append(Feature(
-                    kind="identitet", a=_phrase(words, subj), b=_phrase(words, pred),
-                    relation="cop", sentence=stext, strength=ASSERTED,
-                ))
-
-        # PREDIKATIV MED MARKÖR — BORTTAGEN 2026-08-15.
-        #
-        # Konstruktionen "föreslås som ersättare", "hälsades välkommen
-        # som ny kollegial ledamot" gav 2 rätt av 5 i handklassningen.
-        # Felen är inte parsningsfel utan semantiska: "ersättare" är
-        # ingen roll utan en relation till en annan roll — personen får
-        # det uppdrag som blev ledigt. Att skilja de fallen från
-        # "Frank Fiedler som ämnesansvarig" kräver kunskap om vad
-        # orden betyder, och den kunskapen kan bara komma från en
-        # ordlista över rollord. Det är precis den specialfallsdjungel
-        # lagret ska undvika.
-        #
-        # Funktionen _governing_verb behålls: den används av inget
-        # annat idag men kostar inget och är rätt mekanism om
-        # konstruktionen återinförs med bättre avgränsning.
-
-    return out
-
-
-# Sluten klass av svenska funktionsord. Att stryka dem framför en
-# parentes är en sats om syntax (prepositioner och konjunktioner kan
-# inte vara appositionens huvudord), inte en lista över domänfall.
-_FUNCTION_WORDS = {
-    "av", "för", "till", "i", "på", "med", "hos", "om", "som", "och",
-    "efter", "vid", "från", "genom", "att", "den", "det", "en", "ett",
-    "är", "fattas", "beslutas",
-}
-
-
-_REFERENCE_MARKERS = {
-    "se", "jfr", "dvs", "exempelvis", "bilaga", "not", "enligt",
-    "eller", "resp", "respektive",
-}
-
-
-def _strip_leading_function_words(phrase: str) -> str:
-    words = phrase.split()
-    while words and words[0].lower() in _FUNCTION_WORDS:
-        words.pop(0)
-    return " ".join(words).strip()
+    return _title_identity(words, stext)
 
 
 # Parentesen bär tre SKILDA relationer, som handklassningen
@@ -744,6 +704,45 @@ _ORG_MARKERS = (
     "universitet", "högskola", "högskolan", "institut", "avdelning",
     "myndighet", "kommun", "region", "ab", "hb", "kb",
 )
+
+
+# Sluten klass av svenska funktionsord. Att stryka dem framför en
+# parentes är en sats om syntax (prepositioner och konjunktioner kan
+# inte vara appositionens huvudord), inte en lista över domänfall.
+_FUNCTION_WORDS = {
+    "av", "för", "till", "i", "på", "med", "hos", "om", "som", "och",
+    "efter", "vid", "från", "genom", "att", "den", "det", "en", "ett",
+    "är", "fattas", "beslutas",
+}
+
+_REFERENCE_MARKERS = {
+    "se", "jfr", "dvs", "exempelvis", "bilaga", "not", "enligt",
+    "eller", "resp", "respektive",
+}
+
+
+def _strip_leading_function_words(phrase: str) -> str:
+    parts = phrase.split()
+    while parts and parts[0].lower() in _FUNCTION_WORDS:
+        parts.pop(0)
+    return " ".join(parts).strip()
+
+
+# Verbändelser som markerar finit form i svenska. Listan är
+# morfologisk, inte lexikal: den säger något om ordform, inte om vilka
+# ord som finns. Riktig morfologi (Kanns Stava/Inflector) skulle
+# ersätta den.
+_FINITE_ENDINGS = ("as", "ar", "er", "de", "te", "ts", "ades", "ade")
+
+
+def _looks_predicative(phrase: str) -> bool:
+    """Innehåller frasen något som ser ut som ett finit verb?"""
+    for tok in re.findall(r"[\wÅÄÖåäö]+", phrase.lower()):
+        if len(tok) < 4:
+            continue
+        if tok.endswith(_FINITE_ENDINGS):
+            return True
+    return False
 
 
 def _parenthesis_kind(b: str) -> str:
@@ -791,6 +790,15 @@ def _parenthetical_identity(text: str) -> list[Feature]:
         if _is_placeholder(a):
             continue
         if _is_code_like(a) or _is_code_like(b):
+            continue
+        # En roll är en nominalfras. Parentetiska FÖRTYDLIGANDEN
+        # innehåller predikat: "(nominering diskuteras i kollegiet)",
+        # "(sett till antal HST)", "(prefekt godkänner)". De gav 6 av 9
+        # fel i handklassningen 2026-08-15. Samma princip som
+        # verbkravet på satser, applicerad på parentesens innehåll —
+        # men omvänt: här diskvalificerar predikatet, eftersom en
+        # apposition inte påstår något, den benämner.
+        if _looks_predicative(b):
             continue
         out.append(Feature(
             kind=_parenthesis_kind(b), a=a, b=b,
