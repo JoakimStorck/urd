@@ -47,10 +47,44 @@ from app.schemas import ChatResponse, SourceHit
 
 app = typer.Typer(
     help="URD Local source of knowledge about document content.",
-    no_args_is_help=True,
+    # no_args_is_help avstängt: `urd` utan argument går till
+    # interaktivt läge, som `python`. Hjälpen nås med --help.
+    no_args_is_help=False,
+    invoke_without_command=True,
     add_completion=False,
     rich_markup_mode=None,
 )
+
+
+@app.callback()
+def _root(
+    ctx: typer.Context,
+    server_url: str = typer.Option(
+        "http://127.0.0.1:8000",
+        "--server-url",
+        help="URL till urd-servern (interaktivt läge).",
+    ),
+    sources: bool = typer.Option(
+        True, "--sources/--no-sources",
+        help="Visa källor i interaktivt läge.",
+    ),
+    debug: bool = typer.Option(
+        False, "--debug",
+        help="Visa teknisk info i interaktivt läge.",
+    ),
+) -> None:
+    """
+    Utan underkommando startas interaktivt läge.
+
+    Skillnaden mot `urd ask` är att sessionen LEVER: QUD, aktiva
+    dokument och rework-tillstånd finns kvar mellan frågor, vilket är
+    hela poängen med URD:s samtalsmodell. Varje `urd ask` startar en ny
+    process och tappar allt det.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    from app.repl import run
+    run(server_url=server_url, show_sources=sources, show_debug=debug)
 
 
 def _ask_via_server(question: str, base_url: str) -> dict:
