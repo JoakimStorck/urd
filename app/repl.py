@@ -189,6 +189,13 @@ class Repl:
 
         elif cmd == "debug":
             self.show_debug = _on_off(args, self.show_debug)
+            # Debug på återställer också URD:s egen INFO-logg, som är
+            # dämpad i läget för att inte stå mellan fråga och svar.
+            import logging as _logging
+            level = _logging.INFO if self.show_debug else _logging.WARNING
+            for name in ("app.retrieval", "app.api", "app.grammar",
+                         "app.predication", "app.attest"):
+                _logging.getLogger(name).setLevel(level)
             typer.echo(f"Debug: {'på' if self.show_debug else 'av'}")
 
         else:
@@ -210,6 +217,15 @@ def run(server_url: str, show_sources: bool, show_debug: bool) -> None:
         import readline  # noqa: F401  — ger radhistorik och redigering
     except ImportError:
         pass
+
+    # URD:s egen INFO-logg hör hemma i serverloggen, inte mellan frågan
+    # och svaret i en prompt. Diagnostiken finns kvar i debug-blocket
+    # och i JSONL-spåren; .debug på visar den i läget.
+    import logging as _logging
+    for _name in ("app.retrieval", "app.api", "app.grammar",
+                  "app.predication", "app.attest", "app.synonyms",
+                  "app.concepts", "app.question_operations"):
+        _logging.getLogger(_name).setLevel(_logging.WARNING)
 
     repl = Repl(server_url, show_sources, show_debug)
     typer.echo(BANNER)

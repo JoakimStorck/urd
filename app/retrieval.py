@@ -9,8 +9,13 @@ import logging
 import math
 import re
 import time
-from rank_bm25 import BM25Okapi
-from sentence_transformers import CrossEncoder
+
+from app.quiet import quiet_libraries
+
+quiet_libraries()   # före sentence_transformers — se app/quiet.py
+
+from rank_bm25 import BM25Okapi  # noqa: E402
+from sentence_transformers import CrossEncoder  # noqa: E402
 
 from app.config import settings
 from app.embeddings import Embedder
@@ -568,7 +573,11 @@ class Reranker:
 
         # Cross-encoder: varje (fråga, chunk) bedöms som ett par
         pairs = [(question, h.text) for h in filtered]
-        scores = self.model.predict(pairs)
+        # show_progress_bar=False: sentence-transformers skriver annars
+        # "Batches: 100%|..." till stderr vid varje anrop. I serverläge
+        # är det brus i loggen, i interaktivt läge står det mellan
+        # frågan och svaret.
+        scores = self.model.predict(pairs, show_progress_bar=False)
 
         scored = list(zip(scores, filtered))
         scored.sort(key=lambda x: x[0], reverse=True)

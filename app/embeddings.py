@@ -19,7 +19,11 @@ byggas om (urd reindex) och qud_drift_threshold omkalibreras
 (scripts/calibrate_drift.py) efter denna ändring.
 """
 
-from sentence_transformers import SentenceTransformer
+from app.quiet import quiet_libraries
+
+quiet_libraries()   # före sentence_transformers — se app/quiet.py
+
+from sentence_transformers import SentenceTransformer  # noqa: E402
 from app.config import settings
 
 
