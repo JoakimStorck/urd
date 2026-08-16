@@ -1037,22 +1037,28 @@ def attest_lookup(
         typer.echo(f"Inga observationer för {term!r}.")
         return
 
-    unique = attest.role_is_unique(cands)
-    label = {True: "UNIK", False: "ICKE-UNIK", None: "OBESTÄMD"}[unique]
-    typer.echo(f"{term!r} — {len(cands)} kandidat(er). "
-               f"Rollens unikhet i beståndet: {label}.")
+    typer.echo(f"{term!r} — {len(cands)} kandidat(er), rangordnade efter relevans.")
     typer.echo("")
     for c in cands:
         flag = "  [ENDAST TVETYDIGA BELÄGG]" if c.ambiguous_only else ""
         span = f"{c.first_date or '?'} – {c.last_date or '?'}"
         typer.echo(f"  {c.subject}  ->  {c.object}{flag}")
-        typer.echo(f"      {c.documents} dokument, {c.observations} observationer, {span}")
+        typer.echo(
+            f"      relevans {c.relevance:.2f}"
+            f"  (styrka {c.strength:.2f} × aktualitet {c.recency:.2f})"
+        )
+        typer.echo(
+            f"      {c.documents} dokument"
+            f" varav {c.unambiguous_documents} entydiga,"
+            f" {c.observations} observationer, {span}"
+        )
         typer.echo(f"      konstruktioner: {', '.join(c.constructions)}")
         for sent in c.sentences[:2]:
             typer.echo(f"      \"{sent[:100]}\"")
         typer.echo("")
     typer.echo("Beläggning är inte sanning: siffrorna mäter hur ofta något")
-    typer.echo("skrivits i beståndet, inte om det stämmer.")
+    typer.echo("skrivits i beståndet, inte om det stämmer. Flera kandidater kan")
+    typer.echo("vara korrekta samtidigt — en roll kan ha flera innehavare.")
 
 
 @app.command(

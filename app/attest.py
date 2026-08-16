@@ -292,13 +292,23 @@ class Candidate:
     constructions: list[str]
     sentences: list[str]
     sources: list[str]
+    unambiguous_documents: int = 0
+    strength: float = 0.0
+    recency: float = 0.0
+    relevance: float = 0.0
+    days_since_last: int | None = None
 
     def as_dict(self) -> dict:
         return {
             "subject": self.subject, "object": self.object,
             "documents": self.documents, "observations": self.observations,
+            "unambiguous_documents": self.unambiguous_documents,
             "ambiguous_only": self.ambiguous_only,
             "first_date": self.first_date, "last_date": self.last_date,
+            "days_since_last": self.days_since_last,
+            "strength": round(self.strength, 3),
+            "recency": round(self.recency, 3),
+            "relevance": round(self.relevance, 3),
             "constructions": self.constructions,
             "sentences": self.sentences[:3],
             "sources": self.sources[:5],
@@ -311,6 +321,102 @@ def _most_common(values) -> str:
     for v in values:
         counts[v] = counts.get(v, 0) + 1
     return max(sorted(counts), key=lambda v: counts[v])
+
+
+# RELEVANSMODELL
+#
+# Ersätter unikhetsregeln, som byggde på ett antagande som visade sig
+# falskt: att ett uppdrag har en innehavare i taget. Vid högskolan
+# finns fyra prefekter, flera proprefekter och tiotals studierektorer —
+# och antalet proprefekter per institution bestäms av prefekten, alltså
+# utan regel att koda mot. Överlappande intervall kan lika gärna betyda
+# två samtidiga innehavare som en felaktig extraktion, och systemet kan
+# inte veta vilket.
+#
+# Modellen RANGORDNAR därför utan att utesluta. Ingen kandidat stryks
+# för att en annan är nyare; alla redovisas med sitt underlag.
+#
+# Tre komponenter, medvetet hållna åtskilda i utdata så att en
+# rangordning går att förklara i ett svar:
+#
+# STYRKA växer med antalet OBEROENDE DOKUMENT, avtagande. Språnget
+# från ett belägg till två är stort, från två till tre betydande, från
+# tio till elva försumbart. En enda observation kan vara ett
+# extraktionsfel, en felskrivning i protokollet eller en tvetydig
+# konstruktion. Antalet observationer räknas inte: samma protokollmall
+# upprepad arton gånger i sju dokument är sju belägg, inte arton.
+#
+# AKTUALITET avtar med tiden sedan senaste belägg, mätt mot BESTÅNDETS
+# horisont och inte mot dagens datum. Slutar dokumenten i mars är allt
+# därefter okänt, och en observation från februari ska inte straffas
+# för att kalendern gått vidare.
+#
+# TVETYDIGHET reducerar vikten. En samordnad titelkonstruktion tillåter
+# två läsningar och kan inte väga som ett entydigt belägg. Vikten är
+# PROVISORISK — vi har ett bekräftat tvetydigt fall i beståndet, vilket
+# inte räcker för att kalibrera. Konservativt lågt värde tills fler
+# fall finns.
+_AMBIGUOUS_WEIGHT = 0.25
+
+# Halveringstid i dagar för aktualitet. Två år, satt mot
+# mandatperioderna i beståndet (tre år med möjlighet till förnyelse).
+# Kortare halveringstid lät en enda färsk observation slå ut ett
+# väletablerat förhållande, vilket motsäger att ett enstaka belägg kan
+# vara ett fel. Provisoriskt värde.
+_RECENCY_HALFLIFE_DAYS = 730.0
+
+
+def _parse_date(value: str | None):
+    from datetime import date
+    if not value:
+        return None
+    try:
+        y, m, d = value[:10].split("-")
+        return date(int(y), int(m), int(d))
+    except (ValueError, AttributeError):
+        return None
+
+
+def compute_relevance(candidates: list[Candidate], horizon: str | None = None) -> None:
+    """
+    Beräkna styrka, aktualitet och relevans in-place.
+
+    horizon är beståndets senaste dokumentdatum. Saknas det används
+    kandidaternas eget senaste belägg, vilket ger den nyaste kandidaten
+    full aktualitet.
+    """
+    import math
+
+    h = _parse_date(horizon)
+    if h is None:
+        dates = [_parse_date(c.last_date) for c in candidates]
+        dates = [d for d in dates if d]
+        h = max(dates) if dates else None
+
+    for c in candidates:
+        # Vägt dokumentantal: tvetydiga belägg räknas som bråkdelar.
+        weighted = (
+            c.unambiguous_documents
+            + (c.documents - c.unambiguous_documents) * _AMBIGUOUS_WEIGHT
+        )
+        # Avtagande avkastning, kalibrerad mot omdömet att ETT belägg
+        # kan vara ett fel, TVÅ stärker rejält och TRE är mycket
+        # starkt:  1 -> 0.33, 2 -> 0.67, 3 -> 0.82, 5 -> 0.93.
+        # Aldrig noll, aldrig ett.
+        c.strength = (
+            weighted ** 2 / (weighted ** 2 + 2.0) if weighted > 0 else 0.0
+        )
+
+        last = _parse_date(c.last_date)
+        if last and h:
+            days = max((h - last).days, 0)
+            c.days_since_last = days
+            c.recency = 0.5 ** (days / _RECENCY_HALFLIFE_DAYS)
+        else:
+            c.days_since_last = None
+            c.recency = 0.5      # okänt datum: varken gynnas eller straffas
+
+        c.relevance = c.strength * c.recency
 
 
 def _rows_to_candidates(rows) -> list[Candidate]:
@@ -326,10 +432,14 @@ def _rows_to_candidates(rows) -> list[Candidate]:
         # gruppen. Nyckeln samlar "HR-specialist" och "hR-specialist"
         # under samma post, och vilken av dem som visas ska inte bero
         # på sorteringsordningen i databasen.
+        unambiguous_docs = {
+            x["source_path"] for x in rs if not x["ambiguous"]
+        }
         out.append(Candidate(
             subject=_most_common(x["subject"] for x in rs),
             object=_most_common(x["object"] for x in rs),
             documents=len(docs), observations=len(rs),
+            unambiguous_documents=len(unambiguous_docs),
             # Bär SAMTLIGA belägg tvetydighet är bindningen inte
             # entydigt belagd, oavsett hur många de är. Ett enda
             # entydigt belägg väger tyngre än tio tvetydiga.
@@ -340,8 +450,12 @@ def _rows_to_candidates(rows) -> list[Candidate]:
             sentences=[x["sentence"] for x in rs if x["sentence"]],
             sources=sorted({x["file_name"] for x in rs if x["file_name"]}),
         ))
-    out.sort(key=lambda c: (not c.ambiguous_only, c.documents, c.last_date or ""),
-             reverse=True)
+    compute_relevance(out)
+    # En kandidat med ENBART tvetydiga belägg kan aldrig rankas överst,
+    # oavsett hur många de är. Det är ett hårt villkor och inte bara en
+    # vikt: en konstruktion som tillåter två läsningar får inte bära ett
+    # svar när det finns entydiga alternativ.
+    out.sort(key=lambda c: (not c.ambiguous_only, c.relevance), reverse=True)
     return out
 
 
@@ -426,42 +540,23 @@ def _match(conn, column: str, term: str, kind: str) -> list[dict]:
     return rows
 
 
-def role_is_unique(candidates: list[Candidate]) -> bool | None:
-    """
-    Bärs rollen av en person i taget? True / False / None (går ej att avgöra).
-
-    Överlappar två personers intervall är rollen icke-unik (professor,
-    HR-specialist). Följer de på varandra är den unik (prefekt,
-    studierektor) — och då sluter ett nytt belägg det föregående
-    intervallet. Detta MÄTS ur datat, det antas inte.
-
-    OSÄKERHET REDOVISAS. Ett enda belägg per person ger punktintervall,
-    och punkter kan aldrig överlappa — två professorer med var sitt
-    omnämnande skulle då se ut som en följd av innehavare. Uppmätt
-    2026-08-15. Går det inte att skilja följd från samtidighet
-    returneras None, aldrig True: att stänga ett intervall är den
-    konsekvensrika handlingen och kräver positivt stöd.
-
-    Tvetydiga belägg utesluts helt — en konstruktion som tillåter två
-    läsningar får inte avgöra rollens natur.
-    """
-    dated = [
-        c for c in candidates
-        if c.first_date and c.last_date and not c.ambiguous_only
-    ]
-    if len(dated) < 2:
-        return None
-
-    for i, a in enumerate(dated):
-        for b in dated[i + 1:]:
-            if a.first_date <= b.last_date and b.first_date <= a.last_date:
-                return False
-
-    # Inga överlapp — men bär ingen kandidat ett spann går följd inte
-    # att skilja från samtidighet.
-    if all(c.first_date == c.last_date for c in dated):
-        return None
-    return True
+# role_is_unique BORTTAGEN 2026-08-16.
+#
+# Funktionen byggde på antagandet att ett uppdrag har en innehavare i
+# taget och slöt av överlappande intervall att rollen bars av flera.
+# Antagandet är falskt: vid högskolan finns fyra prefekter, flera
+# proprefekter och tiotals studierektorer, och antalet proprefekter per
+# institution bestäms av prefekten — alltså utan regel att koda mot.
+#
+# Överlappande intervall kan därför lika gärna betyda två samtidiga
+# innehavare vid samma enhet, två innehavare vid olika enheter, eller
+# en felaktig extraktion. Systemet kan inte avgöra vilket, och en
+# funktion som ändå uttalar sig lovar mer än underlaget bär.
+#
+# Att "proprefekt" bedömdes UNIK i mätningen var dessutom en artefakt
+# av att indexet byggts ur en enda institutions protokoll.
+#
+# Ersatt av compute_relevance, som rangordnar utan att utesluta.
 
 
 def stats(conn) -> dict:
