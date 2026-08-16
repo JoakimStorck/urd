@@ -28,9 +28,27 @@ from app.synonyms import load_synonyms
 from app.concepts import load_concepts
 from app.question_operations import load_question_operations
 from app.source_guard import check_answer as run_source_guard, format_warning
+from app.session_state import SessionStore, select_active_hits
+from app.intent import classify_utterance, Classification
+from app.social import handle_social
+from app.qud_drift import measure_drift
+from app.followup import rewrite_followup
+from app.question_rules import rule_based_operation
 from app.predication import analyze as analyze_predications
 
 logger = logging.getLogger(__name__)
+
+# Frågeord och funktionsord som aldrig är rolltermer. Sluten klass;
+# allt annat i frågan prövas mot Attest, som själv avgör om termen
+# finns i beståndet.
+_QUESTION_STOPWORDS = {
+    "vem", "vilka", "vilken", "vilket", "vad", "hur", "när", "var",
+    "varför", "är", "har", "innehar", "ansvarar", "sitter", "utses",
+    "utsågs", "idag", "just", "nu", "för", "med", "från", "till",
+    "inom", "under", "över", "efter", "före", "samt", "och", "eller",
+    "som", "att", "den", "det", "de", "denna", "detta", "dessa",
+    "vår", "våra", "ett", "en",
+}
 
 # ---------------------------------------------------------------------------
 # Boilerplate-filter (behålls – detta är dokumentspecifikt, inte heuristisk
@@ -621,6 +639,9 @@ class RagService:
         test_vec = self.embedder.embed_query("test")
         self.store = QdrantStore(vector_size=len(test_vec))
         self.llm = LocalLLM()
+        # Sessionerna hör till tjänsten, inte till HTTP-lagret: varje
+        # klient — server, REPL, skript — ska kunna föra ett samtal.
+        self.sessions = SessionStore()
         self.reranker = Reranker()
 
         # Bygg BM25-index från alla chunks i Qdrant
@@ -629,7 +650,7 @@ class RagService:
         # Ladda instansens synonymlista om den finns. Tyst fallback
         # till tomt index om filen saknas eller är felaktig.
         self.synonyms = load_synonyms(settings.synonyms_path)
-        
+
         # Ladda instansens begreppsmodell om den finns. Används ännu
         # inte i retrievalpolicyn, men hålls laddad så att strukturen
         # kan testas och byggas ut stegvis.
@@ -638,7 +659,7 @@ class RagService:
         self.question_operations = load_question_operations(
             settings.question_operations_path
         )
-        
+
     def _build_bm25_index(self) -> None:
         """Bygg eller återbygg BM25-indexet från Qdrant."""
         all_chunks = self.store.iter_all_chunks()
@@ -717,26 +738,26 @@ class RagService:
         """
         Hitta relaterade begrepp som faktiskt förekommer i de dokument som
         bar svaret.
-    
+
         Relationer:
         - broader-begrepp till de begrepp som matchar frågan
         - syskonbegrepp som delar samma broader-begrepp
-    
+
         Endast begrepp som faktiskt kan beläggas i samma dokument returneras.
         """
         if not hits:
             return []
-    
+
         matched_ids = self.concepts.find_matching_concept_ids(question)
         if not matched_ids:
             return []
-    
+
         matched_set = set(matched_ids)
-    
+
         # Kandidatbegrepp: broader + syskon
         candidate_ids: list[str] = []
         broader_ids: list[str] = []
-    
+
         for concept_id in matched_ids:
             concept = self.concepts.concepts.get(concept_id)
             if concept is None:
@@ -744,15 +765,15 @@ class RagService:
             for broader_id in concept.broader:
                 broader_ids.append(broader_id)
                 candidate_ids.append(broader_id)
-    
+
         for concept in self.concepts.concepts.values():
             if concept.concept_id in matched_set:
                 continue
             if set(concept.broader) & set(broader_ids):
                 candidate_ids.append(concept.concept_id)
-    
+
         candidate_ids = _ordered_unique(candidate_ids)
-    
+
         source_paths = {
             hit.metadata.source_path
             for hit in hits
@@ -760,20 +781,20 @@ class RagService:
         }
         if not source_paths:
             return []
-    
+
         found_labels: list[str] = []
-    
+
         for candidate_id in candidate_ids:
             concept = self.concepts.concepts.get(candidate_id)
             if concept is None or not concept.labels:
                 continue
-    
+
             found = False
             for path in source_paths:
                 for chunk in self.bm25_index.get_chunks_by_source(path):
                     haystack_title = chunk.metadata.section_title or ""
                     haystack_text = chunk.text or ""
-    
+
                     if any(
                         _contains_label(haystack_title, label)
                         or _contains_label(haystack_text, label)
@@ -783,15 +804,15 @@ class RagService:
                         break
                 if found:
                     break
-    
+
             if found:
                 found_labels.append(concept.labels[0])
-    
+
             if len(found_labels) >= max_items:
                 break
-    
+
         return found_labels
-        
+
     def _operation_expansion_terms(
         self,
         question_operation: str,
@@ -813,7 +834,7 @@ class RagService:
                     terms.extend(broader.labels)
 
         return _ordered_unique(terms)
-        
+
     def answer(
         self,
         question: str,
@@ -896,6 +917,32 @@ class RagService:
         semantic_hits = self.store.search(query_vector, limit=15)
         num_semantic_global = len(semantic_hits)
         num_semantic_anchored = 0
+
+        # ATTESTSIGNAL FÖR ENTITETSFRÅGOR.
+        #
+        # Cross-encodern mäter aboutness. På "Vem är proprefekt vid
+        # IIT?" handlar SAMTLIGA kandidatpassager om proprefekten, och
+        # ingen signal skiljer den som PREDICERAR rollen från den som
+        # bara nämner den. Uppmätt: frågan abstainade medan samma fråga
+        # med årtal svarade rätt — årtalet gav en matchning som
+        # rollordet inte kunde ge.
+        #
+        # Attest vet skillnaden: den har observerat vilka dokument som
+        # binder ett namn till rollen. De dokumenten läggs till som
+        # preferens, precis som broadening redan gör med den aktiva
+        # kontexten. Ingen ny väg genom systemet.
+        #
+        # AGGREGATET BÄR INTE SVARET. Attest pekar ut var bindningen
+        # finns; syntesen formulerar ur originaltexten som vanligt.
+        # White paperns regel gäller oförändrad.
+        attest_debug: dict | None = None
+        if question_operation == "entity_lookup" and settings.attest_selection:
+            attest_paths, attest_debug = self._attest_source_paths(question)
+            if attest_paths:
+                preferred_source_paths = list(
+                    dict.fromkeys((preferred_source_paths or []) + attest_paths)
+                )
+
         if preferred_source_paths:
             anchored_hits = self.store.search(
                 query_vector,
@@ -914,7 +961,7 @@ class RagService:
             question_operation,
             matched_concept_ids=matched_concept_ids,
         )
-        
+
         # 2. BM25-sökning – tillför kandidater med exakt ordmatchning.
         # Den hålls global i första versionen av broadening-fixen.
         # Synonymexpansion breddar söktexten med kända termvarianter
@@ -1139,7 +1186,7 @@ class RagService:
                 hits,
                 comparison_labels,
             )
-        
+
         synthesis_result = synthesize(
             question,
             hits_for_synthesis,
@@ -1243,7 +1290,7 @@ class RagService:
                         }
                         for h in hits_for_synthesis
                     ],
-                },                
+                },
                 "num_semantic": len(semantic_hits),
                 "num_semantic_global": num_semantic_global,
                 "num_semantic_anchored": num_semantic_anchored,
@@ -1261,10 +1308,11 @@ class RagService:
                 "broader_additions": broader_additions,
                 "bm25_additions": bm25_additions,
                 "comparison_tracks": comparison_track_debug,
+                "attest": attest_debug,
                 "related_concepts": related_concepts,
                 "source_guard": guard_report.as_dict(),
                 "predication": predication_debug,
-                
+
                 "synthesis": synthesis_debug,
                 "timing_s": {
                     "embed_query": round(t1 - t0, 3),
@@ -1471,7 +1519,7 @@ class RagService:
 
         active_ids = {h.chunk_id for h in active_hits}
         blocked_ids = active_ids | set(consumed_hit_ids or set())
-        
+
         # Samla alla chunks från aktiva dokument som inte redan användes.
         # bm25_index innehåller bara textchunks, inte evidensobjekt.
         # Om active_hits är rent evidensobjekt kommer active_ids inte att
@@ -1511,11 +1559,11 @@ class RagService:
     ) -> list[SourceHit]:
         """
         Expandera alla dokument som redan visat tydlig relevans.
-    
+
         Om ett dokument har minst en chunk med score >= score_threshold,
         hämtas övriga chunkar från samma dokument som ännu inte finns i
         kandidatpoolen. Dessa får sedan bedömas i en andra rerankingrunda.
-    
+
         Detta gör expansionen dokumentdriven i stället för att begränsa
         den till ett fast antal toppdokument.
 
@@ -1527,29 +1575,425 @@ class RagService:
 
         if score_threshold is None:
             score_threshold = settings.expansion_min_prob
-    
+
         seen_ids = {h.chunk_id for h in already_seen} | {h.chunk_id for h in reranked}
-    
+
         # Alla dokument som visat tydlig relevans får expanderas
         docs_to_expand: list[str] = []
         seen_docs: set[str] = set()
-    
+
         for hit in reranked:
             source_path = hit.metadata.source_path
             if hit.score >= score_threshold and source_path not in seen_docs:
                 docs_to_expand.append(source_path)
                 seen_docs.add(source_path)
-    
+
         if not docs_to_expand:
             return []
-    
+
         new_candidates: list[SourceHit] = []
-    
+
         for source_path in docs_to_expand:
             doc_chunks = self.bm25_index.get_chunks_by_source(source_path)
             for chunk in doc_chunks:
                 if chunk.chunk_id not in seen_ids:
                     new_candidates.append(chunk)
                     seen_ids.add(chunk.chunk_id)
-    
+
         return new_candidates
+    # ------------------------------------------------------------------
+    # Samtal
+    # ------------------------------------------------------------------
+
+    def _attest_source_paths(
+        self, question: str, max_docs: int = 5
+    ) -> tuple[list[str], dict]:
+        """
+        Slå upp frågans rolltermer i Attest och returnera de dokument
+        som binder ett namn till rollen.
+
+        Termerna hämtas ur frågan utan ordlista: substantiv som inte är
+        frågeord eller funktionsord prövas mot indexet, och de som har
+        observationer avgör. Attest känner beståndets vokabulär — den
+        behöver inte veta i förväg vilka roller som finns.
+
+        Fel här är billiga: hittar uppslaget inget läggs ingen preferens
+        till och retrievalen beter sig som förut. Hittar det fel
+        dokument konkurrerar de med den globala poolen och
+        cross-encodern gör fortfarande den slutliga bedömningen.
+        """
+        debug: dict = {"terms": [], "candidates": [], "documents": 0}
+        try:
+            from app import attest
+        except ImportError:
+            return [], debug
+
+        try:
+            conn = attest.connect()
+        except Exception as e:
+            logger.warning("attest: kunde inte öppna indexet (%s)", e)
+            return [], debug
+
+        # Kandidattermer ur frågan: allt utom frågeord och funktionsord.
+        words = re.findall(r"[\wÅÄÖåäö-]+", question.lower())
+        terms = [
+            w for w in words
+            if len(w) >= 4 and w not in _QUESTION_STOPWORDS
+        ]
+
+        paths: list[str] = []
+        for term in terms:
+            try:
+                cands = attest.lookup_object(conn, term)
+            except Exception:
+                continue
+            if not cands:
+                continue
+            debug["terms"].append(term)
+            for c in cands[:3]:
+                debug["candidates"].append({
+                    "subject": c.subject,
+                    "object": c.object,
+                    "relevance": round(c.relevance, 3),
+                    "documents": c.documents,
+                    "ambiguous_only": c.ambiguous_only,
+                    "last_date": c.last_date,
+                })
+                # Kandidaterna är rangordnade på relevans; källorna
+                # tas i den ordningen så att den bäst belagda
+                # bindningens dokument kommer först.
+                for src in c.sources:
+                    if src not in paths:
+                        paths.append(src)
+
+        # sources är filnamn; retrieval matchar på full sökväg.
+        full_paths: list[str] = []
+        for name in paths[:max_docs]:
+            for chunk in self.bm25_index.hits:
+                if chunk.metadata.file_name == name:
+                    p = chunk.metadata.source_path
+                    if p not in full_paths:
+                        full_paths.append(p)
+                    break
+
+        debug["documents"] = len(full_paths)
+        return full_paths, debug
+
+    def converse(self, question: str, session_id: str | None = None) -> ChatResponse:
+        """
+        Besvara en yttring inom en levande session.
+
+        FLYTTAD FRÅN api.py 2026-08-16. QUD-styrning, drift-kontroll,
+        rework-vägar och ConversationState är arkitektur enligt white
+        paper — inte en HTTP-detalj. Att de bodde i api.py betydde att
+        RagService bara kunde besvara isolerade frågor, och att varje
+        ny klient måste bygga om sessionslogiken. Det interaktiva läget
+        blottade det: en tolk vars hela poäng är kontinuitet kunde inte
+        få den utan att gå via HTTP till sig själv.
+
+        `answer()` är kvar som den kontextlösa vägen och används av
+        converse internt, av ingest-diagnostik och av skript. Den som
+        vill ha samtal använder converse.
+
+        Koden är oförändrad i sak; bara flyttad och avhängd från
+        request-objektet.
+        """
+        state = self.sessions.get_or_create(session_id)
+
+        # 1. Klassificera yttringen inom QUD-modellen.
+        classification = classify_utterance(question, state, self.llm)
+
+        # 1a. Regelbaserad föroperation: för frågeoperationer med
+        # entydiga språkliga markörer (comparison, aggregation) avgör
+        # deterministiska regler över LLM-klassificeringen. Intent
+        # berörs inte. Se question_rules.py.
+        operation_source = "llm"
+        rule_operation = rule_based_operation(question)
+        if rule_operation is not None:
+            if rule_operation != classification.question_operation:
+                classification.question_operation = rule_operation  # type: ignore[assignment]
+                operation_source = "rule_override"
+            else:
+                operation_source = "rule_confirmed"
+
+        # 1b. QUD-drift-skydd: om klassificeraren säger related_to_qud
+        # men aktuell yttring ligger semantiskt långt från aktiv QUD,
+        # tolka om till new_main_question. Detta fångar fall där
+        # samtalet bytt ämne utan att klassificeraren märkt det, vilket
+        # annars skulle leda till kontaminerad retrieval (QUD-ankare mot
+        # fel ämne) och typiskt till abstain.
+        drift: object | None = None
+        if classification.intent == "related_to_qud" and state.current_qud_text:
+            drift = measure_drift(
+                question,
+                state.current_qud_text,
+                self.embedder,
+                threshold=settings.qud_drift_threshold,
+                # Dokumentbaserad drift: jämför yttringen även mot
+                # texterna som bar de senaste svaren (fråga-mot-
+                # passage). När sådana finns avgör de beslutet —
+                # se qud_drift.py för motiveringen.
+                active_hit_texts=[h.text for h in state.active_hits],
+                doc_threshold=settings.qud_drift_doc_threshold,
+            )
+            if drift is not None and drift.drift_detected:
+                classification = Classification(
+                    intent="new_main_question",
+                    substyle=None,
+                    reason=(
+                        f"qud_drift_detected (similarity={drift.similarity} "
+                        f"< threshold={drift.threshold})"
+                    ),
+                    question_operation=classification.question_operation,
+                    raw=classification.raw,
+                    used_fallback=False,
+                )
+
+        matched_concept_ids = self.concepts.find_matching_concept_ids(question)
+        matched_concept_labels = self.concepts.labels_for_concept_ids(matched_concept_ids)
+
+        # Grund-debug som alla vägar lägger till
+        base_debug = {
+            "session_id": state.session_id,
+            "classification": {
+                "intent": classification.intent,
+                "substyle": classification.substyle,
+                "question_operation": classification.question_operation,
+                "operation_source": operation_source,
+                "reason": classification.reason,
+                "used_fallback": classification.used_fallback,
+            },
+            "concepts": {
+                "matched_ids": matched_concept_ids,
+                "matched_labels": matched_concept_labels,
+            },
+            "qud": {
+                "text": state.current_qud_text,
+                "age_turns": state.qud_age_turns,
+            },
+            "rework_state": {
+                "num_active_hits": len(state.active_hits),
+                "num_consumed_hits": len(state.consumed_hit_ids),
+            },
+        }
+
+        if drift is not None:
+            base_debug["qud_drift"] = {
+                "similarity": drift.similarity,
+                "threshold": drift.threshold,
+                "doc_similarity": drift.doc_similarity,
+                "doc_threshold": drift.doc_threshold,
+                "decided_by": drift.decided_by,
+                "drift_detected": drift.drift_detected,
+            }
+
+        # 2. Dispatcha baserat på intent.
+
+        # 2a. Social/meta: inget retrieval, inget QUD-påverkan.
+        if classification.intent == "social_or_meta":
+            answer_text = handle_social(question, state, self.llm)
+            state.add_social_turn(question, answer_text)
+
+            return ChatResponse(
+                answer=answer_text,
+                sources=[],
+                session_id=state.session_id,
+                debug={
+                    **base_debug,
+                    "path": "social_or_meta",
+                },
+            )
+
+        # 2b. Elaboration och verification: arbetar mot active_hits från
+        # föregående tur. Elaboration gör ny reranking inom aktiva
+        # dokument för att hitta material som inte användes första
+        # gången; verification arbetar direkt mot active_hits.
+        # Skyddsregeln i intent.py har redan garanterat att active_hits
+        # inte är tom här.
+        if classification.intent in ("elaboration", "verification_or_challenge"):
+            mode = (
+                "elaboration"
+                if classification.intent == "elaboration"
+                else "verification"
+            )
+            previous_answer = state.last_answer or ""
+
+            response = self.rework(
+                question,
+                hits=state.active_hits,
+                previous_answer=previous_answer,
+                mode=mode,
+                qud_question=state.current_qud_text,
+                consumed_hit_ids=state.consumed_hit_ids,
+            )
+
+            # Rework-tur: ersätt INTE active_hits — samma material bär
+            # fortfarande tråden. Bara last_answer och snippets uppdateras.
+            state.add_rework_turn(
+                question,
+                response.answer,
+                mode=mode,
+                hits=response.sources,
+            )
+
+            if response.debug is None:
+                response.debug = {}
+            response.debug.update(base_debug)
+            response.debug["path"] = classification.intent
+
+            response.session_id = state.session_id
+            return response
+
+        # Spara föregående QUD innan den ev. skrivs över — den behövs
+        # av den kontextuella fallbacken nedan, som ger en tur som
+        # berövats sin kontext (falsk drift, klassificerarflipp) en
+        # andra chans MED kontexten innan systemet abstainar.
+        prev_qud_text = state.current_qud_text
+        prev_qud_index = state.current_qud_turn_index
+
+        # 2c. Ny huvudfråga: sätt QUD till ordagrann originaltext FÖRE
+        # retrieval, så att den registreras även om den här turen
+        # inte använder QUD-ankaret.
+        if classification.intent == "new_main_question":
+            state.set_qud(question)
+            base_debug["qud"] = {
+                "text": state.current_qud_text,
+                "age_turns": state.qud_age_turns,
+            }
+
+        # 2d. Bestäm retrieval- och syntesparametrar för de två
+        # kvarvarande klasserna (new_main_question, related_to_qud).
+        qud_anchor: str | None = None
+        background_turns = None
+        background_max_turns = 0
+        retrieval_question: str | None = None
+        preferred_source_paths: list[str] | None = None
+
+        if classification.intent == "new_main_question":
+            # Standard retrieval, ingen bakgrund.
+            path_label = "new_main_question"
+
+        elif classification.intent == "related_to_qud":
+            # QUD-ankare i retrieval + bakgrund i syntes
+            qud_anchor = state.current_qud_text
+            background_turns = list(state.turns)
+            background_max_turns = settings.qud_background_turns
+            path_label = "related_to_qud"
+
+            # Broadening: skriv om den korta följdfrågan till en
+            # fristående retrievalfråga. De dokument som bar
+            # föregående svar skickas med som PREFERENS — retrieval
+            # söker globalt och kompletterar med en ankrad pool
+            # (se RagService.answer), så att broadening kan nå
+            # dokument utanför den aktiva kontexten.
+            if classification.substyle == "broadening":
+                retrieval_question, was_rewritten = rewrite_followup(
+                    question,
+                    state,
+                    self.llm,
+                )
+                if not was_rewritten:
+                    retrieval_question = None
+
+                if state.active_doc_paths:
+                    preferred_source_paths = list(state.active_doc_paths)
+
+        else:
+            # Skulle inte hända — alla klasser är hanterade ovan.
+            path_label = "new_main_question"
+
+        response = self.answer(
+            question,
+            qud_anchor=qud_anchor,
+            background_turns=background_turns,
+            background_max_turns=background_max_turns,
+            retrieval_question=retrieval_question,
+            preferred_source_paths=preferred_source_paths,
+            question_operation=classification.question_operation,
+            matched_concept_ids=matched_concept_ids,
+        )
+
+        # Kontextuell fallback vid abstain. En elliptisk följdfråga
+        # ("Vad gäller för medfinansiering?") är per definition bara
+        # begriplig mot samtalets aktiva huvudfråga. Om en sådan tur
+        # har berövats sin kontext — genom drift-överridning eller en
+        # klassificerarflipp till new_main_question — och det
+        # kontextlösa försöket abstainar, körs retrieval om EN gång
+        # med föregående QUD som ankare och samtalsbakgrund, innan
+        # systemet ger upp. Fallbacken kan aldrig göra utfallet sämre
+        # (den aktiveras bara när alternativet är ett tomt svar) och
+        # cross-encodern bedömer fortfarande mot den rena frågan, så
+        # kontexten breddar kandidatpoolen utan att förvränga
+        # relevansbedömningen.
+        #
+        # Villkor: första försöket abstainade, det finns en tidigare
+        # QUD att ankra mot, och första försöket saknade antingen
+        # QUD-ankare eller körde med omskriven retrievalfråga (vars
+        # omskrivning kan ha varit problemet).
+        context_fallback: dict | None = None
+        if (
+            (response.debug or {}).get("abstained")
+            and prev_qud_text
+            and (qud_anchor is None or retrieval_question is not None)
+        ):
+            retry = self.answer(
+                question,
+                qud_anchor=prev_qud_text,
+                background_turns=list(state.turns),
+                background_max_turns=settings.qud_background_turns,
+                question_operation=classification.question_operation,
+                matched_concept_ids=matched_concept_ids,
+            )
+            rescued = not (retry.debug or {}).get("abstained", False)
+            context_fallback = {
+                "triggered": True,
+                "rescued": rescued,
+                "prev_qud": prev_qud_text,
+            }
+            if rescued:
+                response = retry
+                # Turen visade sig vara kontextberoende — den föregående
+                # huvudfrågan är fortfarande samtalets QUD. Återställ den
+                # så att nästa tur ankras rätt.
+                if classification.intent == "new_main_question":
+                    state.current_qud_text = prev_qud_text
+                    state.current_qud_turn_index = prev_qud_index
+                    base_debug["qud"] = {
+                        "text": state.current_qud_text,
+                        "age_turns": state.qud_age_turns,
+                    }
+
+        # Uppdatera sessionsstate med dokumentkällorna OCH de faktiska
+        # hits som bar svaret — så att nästa elaboration/verification
+        # kan återanvända dem.
+        active_hits = select_active_hits(response.sources)
+
+        doc_paths = list({
+            hit.metadata.source_path
+            for hit in active_hits
+        })
+
+        state.add_turn(
+            question,
+            response.answer,
+            doc_paths,
+            hits=active_hits,
+        )
+
+        # Merga debug-info från retrieval/syntes med vår dispatch-info
+        if response.debug is None:
+            response.debug = {}
+        response.debug.update(base_debug)
+        response.debug["path"] = path_label
+        if context_fallback is not None:
+            response.debug["context_fallback"] = context_fallback
+        if background_max_turns > 0:
+            response.debug["background_max_turns"] = background_max_turns
+        if retrieval_question is not None:
+            response.debug["retrieval_question"] = retrieval_question
+        if preferred_source_paths is not None:
+            response.debug["preferred_source_paths"] = preferred_source_paths
+
+        response.session_id = state.session_id
+
+        return response

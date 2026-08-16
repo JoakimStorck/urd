@@ -16,6 +16,10 @@ en ny process och tappar allt det.
 
 TVÅ DESIGNBESLUT
 
+SAMMA BETEENDE MED OCH UTAN SERVER. Sessionshanteringen ligger i
+RagService.converse, så samtalsminnet fungerar likadant lokalt som
+över HTTP.
+
 LAT UPPSTART. Modellerna laddas först när de behövs, inte när läget
 startar. En användare som går in för att köra .hjälp eller .status ska
 inte vänta en halvminut på embeddingmodell och cross-encoder. Kör en
@@ -66,7 +70,6 @@ class Repl:
         self.session_id: str | None = None
         self.use_server: bool | None = None   # avgörs vid första frågan
         self._rag = None                      # laddas lat
-        self._warned_local = False
         self.turns = 0
 
     # -- backend -----------------------------------------------------
@@ -122,23 +125,14 @@ class Repl:
             if response.session_id:
                 self.session_id = response.session_id
         else:
-            # LOKALT LÄGE SAKNAR SAMTALSTILLSTÅND.
-            #
-            # Sessionshanteringen — QUD, aktiva dokument, rework-state —
-            # ligger i api.py, inte i RagService. Lokalt läge har därför
-            # aldrig haft samtalsminne, inte heller i `urd ask`.
-            # Följdfrågor som "berätta mer" fungerar inte utan server.
-            #
-            # Sagt en gång per session, inte vid varje fråga.
-            if not self._warned_local:
-                typer.echo(
-                    "Obs: utan server saknas samtalsminne — varje fråga\n"
-                    "     står för sig. Starta 'urd serve' för QUD,\n"
-                    "     följdfrågor och verification."
-                )
-                self._warned_local = True
+            # Lokalt läge har samtalsminne sedan sessionshanteringen
+            # flyttades till kärnan: converse äger QUD, drift och
+            # rework-tillstånd, och fungerar likadant med och utan
+            # server.
             rag = self._rag_service()
-            response = rag.answer(question)
+            response = rag.converse(question, session_id=self.session_id)
+            if getattr(response, "session_id", None):
+                self.session_id = response.session_id
 
         self.turns += 1
         from app.cli import _print_response

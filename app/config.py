@@ -13,7 +13,7 @@ URD_DIR = Path(".urd")
 CONFIG_FILE = URD_DIR / "config.json"
 
 # Hårdkodade defaults — dessa skrivs till .urd/config.json om filen saknas
-DEFAULTS = { 
+DEFAULTS = {
     "docs_path": "./docs",
     "qdrant_path": "./data/qdrant",
     "question_operations_path": ".urd/question_operations.yaml",
@@ -25,6 +25,7 @@ DEFAULTS = {
     "llm_num_ctx": 8192,
     "llm_think": False,
     "predication_enabled": False,
+    "attest_selection": False,
     "preprocess_semantic_version": "v1",
     "chunk_size": 1200,
     "chunk_overlap": 150,
@@ -64,6 +65,7 @@ _ENV_KEYS = {
     "llm_num_ctx": "LLM_NUM_CTX",
     "llm_think": "LLM_THINK",
     "predication_enabled": "PREDICATION_ENABLED",
+    "attest_selection": "ATTEST_SELECTION",
     "preprocess_semantic_version": "PREPROCESS_SEMANTIC_VERSION",
     "chunk_size": "CHUNK_SIZE",
     "chunk_overlap": "CHUNK_OVERLAP",
@@ -192,6 +194,7 @@ def _build_settings() -> "Settings":
         llm_num_ctx=i("llm_num_ctx"),
         llm_think=b("llm_think"),
         predication_enabled=b("predication_enabled"),
+        attest_selection=b("attest_selection"),
         preprocess_semantic_version=s("preprocess_semantic_version"),
         chunk_size=i("chunk_size"),
         chunk_overlap=i("chunk_overlap"),
@@ -218,7 +221,7 @@ class Settings(BaseModel):
     synonyms_path: Path = Path(".urd/synonyms.yaml")
     concepts_path: Path = Path(".urd/concepts.yaml")
     question_operations_path: Path = Path(".urd/question_operations.yaml")
-    
+
     collection_name: str = "iit_docs"
 
     embedding_model: str = "intfloat/multilingual-e5-large"
@@ -253,6 +256,13 @@ class Settings(BaseModel):
     # svenska modellen är installerade; saknas de loggas det en
     # gång och lagret förblir inaktivt.
     predication_enabled: bool = False
+
+    # Attestsignal i urvalet för entitetsfrågor ("vem är X").
+    # AV som default: signalen ÄNDRAR svaren och måste mätas mot
+    # baslinjen. I skuggläge ändrar den ingenting och blir omätbar,
+    # så här är en configflagga rätt mekanism i stället.
+    # Kräver att .urd/attest.db är byggd med 'urd attest-build'.
+    attest_selection: bool = False
 
     preprocess_semantic_version: str = "v1"
 

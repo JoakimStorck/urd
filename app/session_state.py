@@ -64,9 +64,9 @@ class ConversationState:
     # Uppdateras i add_turn när hits tillhandahålls. Nollställs
     # aldrig tyst — en ny dokumenttur ersätter dem med sina egna.
     active_hits: list[SourceHit] = field(default_factory=list)
-    
+
     consumed_hit_ids: set[str] = field(default_factory=set)
-    
+
     # Senaste svaret — behövs av rework-vägen för att inte upprepa
     # det som redan sagts.
     last_answer: str | None = None
@@ -221,6 +221,35 @@ def _extract_snippets(answer: str, max_snippets: int = 3) -> list[str]:
         if len(snippets) >= max_snippets:
             break
     return snippets
+
+
+def select_active_hits(hits: list[SourceHit], max_hits: int = 3) -> list[SourceHit]:
+    """
+    Välj de träffar som blir samtalets aktiva kontext (QUD-underlag,
+    rework-material, driftmätningens dokumentreferens).
+
+    Åtgärd 4.1: inget toppdokumentlås. Tidigare kastades alla träffar
+    från andra dokument än topphiten, vilket gjorde att flerdokumentsvar
+    (jämförelser, aggregeringar) fick en aktiv kontext som bara täckte
+    ett av dokumenten — följdfrågor mot de andra dokumenten tappade då
+    sitt underlag. Sannolikhetsgolvet 0.5 behålls: bara träffar som är
+    mer sannolikt relevanta än inte får ingå.
+    """
+    if not hits:
+        return []
+
+    selected = [hits[0]]
+
+    for hit in hits[1:]:
+        if len(selected) >= max_hits:
+            break
+        # Sannolikhetsskala: bara träffar som är mer sannolikt
+        # relevanta än inte får ingå i rework-underlaget.
+        if hit.score < 0.5:
+            continue
+        selected.append(hit)
+
+    return selected
 
 
 class SessionStore:

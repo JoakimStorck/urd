@@ -28,6 +28,24 @@ import re
 # aggregation.
 _OPERATION_RULES: list[tuple[str, re.Pattern]] = [
     (
+        # "Vem är proprefekt?" — frågan efter en NAMNGIVEN INNEHAVARE.
+        # Skiljer sig från direct_lookup i vad som efterfrågas: inte
+        # rollens innehåll utan vem som bär den. Cross-encodern kan
+        # inte göra den skillnaden — den mäter aboutness, och på
+        # "vem är proprefekt" handlar varje kandidatpassage om
+        # proprefekten. Se attestsignalen i retrieval.
+        #
+        # "vem/vilka" följt av vara/ha/ansvara fångar formen utan att
+        # veta något om vilka roller som finns.
+        "entity_lookup",
+        re.compile(
+            r"^\s*vem\b"
+            r"|^\s*vilka\s+(?:är|har|innehar|ansvarar|sitter)\b"
+            r"|\bvem (?:är|har|innehar|ansvarar|utses|utsågs)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
         "comparison",
         re.compile(
             r"\bskillnad(?:en|er|erna)?\b"

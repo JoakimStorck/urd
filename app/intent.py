@@ -75,6 +75,7 @@ Substyle = Literal["subquestion", "broadening", "narrowing_or_repair"]
 
 QuestionOperation = Literal[
     "direct_lookup",
+    "entity_lookup",
     "relation_membership",
     "comparison",
     "requirements",
@@ -185,6 +186,9 @@ FRÅGEOPERATIONER:
 question_operation beskriver vilken sorts dokumentläsning som krävs.
 
 Använd:
+- entity_lookup för frågor som "vem är X", "vem har uppdraget som X",
+  "vem ansvarar för X" — frågor efter en NAMNGIVEN INNEHAVARE av en
+  roll, inte efter rollens innehåll
 - relation_membership för frågor som "är X en Y?", "tillhör X Y?",
   "räknas X som Y?"
 - comparison för frågor som "vad är skillnaden mellan", "hur skiljer sig",
@@ -302,7 +306,7 @@ def _parse_classification_json(raw: str) -> Classification | None:
     if operation_raw not in _VALID_OPERATIONS:
         logger.info("Ogiltig question_operation %r — använder direct_lookup.", operation_raw)
         operation_raw = "direct_lookup"
-        
+
     reason = data.get("reason")
     if reason is not None:
         reason = str(reason).strip() or None
