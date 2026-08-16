@@ -48,6 +48,8 @@ from __future__ import annotations
 
 import logging
 import re
+
+from app.morphology import VALID_ENDINGS
 from dataclasses import dataclass, field, asdict
 
 logger = logging.getLogger(__name__)
@@ -513,6 +515,27 @@ def normalize_title(title: str, lemma: str | None = None) -> str:
     # lemmat då bara gäller huvudordet.
     if lemma and len(out.split()) == 1 and lemma.strip():
         cand = lemma.strip()
+        # TRUNKERINGSSPÄRR. Stanza kapar ibland sista tecknen i
+        # sammansatta ord: "Jämställdhetsministern" ->
+        # "Jämställdhetsminist", "Pro-dekan" -> "Pro-deka".
+        #
+        # Längd duger inte som kriterium: trunkeringarna skiljer sig
+        # med ett till tre tecken medan korrekta lemman som
+        # "ledamöterna" -> "ledamot" skiljer sig med fyra.
+        #
+        # Kriteriet är i stället att det BORTTAGNA slutet ska vara en
+        # känd böjningsändelse. "Jämställdhetsminist" tappar "ern" som
+        # inte är någon ändelse, och avvisas.
+        #
+        # Detta fångar inte allt: "Pro-deka" tappar "n" och
+        # "doktorande" tappar likaså "n", båda giltiga ändelser. De
+        # kräver ett lexikon över faktiska grundformer, se den kända
+        # begränsningen nedan. Kan lemmat inte prövas — huvudsakligen
+        # vid omljud, "ledamöterna" -> "ledamot" — godtas det.
+        low_out, low_cand = out.lower(), cand.lower()
+        if low_out.startswith(low_cand) and low_out != low_cand:
+            if low_out[len(low_cand):] not in VALID_ENDINGS:
+                return out
         # Bevara ursprunglig versalisering: Stanza gemenerar ibland
         # felaktigt ("HR-specialist" -> "hR-specialist").
         if out[:1].isupper() and cand[:1].islower():
@@ -557,6 +580,20 @@ def _conj_chain(words, head_id: int) -> list[int]:
     Det underskattar beläggningen systematiskt, och för roller med
     flera innehavare är det just den siffran som avgör om rollen
     bedöms unik.
+
+    ETT NAMN MED EGEN TITEL ÄRVER INTE.
+
+        Pro-dekan Katherina Dodou, utvecklingsledare Daniel Broman
+        och pro-rektor Jonas Tosteby besökte mötet
+
+    Här är samordningen mellan TITEL–NAMN-PAR, inte mellan namn under
+    en gemensam titel, och alla tre fick tidigare den första titeln.
+    Uppmätt 2026-08-15 stod den formen för tre av åtta fel.
+
+    Skillnaden är strukturell: bär ett samordnat namn ett eget
+    nmod-barn har det sin egen titel. Utan eget nmod delas titeln, som
+    i "Hållbarhetsrådets representanter Anton Grenholm, Maria Rappfors
+    och Jayaraj Jayamani" — där är arvet korrekt.
     """
     chain = [head_id]
     frontier = [head_id]
@@ -569,10 +606,22 @@ def _conj_chain(words, head_id: int) -> list[int]:
                     and words[x.id - 1].upos == "PROPN"
                     and x.id not in chain
                 ):
+                    if _has_own_title(words, x.id):
+                        continue
                     chain.append(x.id)
                     nxt.append(x.id)
         frontier = nxt
     return chain
+
+
+def _has_own_title(words, name_id: int) -> bool:
+    """Bär namnet ett eget nominalt nmod-led, alltså sin egen titel?"""
+    return any(
+        x.head == name_id and x.deprel in ("nmod", "appos")
+        and words[x.id - 1].upos in _NOMINAL_UPOS
+        and not any(c.head == x.id and c.deprel == "case" for c in words)
+        for x in words
+    )
 
 
 def _title_identity(words, stext: str) -> list[Feature]:
@@ -685,16 +734,21 @@ def _title_identity(words, stext: str) -> list[Feature]:
             n = _phrase(words, nid)
             if _is_code_like(n) or _is_placeholder(n):
                 continue
-            # "Per Ek, namn@exempel.se" gav "Per Ek ->
-            # namn@exempel.se" — en e-postadress är ingen titel och inget
-            # namn. Uppmätt 2026-08-15.
+            # En e-postadress är varken namn eller titel. Filtret låg
+            # tidigare bara på namnledet, men det uppmätta fallet hade
+            # adressen som TITEL: "Per Ek, namn@exempel.se" gav
+            # "Per Ek -> namn@exempel.se". Kontrollen gäller nu båda
+            # leden.
             if _EMAIL.search(n):
                 continue
             for t in titles:
+                title_text = _phrase(words, t.id)
+                if _EMAIL.search(title_text):
+                    continue
                 out.append(Feature(
                     kind="identitet", a=n,
                     b=normalize_title(
-                        _phrase(words, t.id),
+                        title_text,
                         getattr(words[t.id - 1], "lemma", None),
                     ),
                     relation="titel:" + w.deprel, sentence=stext,
