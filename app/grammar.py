@@ -347,6 +347,8 @@ def extract_features(text: str, max_sentences: int = 40) -> list[Feature]:
         stext = sent.text
         if not _has_finite_verb(words):
             continue
+        if _is_protocol_boilerplate(stext):
+            continue
         features.extend(_identity(words, stext))
         features.extend(_distinction(words, stext))
         features.extend(_agency(words, stext))
@@ -755,6 +757,42 @@ def _title_identity(words, stext: str) -> list[Feature]:
                     strength=PRESUPPOSED, ambiguous=ambiguous,
                 ))
     return out
+
+
+# Protokollens standardsektioner. Verbkravet fångade "Vid protokollet"
+# men inte "Justeras" och "Mötet avslutades" — de innehåller finita
+# verb och passerar därför.
+#
+# Uppmätt 2026-08-15: ett enda personnamn gav tolv agensdrag av typen
+# "Justeras X -> protokollet" och tre falska titeldrag ur samma
+# blocktyp. Det är formaliserade layoutstrukturer, inte påståenden om
+# verkligheten: en justeringsrad säger vem som signerat, inte vem som
+# gjort något.
+#
+# Villkoret gäller RADENS INLEDNING, inte hela texten. En mening som
+# råkar innehålla ordet "justeras" mitt i löpande text är ett
+# legitimt påstående ("Beslutet justeras av prefekten"), medan en rad
+# som BÖRJAR med markören är en formell del av protokollmallen.
+_PROTOCOL_MARKERS = (
+    "vid protokollet",
+    "justeras",
+    "justeringsdatum",
+    "mötet avslutades",
+    "mötet öppnades",
+    "sändlista",
+    "närvarande",
+    "frånvarande",
+    "anmält förhinder",
+    "övriga:",
+    "sekreterare:",
+    "ordförande:",
+)
+
+
+def _is_protocol_boilerplate(text: str) -> bool:
+    """Är satsen en formell del av protokollmallen?"""
+    low = text.strip().lower()
+    return any(low.startswith(m) for m in _PROTOCOL_MARKERS)
 
 
 def _has_finite_verb(words) -> bool:
