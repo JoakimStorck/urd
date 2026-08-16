@@ -512,8 +512,36 @@ def normalize_title(title: str, lemma: str | None = None) -> str:
     # Enordstitlar ersätts av sitt lemma; flerordiga lämnas, eftersom
     # lemmat då bara gäller huvudordet.
     if lemma and len(out.split()) == 1 and lemma.strip():
-        return lemma.strip()
+        cand = lemma.strip()
+        # Bevara ursprunglig versalisering: Stanza gemenerar ibland
+        # felaktigt ("HR-specialist" -> "hR-specialist").
+        if out[:1].isupper() and cand[:1].islower():
+            cand = cand[:1].upper() + cand[1:]
+        return cand
     return out
+
+
+# KÄND BEGRÄNSNING: felaktiga lemman kräver ett lexikon för att fångas.
+#
+# Uppmätt 2026-08-15: "doktoranden" gav lemmat "doktorande" och
+# "systemtekniker" gav "systemteknik". Det förra är inte ens ett
+# svenskt ord; det senare är ett annat ord — ämnet, inte personen.
+#
+# Ingen av dem går att avvisa med en FORMREGEL, eftersom båda är
+# prefix av ytformen med giltiga svenska böjningsändelser: "doktorande"
+# + "n" och "systemteknik" + "er". En regel som avvisade dem skulle
+# också avvisa korrekta lemman som "ledamöterna" -> "ledamot".
+#
+# Att avgöra saken kräver ett LEXIKON över faktiska grundformer — ett
+# lemma som inte finns i svenskan ska förkastas till förmån för
+# ytformen. Kanns Stava skulle ge den uppslagningen, och det vore ett
+# fjärde användningsområde för det spåret utöver böjningshantering.
+#
+# Konsekvensen tills dess är mild: beläggen SPLITTRAS mellan två
+# skrivformer i stället för att bindas fel. En roll får två poster i
+# stället för en, vilket underskattar beläggningen men inte
+# vilseleder. Splittringen mildras av böjningstoleransen i
+# attest._match, som slår ihop varianter vid uppslag.
 
 
 def _conj_chain(words, head_id: int) -> list[int]:

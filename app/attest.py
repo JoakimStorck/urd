@@ -105,14 +105,32 @@ CREATE TABLE IF NOT EXISTS documents (
 
 def _key(text: str) -> str:
     """
-    Uppslagsnyckel: gemener, skiljetecken bort, ordordning bevarad.
+    Uppslagsnyckel för aggregering.
 
-    Tolerant vid sammanvägning, ordagrann vid återgivning. Beståndet
-    stavar samma person både "Anna" och "Anna", och "Sara Lundquist"
-    respektive "Sara Lundqvist". Nyckeln normaliserar för aggregering
-    medan `subject`/`object` bevarar källans ordalydelse.
+    NYCKELN NORMALISERAR HUR ETT ORD SKRIVS, ALDRIG VILKET ORD DET ÄR.
+
+    Ortografi tas bort: gemener, bindestreck, punkter, skiljetecken.
+    Därmed samlas "pro-prefekt"/"proprefekt",
+    "HR-specialist"/"hR-specialist" och "T.f."/"tf" under samma nyckel,
+    liksom stavningsvarianter av personnamn i olika protokoll.
+
+    Innehåll bevaras: mellanslag tas INTE bort, så "biträdande lektor"
+    förblir skild från "lektor" — det är hela kapitelskillnaden i
+    anställningsordningen. Bestämningsord som tillförordnad och
+    biträdande ändrar rollen och får aldrig normaliseras bort.
+
+    Förkortningar kopplas inte till sina långformer: "bitr-lektor" och
+    "biträdande lektor" blir skilda nycklar. Att koppla ihop dem kräver
+    en ordlista över förkortningar, och sådana växer utan gräns. Om
+    beståndet självt definierar förkortningen — "biträdande lektor
+    (bitr-lektor)" — fångas kopplingen av parentesuttaget som en
+    forkortning-relation, ur beståndets egen praxis.
+
+    `subject`/`object` bevarar alltid källans ordalydelse; nyckeln
+    används bara för att gruppera och visas aldrig.
     """
-    t = re.sub(r"[^\wÅÄÖåäö\s-]", " ", text.lower())
+    t = text.lower().replace("-", "").replace(".", "")
+    t = re.sub(r"[^\wÅÄÖåäö\s]", " ", t)
     return " ".join(t.split())
 
 
@@ -280,6 +298,14 @@ class Candidate:
         }
 
 
+def _most_common(values) -> str:
+    """Vanligaste skrivformen; vid lika utfall den alfabetiskt första."""
+    counts: dict[str, int] = {}
+    for v in values:
+        counts[v] = counts.get(v, 0) + 1
+    return max(sorted(counts), key=lambda v: counts[v])
+
+
 def _rows_to_candidates(rows) -> list[Candidate]:
     groups: dict[tuple, list] = {}
     for r in rows:
@@ -289,8 +315,13 @@ def _rows_to_candidates(rows) -> list[Candidate]:
     for (_, _), rs in groups.items():
         dates = sorted(x["document_date"] for x in rs if x["document_date"])
         docs = {x["source_path"] for x in rs}
+        # Visa den VANLIGASTE skrivformen, inte den första raden i
+        # gruppen. Nyckeln samlar "HR-specialist" och "hR-specialist"
+        # under samma post, och vilken av dem som visas ska inte bero
+        # på sorteringsordningen i databasen.
         out.append(Candidate(
-            subject=rs[0]["subject"], object=rs[0]["object"],
+            subject=_most_common(x["subject"] for x in rs),
+            object=_most_common(x["object"] for x in rs),
             documents=len(docs), observations=len(rs),
             # Bär SAMTLIGA belägg tvetydighet är bindningen inte
             # entydigt belagd, oavsett hur många de är. Ett enda
