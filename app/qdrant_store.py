@@ -6,9 +6,47 @@ from app.config import settings
 from app.schemas import DocumentChunk, SourceHit, ChunkMetadata, EvidenceObject
 
 
+class StorageLockedError(RuntimeError):
+    """
+    Lagringen är låst av en annan process.
+
+    Inbäddad Qdrant tillåter en process i taget. Det är ett vanligt och
+    fullt begripligt misstag att glömma stänga servern innan ett
+    CLI-kommando körs — men qdrant-client möter det med ett traceback
+    på hundra rader där själva orsaken står sist. Felet är
+    förutsägbart, återkommande och har en självklar åtgärd, alltså ska
+    det mötas med ett meddelande och inte med en stackdump.
+    """
+
+
+def _storage_locked_message(path: str) -> str:
+    return (
+        f"Lagringen i {path} används redan av en annan process.\n"
+        "\n"
+        "Inbäddad Qdrant släpper in en process i taget. Sannolikt kör\n"
+        "'urd serve' i en annan terminal — stäng den och försök igen.\n"
+        "\n"
+        "Kontrollera vad som håller låset:\n"
+        f"    lsof {path}/.lock\n"
+        "\n"
+        "Kommandon som behöver ensam åtkomst: ingest, reindex, enrich,\n"
+        "stats, attest-build och skripten under scripts/."
+    )
+
+
 class QdrantStore:
     def __init__(self, vector_size: int) -> None:
-        self.client = QdrantClient(path=str(settings.qdrant_path))
+        try:
+            self.client = QdrantClient(path=str(settings.qdrant_path))
+        except RuntimeError as e:
+            # qdrant-client kastar RuntimeError med den här texten när
+            # portalocker inte får låset. Andra RuntimeError släpps
+            # igenom oförändrade.
+            if "already accessed by another instance" not in str(e):
+                raise
+            raise StorageLockedError(
+                _storage_locked_message(str(settings.qdrant_path))
+            ) from None
         self.collection_name = settings.collection_name
         self.evidence_collection_name = f"{settings.collection_name}__evidence"
         self.vector_size = vector_size

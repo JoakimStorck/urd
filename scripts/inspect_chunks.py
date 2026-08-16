@@ -21,11 +21,16 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from app.retrieval import RagService
+from app.qdrant_store import StorageLockedError
 
 
 def main() -> None:
     print("Laddar RagService...")
-    rag = RagService()
+    try:
+        rag = RagService()
+    except StorageLockedError as e:
+        print(f"\n{e}", file=sys.stderr)
+        raise SystemExit(1)
     print("Klart.\n")
 
     # Leta efter proprefekt-dokumentet — prova några vanliga path-varianter

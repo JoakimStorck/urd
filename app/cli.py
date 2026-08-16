@@ -1996,7 +1996,24 @@ def _evaluate_expect(
 
 
 def main() -> None:
-    app()
+    """
+    Entry point.
+
+    StorageLockedError fångas här i stället för i varje kommando: den
+    kan uppstå i allt som öppnar den inbäddade lagringen, och
+    meddelandet är detsamma oavsett vilket kommando som råkade ut för
+    det. Ett förutsägbart fel med självklar åtgärd ska mötas med ett
+    meddelande, inte med ett traceback på hundra rader där orsaken
+    står sist.
+    """
+    from app.qdrant_store import StorageLockedError
+
+    try:
+        app()
+    except StorageLockedError as e:
+        typer.echo("")
+        typer.echo(str(e))
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

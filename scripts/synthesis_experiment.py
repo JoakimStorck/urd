@@ -50,6 +50,7 @@ import time
 from datetime import datetime
 
 from app.retrieval import RagService
+from app.qdrant_store import StorageLockedError
 from app.schemas import SourceHit
 
 
@@ -316,7 +317,11 @@ def print_variant(label: str, answer: str, elapsed: float) -> None:
 
 def main() -> None:
     print("Startar syntes-experiment. Laddar modeller...")
-    rag = RagService()
+    try:
+        rag = RagService()
+    except StorageLockedError as e:
+        print(f"\n{e}", file=sys.stderr)
+        raise SystemExit(1)
     print("Klart. Börjar körning.\n")
 
     results: dict = {

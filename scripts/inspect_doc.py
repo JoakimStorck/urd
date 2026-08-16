@@ -232,8 +232,13 @@ def main() -> None:
     # Tunga imports först här, så att --help är snabb.
     print("Laddar RagService (kräver att servern är avstängd)...")
     from app.retrieval import RagService
+    from app.qdrant_store import StorageLockedError
 
-    rag = RagService()
+    try:
+        rag = RagService()
+    except StorageLockedError as e:
+        print(f"\n{e}", file=sys.stderr)
+        raise SystemExit(1)
     print("Klart.\n")
 
     pattern = _norm(args.pattern)
