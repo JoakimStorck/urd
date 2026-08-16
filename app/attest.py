@@ -350,23 +350,63 @@ def lookup_object(conn, term: str, kind: str = "identitet") -> list[Candidate]:
     return _rows_to_candidates(rows)
 
 
+def _matches_terms(value: str, key: str) -> bool:
+    """
+    Matchar nyckeln som hel term eller som rollens huvudord?
+
+    Regeln: nyckeln ska vara värdets AVSLUTANDE ordföljd.
+
+        "prefekt"  matchar  "prefekt", "tf prefekt"
+        "prefekt"  matchar INTE  "proprefekt", "prefektbeslut"
+        "lektor"   matchar  "biträdande lektor"
+
+    Bestämningsord står först i svenska rolluttryck, så ett uppslag på
+    grundrollen fångar även dess varianter — men de redovisas som
+    EGNA kandidater med sin egen etikett, eftersom "tf proprefekt" och
+    "proprefekt" är olika roller med olika innehavare. Användaren ser
+    skillnaden i utdata; sammanvägningen håller dem isär.
+
+    Att sammansättningar inte matchar är hela poängen: prefekt och
+    proprefekt betecknar skilda uppdrag som per definition innehas av
+    olika personer, och delsträngsmatchning gav tolv kandidater varav
+    sju var brus.
+    """
+    vt, kt = value.split(), key.split()
+    if not kt or len(kt) > len(vt):
+        return False
+    return vt[-len(kt):] == kt
+
+
 def _match(conn, column: str, term: str, kind: str) -> list[dict]:
     """
     Hämta observationer vars nyckel matchar termen.
 
-    Matchningen är tolerant: exakt, som delfras, eller som
-    böjningsvariant. Stavningsvarianter i källorna ("Anna"/"Anna",
-    "Lundquist"/"Lundqvist") får inte räknas som skilda entiteter vid
-    sammanvägning — men källans ordalydelse bevaras i utdata.
+    MATCHNINGEN GÅR PÅ HELA ORD, INTE PÅ DELSTRÄNGAR.
+
+    Uppmätt 2026-08-15: uppslaget "prefekt" träffade proprefekt,
+    prefektbeslut och "prefekt godkänna", eftersom villkoret var
+    LIKE '%prefekt%'. Tolv kandidater varav sju var brus, och rollen
+    bedömdes felaktigt icke-unik.
+
+    Det är samma fel som en gång fanns i predication._pair_match, och
+    samma rättning: en delsträng är inte en term. "prefekt" ska matcha
+    "prefekt" och "tf prefekt" men aldrig "proprefekt" — de betecknar
+    olika roller och innehas per definition av olika personer.
+
+    Kvar står tolerans i BÖJNING, som fallback när ordagrann matchning
+    ger noll. Stavningsvarianter i källorna ska inte räknas som skilda
+    entiteter vid sammanvägning, medan källans ordalydelse bevaras i
+    utdata.
     """
     conn.row_factory = sqlite3.Row
     key = _key(term)
     rows = []
     for r in conn.execute(
-        f"SELECT * FROM observations WHERE kind = ? AND ({column} = ?"
-        f" OR {column} LIKE ?)", (kind, key, f"%{key}%")
+        "SELECT * FROM observations WHERE kind = ?", (kind,)
     ):
-        rows.append(dict(r))
+        d = dict(r)
+        if _matches_terms(d[column], key):
+            rows.append(d)
     if rows:
         return rows
     # Böjningstolerant fallback, dyrare men bara när exakt uppslag gav noll.

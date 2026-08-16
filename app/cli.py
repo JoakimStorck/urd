@@ -999,7 +999,13 @@ def attest_sample(
         return
 
     for i, r in enumerate(rows, start=1):
-        typer.echo(f"{i:3}. [{r['construction']}] {r['subject']}  ->  {r['object']}")
+        # Tvetydiga observationer får inte bokföras som fel vid
+        # handklassning: konstruktionen tillåter mer än en läsning, och
+        # att systemet redovisar det är rätt beteende.
+        flag = "  [TVETYDIG]" if r["ambiguous"] else ""
+        typer.echo(
+            f"{i:3}. [{r['construction']}] {r['subject']}  ->  {r['object']}{flag}"
+        )
         typer.echo(f"     {(r['sentence'] or '')[:120]}")
         typer.echo(f"     {r['file_name']}")
         typer.echo("")
