@@ -1027,6 +1027,27 @@ def _agency(words, stext: str) -> list[Feature]:
         if _phrase(words, subj.id).lower() in _PRONOUN_SUBJECTS:
             continue
 
+        # EXISTENTIELLA KONSTRUKTIONER är inte påståenden om vem som
+        # handlar. "Det finns en definition", "det sker störningar",
+        # "för samtliga bisysslor gäller att..." — subjektet är det som
+        # existerar eller gäller, inte en agent. Uppmätt 2026-08-15
+        # stod formen för sex av fyrtio drag i det femte stickprovet,
+        # den enda kvarvarande systematiska felklassen.
+        #
+        # UD markerar det formella subjektet med expl. Det är en
+        # dependensrelation, inte en verblista, och gäller därmed även
+        # verb vi inte sett.
+        if any(x.head == w.id and x.deprel.startswith("expl") for x in words):
+            continue
+
+        # Lemman med siffror kommer från hopklistrad text:
+        # "före 2022-03-01har rätt" gav verblemmat "2022-03-01ha".
+        # OCR-artefakt, men den producerar drag med obegripliga
+        # relationer.
+        lemma = w.lemma or w.text
+        if any(c.isdigit() for c in lemma):
+            continue
+
         negated = any(
             x.head == w.id and x.deprel == "advmod"
             and x.text.lower() in _NEGATIONS
@@ -1065,7 +1086,7 @@ def _agency(words, stext: str) -> list[Feature]:
 
         out.append(Feature(
             kind=kind, a=a, b=b,
-            relation=(w.lemma or w.text) + suffix, sentence=stext,
+            relation=lemma + suffix, sentence=stext,
             extra={"negerad": negated, "passiv": passive},
         ))
     return out
