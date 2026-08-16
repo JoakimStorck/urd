@@ -49,3 +49,6 @@ Thumbs.db
 
 # Dokumentyta — instansens data, aldrig i versionshantering
 docs/
+
+# Testbatteri med verkliga namn — instansdata
+test/questions.json

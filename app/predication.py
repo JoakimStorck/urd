@@ -110,8 +110,8 @@ def _terms_match(a: str, b: str) -> bool:
 
     Nu krävs att minst ett INNEHÅLLSORD sammanfaller, jämfört ordagrant
     eller som böjningsvariant. Böjningstoleransen behövs för att
-    beståndet innehåller "Anna Skogberg" i labbansvarigbeslutet och
-    "Anna Skogbergs" som studierektor — en felstavning i källan. URD
+    beståndet innehåller "Sara Lundquist" i labbansvarigbeslutet och
+    "Sara Lundqvist" som studierektor — en felstavning i källan. URD
     ska återge vad källan säger, inte tyst rätta den, men jämförelsen
     får inte räkna två stavningar som två personer.
     """
@@ -262,8 +262,8 @@ def classify_answer_feature(f: Feature, source_features: list[Feature]) -> dict:
     supporting = [g for g in source_features if _is_supporting(f, g)]
     if supporting:
         # Tvetydighet är information och får inte tystas av att en
-        # läsning skulle ge stöd. "Prefekt och HR-expert Thomas
-        # Bodegrim presenterade ärendet" tillåter två läsningar — en
+        # läsning skulle ge stöd. "Prefekt och HR-expert Anna
+        # Andersson presenterade ärendet" tillåter två läsningar — en
         # person med två titlar, eller två personer varav en onämnd.
         # Stanza väljer den första; i det verkliga protokollet avsågs
         # den andra. Tvetydigheten sitter i källan, och ett system som

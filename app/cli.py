@@ -1140,10 +1140,14 @@ def ask(
 )
 def test(
     test_file: Path = typer.Option(
-        "test/questions.json",
+        None,
         "--file",
         "-f",
-        help="Sökväg till JSON-fil med testsekvenser.",
+        help=(
+            "Sökväg till JSON-fil med testsekvenser. Utan flagga används "
+            ".urd/questions.json om den finns, annars "
+            "test/questions.example.json."
+        ),
     ),
     server_url: str = typer.Option(
         "http://127.0.0.1:8000",
@@ -1267,6 +1271,28 @@ def test(
             f"Starta servern med 'urd serve' först."
         )
         raise typer.Exit(code=1)
+
+    # Instansens batteri går före repots exempel. Testfall som mäter
+    # rollbindning och aktualitet kräver verkliga namn ur beståndet för
+    # att mäta något, och de hör därför hemma i instansen — samma
+    # princip som docs/ och .urd/.
+    if test_file is None:
+        instance_file = Path(".urd") / "questions.json"
+        example_file = Path("test") / "questions.example.json"
+        if instance_file.exists():
+            test_file = instance_file
+        elif example_file.exists():
+            test_file = example_file
+            typer.echo(
+                "Använder exempelbatteriet. Instansens eget batteri läggs i "
+                ".urd/questions.json och versionshanteras inte."
+            )
+        else:
+            typer.echo(
+                "Hittade varken .urd/questions.json eller "
+                "test/questions.example.json. Ange fil med --file."
+            )
+            raise typer.Exit(code=1)
 
     typer.echo(f"Testfil: {test_file}")
     typer.echo(f"Sekvenser: {len(sequences)}")

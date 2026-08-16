@@ -108,8 +108,8 @@ def _key(text: str) -> str:
     Uppslagsnyckel: gemener, skiljetecken bort, ordordning bevarad.
 
     Tolerant vid sammanvägning, ordagrann vid återgivning. Beståndet
-    stavar samma person både "Thomas" och "Tomas", och "Anna Skogberg"
-    respektive "Anna Skogbergs". Nyckeln normaliserar för aggregering
+    stavar samma person både "Anna" och "Anna", och "Sara Lundquist"
+    respektive "Sara Lundqvist". Nyckeln normaliserar för aggregering
     medan `subject`/`object` bevarar källans ordalydelse.
     """
     t = re.sub(r"[^\wÅÄÖåäö\s-]", " ", text.lower())
@@ -135,7 +135,7 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 # och där finns de redan via predication.py. Att utesluta dem halverar
 # tabellen utan att förlora något Attest använder.
 # forkortning och tillhorighet lagras men är INTE identiteter:
-# "Joakim Storck -> HDa" är en arbetsplats, "Utvärderingsutskotten ->
+# "Erik Nilsson -> HDa" är en arbetsplats, "Utvärderingsutskotten ->
 # UUU" en termdefinition. Båda är korrekta observationer och värdefulla
 # — förkortningarna är beståndets egen ordlista — men en rollfråga får
 # aldrig besvaras med dem.
@@ -324,8 +324,8 @@ def _match(conn, column: str, term: str, kind: str) -> list[dict]:
     Hämta observationer vars nyckel matchar termen.
 
     Matchningen är tolerant: exakt, som delfras, eller som
-    böjningsvariant. Stavningsvarianter i källorna ("Thomas"/"Tomas",
-    "Skogberg"/"Skogbergs") får inte räknas som skilda entiteter vid
+    böjningsvariant. Stavningsvarianter i källorna ("Anna"/"Anna",
+    "Lundquist"/"Lundqvist") får inte räknas som skilda entiteter vid
     sammanvägning — men källans ordalydelse bevaras i utdata.
     """
     conn.row_factory = sqlite3.Row

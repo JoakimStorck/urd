@@ -11,8 +11,8 @@ BAKGRUND
 Tre bekräftade fel 2026-08-14 har samma logiska form: svaret påstår ett
 samband som källan inte bär.
 
-    Källa:  "Prefekten uppdrog åt HR-specialist Thomas Bodegrim att utreda."
-    Svar:   "Thomas Bodegrim har rollen som prefekt."
+    Källa:  "Prefekten uppdrog åt HR-specialist Anna Andersson att utreda."
+    Svar:   "Anna Andersson har rollen som prefekt."
 
 Felet överlever modellbyte (Nemo -> gemma4:12b) och avstängt resonemang,
 och det kan inte fångas med strängmatchning: två testassertioner har redan
@@ -85,11 +85,11 @@ class Feature:
 
 # Skillnaden mellan asserterad och presupponerad är inte kosmetisk.
 #
-#   "Ewa Wäckelgård är proprefekt"            -> asserterad
-#   "Proprefekt Ewa Wäckelgård föredrog ..."  -> presupponerad
+#   "Karin Berg är proprefekt"            -> asserterad
+#   "Proprefekt Karin Berg föredrog ..."  -> presupponerad
 #
 # Appositionen PÅSTÅR inte rollen, den förutsätter den — vilket syns på att
-# den överlever negation: "Proprefekt Ewa Wäckelgård föredrog inte ärendet"
+# den överlever negation: "Proprefekt Karin Berg föredrog inte ärendet"
 # tar fortfarande rollen för given. Presupposition är giltig evidens men
 # svagare, och den säger dessutom att personen är EN innehavare av rollen,
 # inte DEN. Räckvidden (organisation, tidpunkt) ligger utanför meningen och
@@ -216,7 +216,7 @@ _META_MARKERS = (
 # generera drag. Uppmätt 2026-08-15: rubrikraden flöt ihop med den
 # efterföljande meningen och gav den fabricerade identiteten
 # "IIT Prefekt -> proprefekt", samtidigt som samordningen i
-# "Prefekt och HR-expert Thomas Bodegrim" bröts sönder — draget för
+# "Prefekt och HR-expert Anna Andersson" bröts sönder — draget för
 # prefekt försvann helt och HR-expert tappade sin tvetydighetsflagga.
 #
 # Med prefixet strippat ger samma text båda dragen med ambiguous=True.
@@ -248,7 +248,7 @@ def _is_meta_sentence(text: str) -> bool:
 # En rad som bär subjekt och finit verb är en sats även om den är kort
 # eller inleds av en listmarkör. Uppmätt 2026-08-15: det gamla filtret
 # (>=25 tecken, ingen listmarkör) sållade bort "Prefekt och HR-expert
-# Thomas Bodegrim presenterade ärendet." i vissa chunkar och samtliga
+# Anna Andersson presenterade ärendet." i vissa chunkar och samtliga
 # föredragande- och närvaroförteckningar — alltså exakt den textform
 # där rollbindningar lever. Källidentiteterna låg därför kvar på 169
 # trots att titeluttaget bevisligen fungerar på verkliga träd.
@@ -298,8 +298,8 @@ def _word_text(words, idx: int) -> str:
 def _phrase(words, head_idx: int) -> str:
     """
     Ytlig fras kring ett huvudord: huvudordet plus dess omedelbara
-    nominala modifierare. Räcker för att få med "HR-specialist Thomas
-    Bodegrim" som en enhet utan att bygga en fullständig frasstruktur.
+    nominala modifierare. Räcker för att få med "HR-specialist Anna
+    Andersson" som en enhet utan att bygga en fullständig frasstruktur.
     """
     parts = {head_idx}
     for w in words:
@@ -390,7 +390,7 @@ _PLACEHOLDER_HEADS = {
 
 
 # Rums- och objektskoder är inte titlar. Uppmätt 2026-08-15 gav det
-# öppnade radfiltret drag som "B422 -> Tomas Person" och
+# öppnade radfiltret drag som "B422 -> Ola Ström" och
 # "B422 -> B421" ur labbansvarigdokumentet: en kod bunden till ett
 # namn ser strukturellt ut som en titelkonstruktion.
 #
@@ -479,7 +479,7 @@ def _governing_verb(words, idx: int, max_steps: int = 6) -> int | None:
 # längre formen.
 # ENDAST semantiskt tomma bestämningar. "tillförordnad", "tf" och
 # "biträdande" ÄNDRAR rollen och får aldrig strippas: en tf proprefekt
-# är inte proprefekten (Moudud Alam mot Ewa Wäckelgård), och
+# är inte proprefekten (Olle Persson mot Karin Berg), och
 # biträdande lektor är en annan lärarkategori än lektor — hela
 # kapitelskillnaden i anställningsordningen.
 _EMAIL = re.compile(r"[\w.+-]+@[\w.-]+")
@@ -521,8 +521,7 @@ def _conj_chain(words, head_id: int) -> list[int]:
     Följ samordningskedjan TRANSITIVT från ett huvudord.
 
     I kommaseparerade uppräkningar hänger inte alla led direkt under
-    det första: "Forskningssamordnarna Chris Bales, Kumar Babu
-    Surreddi och Xiaoyun Zhao" ger conj under conj. Ett enda steg
+    det första: "Forskningssamordnarna Maria Ek, Sven Ohlsson och Lisa Holm" ger conj under conj. Ett enda steg
     fångar bara det andra ledet — uppmätt 2026-08-15 stod den formen
     för fyra av åtta titelfel, alltid genom att bara en av tre
     personer band till titeln.
@@ -554,37 +553,37 @@ def _title_identity(words, stext: str) -> list[Feature]:
 
     UPPMÄTT PARSERBETEENDE 2026-08-15 (Stanza, sv):
 
-        Proprefekt Ewa Wäckelgård föredrog ärendet.
+        Proprefekt Karin Berg föredrog ärendet.
           1 Proprefekt  NOUN  head=2 nmod       <- titel FÖRE namn: nmod
-          2 Ewa         PROPN head=4 nsubj
-          3 Wäckelgård  PROPN head=2 flat:name
+          2 Karin         PROPN head=4 nsubj
+          3 Berg  PROPN head=2 flat:name
 
-        Thomas Bodegrim, HR-specialist, presenterade ärendet.
-          1 Thomas      PROPN head=6 nsubj
+        Anna Andersson, HR-specialist, presenterade ärendet.
+          1 Anna      PROPN head=6 nsubj
           4 HR-specialist NOUN head=1 appos     <- titel EFTER namn: appos
 
     Samma semantiska relation, två UD-etiketter beroende på ordföljd —
     och i båda fallen hänger titeln UNDER namnet. Den tidigare regeln
     letade bara appos och var därför blind för den vanligaste svenska
-    formen: obestämd titel före namn. Det förklarar varför Ewa
-    Wäckelgård aldrig extraherades ur beståndet trots att hon
+    formen: obestämd titel före namn. Det förklarar varför Karin
+    Berg aldrig extraherades ur beståndet trots att hon
     förekommer som föredragande i ett stort antal protokoll.
 
     Konstruktionen är stabil oavsett satsroll: i passiv form ("Ärendet
-    föredrogs av proprefekt Ewa Wäckelgård") hänger titeln likadant
+    föredrogs av proprefekt Karin Berg") hänger titeln likadant
     under namnet, som i sin tur är obl:agent.
 
     CASE-KRAVET. nmod under egennamn är inte alltid en titel:
-    "rapporten om Bodegrim" ger samma relation. Titelkonstruktionen
+    "rapporten om Andersson" ger samma relation. Titelkonstruktionen
     saknar preposition mellan titel och namn, medan om/av/från alltid
     ger en case-markör. Kravet skiljer konstruktionerna åt utan att
     veta vad orden betyder.
 
-    TVETYDIGHET. "Prefekt och HR-expert Thomas Bodegrim presenterade
+    TVETYDIGHET. "Prefekt och HR-expert Anna Andersson presenterade
     ärendet" har två giltiga läsningar:
 
-        [Prefekt och HR-expert] Thomas Bodegrim   -> en person, två titlar
-        [Prefekt] och [HR-expert Thomas Bodegrim] -> två personer
+        [Prefekt och HR-expert] Anna Andersson   -> en person, två titlar
+        [Prefekt] och [HR-expert Anna Andersson] -> två personer
 
     Stanza väljer den första; i det verkliga protokollet avsågs den
     andra. Tvetydigheten sitter i källan, inte i parsern, och den kan
@@ -609,8 +608,8 @@ def _title_identity(words, stext: str) -> list[Feature]:
         #
         # Villkoret är formmässigt: ett personnamn i svensk
         # förvaltningstext skrivs ut med minst två namnled, vilket i UD
-        # ger ett PROPN med minst ett flat:name-barn. "Ewa Wäckelgård"
-        # och "Thomas Bodegrim" uppfyller det; "Rektor" och
+        # ger ett PROPN med minst ett flat:name-barn. "Karin Berg"
+        # och "Anna Andersson" uppfyller det; "Rektor" och
         # "Diarienummer C" gör det inte.
         if not (0 < w.head <= len(words)) or words[w.head - 1].upos != "PROPN":
             continue
@@ -633,9 +632,9 @@ def _title_identity(words, stext: str) -> list[Feature]:
             continue
         if _is_code_like(name) or _is_code_like(_phrase(words, w.id)):
             continue
-        # En titel är inte ett namn. Närvarolistor ("Thomas Bodegrim,
-        # Xingxing Zhang, Moudud Alam") tolkas annars som appositioner
-        # och gav drag som "Thomas Bodegrim -> Moudud Alam" — uppmätt
+        # En titel är inte ett namn. Närvarolistor ("Anna Andersson,
+        # Nina Falk, Olle Persson") tolkas annars som appositioner
+        # och gav drag som "Anna Andersson -> Olle Persson" — uppmätt
         # 2026-08-15. Titelledet ska vara ett vanligt substantiv.
         if words[w.id - 1].upos == "PROPN":
             continue
@@ -645,7 +644,7 @@ def _title_identity(words, stext: str) -> list[Feature]:
         ambiguous = len(titles) > 1
 
         # Samordnade PERSONNAMN delar titeln. "Studierektorerna Mia
-        # Xiaoyun Zhao och Xingxing Zhang presenterade läget" band
+        # Lisa Holm och Nina Falk presenterade läget" band
         # tidigare bara den första — uppmätt 2026-08-15. Det
         # underskattar beläggningen systematiskt, och just för roller
         # med flera innehavare är det den siffran som avgör om rollen
@@ -658,8 +657,8 @@ def _title_identity(words, stext: str) -> list[Feature]:
             n = _phrase(words, nid)
             if _is_code_like(n) or _is_placeholder(n):
                 continue
-            # "Mats Rönnelid, mrd@du.se" gav "Mats Rönnelid ->
-            # mrd@du.se" — en e-postadress är ingen titel och inget
+            # "Per Ek, namn@exempel.se" gav "Per Ek ->
+            # namn@exempel.se" — en e-postadress är ingen titel och inget
             # namn. Uppmätt 2026-08-15.
             if _EMAIL.search(n):
                 continue
@@ -684,13 +683,13 @@ def _has_finite_verb(words) -> bool:
     parsning kan utvinna en relation ur något som inte påstår något.
 
     Detta träffar en konkret och vanlig felkälla: signaturblock och
-    närvarolistor i protokoll. "Vid protokollet / Annette Lenne /
-    Joakim Storck" är en LAYOUTstruktur — sannolikt två kolumner eller
+    närvarolistor i protokoll. "Vid protokollet / Eva Sund /
+    Erik Nilsson" är en LAYOUTstruktur — sannolikt två kolumner eller
     en tabell i PDF:en — som Docling platt ut till radbrytningar. I
     handklassningen 2026-08-15 stod sju av elva titelfel för den
-    formen, med drag som "Annette Lenne Joakim Storck -> protokollet".
+    formen, med drag som "Eva Sund Erik Nilsson -> protokollet".
 
-    Att Annette Lenne var sekreterare är sant, men det följer av
+    Att Eva Sund var sekreterare är sant, men det följer av
     genrekunskap om svensk mötesformalia, inte av texten. Att låta
     parsern gissa det vore att producera belägg som ser lästa ut men
     är härledda. Ska närvaro och sekreterarskap fångas är rätt väg en
@@ -724,13 +723,13 @@ def _identity(words, stext: str) -> list[Feature]:
     var slumpen i ett litet urval — vilket är hela skälet till att
     precision mäts per konstruktion i stället för bedöms på intryck.
 
-    Riktiga identiteter i kopulaform ("Ewa är adjungerad ledamot i XU")
+    Riktiga identiteter i kopulaform ("Karin är adjungerad ledamot i XU")
     finns, men de går inte att skilja från övriga predikationer utan
     att veta vad orden betyder.
 
     PREDIKATIV MED MARKÖR BORTTAGEN samma dag: 2 rätt av 5. "Föreslås
     som ersättare" betyder att personen får den roll som blev ledig —
-    "ersättare" är ingen roll. Att skilja det från "Frank Fiedler som
+    "ersättare" är ingen roll. Att skilja det från "Jonas Ek som
     ämnesansvarig" kräver en ordlista över rollord.
 
     Funktionerna _governing_verb och _has_disjunction behålls: de
@@ -743,14 +742,14 @@ def _identity(words, stext: str) -> list[Feature]:
 # Parentesen bär tre SKILDA relationer, som handklassningen
 # 2026-08-15 blandade ihop:
 #
-#   Linus Kallin (Studentrepresentant)   -> roll
-#   Mats Rönnelid (HDa)                  -> organisationstillhörighet
+#   Tim Ohlsson (Studentrepresentant)   -> roll
+#   Per Ek (HDa)                  -> organisationstillhörighet
 #   Utvärderingsutskotten (UUU)          -> förkortning
 #
 # Alla tre var korrekta observationer, men de betyder olika saker.
 # Sju av de tolv rätta i stickprovet var (HDa) — att räkna dem som
-# identiteter gör aggregeringen missvisande: "Joakim Storck -> HDa"
-# och "Joakim Storck -> prefekt" är inte samma slags påstående, och
+# identiteter gör aggregeringen missvisande: "Erik Nilsson -> HDa"
+# och "Erik Nilsson -> prefekt" är inte samma slags påstående, och
 # en rollfråga får inte besvaras med en arbetsplats.
 #
 # Formen skiljer dem åt utan ordlista: en versalförkortning är en
@@ -869,11 +868,11 @@ def _distinction(words, stext: str) -> list[Feature]:
     Åtskillnad: skilda argument till samma predikat har normalt skilda
     referenter.
 
-        "Prefekten uppdrog åt HR-specialist Thomas Bodegrim att utreda."
+        "Prefekten uppdrog åt HR-specialist Anna Andersson att utreda."
 
     Subjekt och objekt kan inte vara samma person här — vilket är den enda
     negativa slutsats som går att dra mekaniskt ur en sats, och exakt den
-    som fäller "Thomas Bodegrim har rollen som prefekt". Reflexiva
+    som fäller "Anna Andersson har rollen som prefekt". Reflexiva
     konstruktioner är undantaget och uppträder inte i den här formen.
     """
     out: list[Feature] = []
