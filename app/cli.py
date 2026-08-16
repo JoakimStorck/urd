@@ -1233,6 +1233,33 @@ def test(
     import time as time_module
     from datetime import datetime
 
+    # Instansens batteri går före repots exempel.
+    #
+    # Detta MÅSTE ske före test_file.exists(): utan --file är test_file
+    # None, och kontrollen kraschade med AttributeError. Blocket låg
+    # tidigare längre ned, efter en rad som aldrig nåddes.
+    #
+    # Testfall som mäter rollbindning och aktualitet kräver verkliga
+    # namn ur beståndet för att mäta något, och de hör därför hemma i
+    # instansen — samma princip som docs/ och .urd/.
+    if test_file is None:
+        instance_file = Path(".urd") / "questions.json"
+        example_file = Path("test") / "questions.example.json"
+        if instance_file.exists():
+            test_file = instance_file
+        elif example_file.exists():
+            test_file = example_file
+            typer.echo(
+                "Använder exempelbatteriet. Instansens eget batteri läggs i "
+                ".urd/questions.json och versionshanteras inte."
+            )
+        else:
+            typer.echo(
+                "Hittade varken .urd/questions.json eller "
+                "test/questions.example.json. Ange fil med --file."
+            )
+            raise typer.Exit(code=1)
+
     if not test_file.exists():
         typer.echo(f"Testfil saknas: {test_file}")
         typer.echo("")
@@ -1271,28 +1298,6 @@ def test(
             f"Starta servern med 'urd serve' först."
         )
         raise typer.Exit(code=1)
-
-    # Instansens batteri går före repots exempel. Testfall som mäter
-    # rollbindning och aktualitet kräver verkliga namn ur beståndet för
-    # att mäta något, och de hör därför hemma i instansen — samma
-    # princip som docs/ och .urd/.
-    if test_file is None:
-        instance_file = Path(".urd") / "questions.json"
-        example_file = Path("test") / "questions.example.json"
-        if instance_file.exists():
-            test_file = instance_file
-        elif example_file.exists():
-            test_file = example_file
-            typer.echo(
-                "Använder exempelbatteriet. Instansens eget batteri läggs i "
-                ".urd/questions.json och versionshanteras inte."
-            )
-        else:
-            typer.echo(
-                "Hittade varken .urd/questions.json eller "
-                "test/questions.example.json. Ange fil med --file."
-            )
-            raise typer.Exit(code=1)
 
     typer.echo(f"Testfil: {test_file}")
     typer.echo(f"Sekvenser: {len(sequences)}")
