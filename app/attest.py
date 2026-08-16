@@ -157,7 +157,14 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 # UUU" en termdefinition. Båda är korrekta observationer och värdefulla
 # — förkortningarna är beståndets egen ordlista — men en rollfråga får
 # aldrig besvaras med dem.
-_STORED_KINDS = {"identitet", "agens", "modalitet", "forkortning", "tillhorighet"}
+# patiens är passiva satser utan utsatt agent ("beslut ska
+# diarieföras"): subjektet är det som handlingen drabbar, inte den som
+# handlar. Lagras separat så att ett uppslag på agens aldrig kan
+# returnera ett drag som betyder motsatsen.
+_STORED_KINDS = {
+    "identitet", "agens", "patiens", "modalitet",
+    "forkortning", "tillhorighet",
+}
 
 
 def _observations_from_chunk(chunk) -> list[dict]:

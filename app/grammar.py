@@ -971,33 +971,101 @@ def _distinction(words, stext: str) -> list[Feature]:
     return out
 
 
+# Pronomen är inte referenter. Uppmätt över fyra stickprov om
+# sammanlagt 160 agensdrag 2026-08-15: pronominella subjekt stod för
+# ungefär 20 procent av felen. "som" dominerar — ett relativpronomen
+# syftar tillbaka på ett huvudord som draget inte fångar, så "som ->
+# gränsdragningen" säger ingenting om vem som gör vad. Att lösa upp
+# antecedenten är koreferens, vilket lagret medvetet lämnar utanför.
+_PRONOUN_SUBJECTS = {
+    "som", "det", "den", "de", "dem", "detta", "dessa", "vi", "jag",
+    "du", "ni", "han", "hon", "hen", "man", "vilken", "vilket", "vilka",
+}
+
+
 def _agency(words, stext: str) -> list[Feature]:
     """
-    Vem gör vad. Sannolikt det vanligaste påståendet i URD:s svar —
-    "prefekt beslutar om medfinansiering", "rektor utser proprefekt".
+    Vem gör vad. Det vanligaste påståendet i URD:s svar — "prefekt
+    beslutar om medfinansiering", "rektor utser proprefekt".
 
-    Felklassen är densamma som rollbindning men på verbet: bekräftat fall
-    i baslinjen 2026-08-12 var "Vice rektor har delegerat till rektor",
-    inverterad delegationsordning. nsubj/obj är parsningens mest
-    tillförlitliga relationer, så detta är mekaniskt det enklaste draget.
+    Felklassen är densamma som rollbindning men på verbet: bekräftat
+    fall i baslinjen 2026-08-12 var "Vice rektor har delegerat till
+    rektor", inverterad delegationsordning.
+
+    TRE SKÄRPNINGAR efter mätning över 160 drag 2026-08-15, som
+    tillsammans stod för ungefär 40 procent av felen:
+
+    1. PRONOMINELLA SUBJEKT avvisas, se _PRONOUN_SUBJECTS.
+
+    2. PASSIV VÄNDS ELLER MÄRKS. Vid nsubj:pass är subjektet patient,
+       inte agent: "Bedömarna erbjuds 40 timmar" gav "Bedömarna ->
+       timmar", vilket läses som att bedömarna erbjöd något. Finns en
+       agent som obl:agent ("ärendet föredrogs AV X") vänds draget så
+       att agenten blir subjekt. Saknas agenten — vilket är det vanliga
+       i regeltext — får draget kind="patiens" i stället, så att det
+       aldrig kan läsas som ett påstående om vem som handlar.
+
+    3. ADVERBIAL ÄR INTE OBJEKT. "Prefekten redogjorde för RL" och
+       "Ansökan sker via rekryteringssystemet" gav plats- och
+       sättsangivelser som objekt. obj föredras nu framför obl, och
+       när bara obl finns märks det i relationen så att skillnaden är
+       synlig i uppslaget.
     """
     out: list[Feature] = []
     for w in words:
         if w.upos != "VERB":
             continue
-        subj = next((x for x in words if x.head == w.id and x.deprel in ("nsubj", "nsubj:pass")), None)
+        subj = next(
+            (x for x in words if x.head == w.id
+             and x.deprel in ("nsubj", "nsubj:pass")),
+            None,
+        )
         if not subj:
             continue
-        obj = next((x for x in words if x.head == w.id and x.deprel in ("obj", "obl", "obl:arg", "xcomp")), None)
+        if words[subj.id - 1].upos == "PRON":
+            continue
+        if _phrase(words, subj.id).lower() in _PRONOUN_SUBJECTS:
+            continue
+
         negated = any(
-            x.head == w.id and x.deprel == "advmod" and x.text.lower() in _NEGATIONS
+            x.head == w.id and x.deprel == "advmod"
+            and x.text.lower() in _NEGATIONS
             for x in words
         )
         passive = subj.deprel == "nsubj:pass"
+
+        # Direkt objekt först; adverbial bara i andra hand och märkt.
+        direct = next(
+            (x for x in words if x.head == w.id
+             and x.deprel in ("obj", "xcomp")),
+            None,
+        )
+        oblique = next(
+            (x for x in words if x.head == w.id
+             and x.deprel in ("obl", "obl:arg")),
+            None,
+        )
+        obj = direct or oblique
+        suffix = "" if direct else (":obl" if oblique else "")
+
+        agent = next(
+            (x for x in words if x.head == w.id and x.deprel == "obl:agent"),
+            None,
+        )
+
+        if passive and agent:
+            # "Ärendet föredrogs av X" -> X gjorde något med ärendet.
+            a, b, kind = _phrase(words, agent.id), _phrase(words, subj.id), "agens"
+        elif passive:
+            a, b, kind = _phrase(words, subj.id), (
+                _phrase(words, obj.id) if obj else None), "patiens"
+        else:
+            a, b, kind = _phrase(words, subj.id), (
+                _phrase(words, obj.id) if obj else None), "agens"
+
         out.append(Feature(
-            kind="agens", a=_phrase(words, subj.id),
-            b=_phrase(words, obj.id) if obj else None,
-            relation=w.lemma or w.text, sentence=stext,
+            kind=kind, a=a, b=b,
+            relation=(w.lemma or w.text) + suffix, sentence=stext,
             extra={"negerad": negated, "passiv": passive},
         ))
     return out
