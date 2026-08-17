@@ -106,10 +106,14 @@ def scan(files: list[Path], context: int) -> list[dict]:
         r"\b(?:" + "|".join(re.escape(n) for n in KNOWN) + r")\b", re.I
     )
 
-    self_path = Path(__file__).resolve()
+    # Skriptets egen namnlista är inte en läcka. Jämförelse på FILNAMN
+    # och inte på resolverad sökväg: git ls-files ger relativa vägar,
+    # och __file__ kan vara absolut eller relativ beroende på hur
+    # skriptet startats — uppmätt 2026-08-17 rapporterade skriptet sig
+    # självt när det låg i scripts/.
+    self_name = Path(__file__).name
     for path in files:
-        # Skriptets egen namnlista är inte en läcka.
-        if path.resolve() == self_path:
+        if path.name == self_name:
             continue
         try:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()

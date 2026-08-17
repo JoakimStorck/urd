@@ -60,6 +60,17 @@ def _format_sources(hits: list[SourceHit]) -> str:
         header = f"[Källa {i}] {meta.file_name} — {meta.section_title}"
         if meta.document_date:
             header += f" (daterad {meta.document_date})"
+        # Dokumenttypen gör normkälleregeln tillämpbar: utan den kan
+        # syntesen inte veta om en källa är en bindande regel eller en
+        # protokollanteckning, och regeln har därför stått i prompten
+        # utan underlag sedan den infördes.
+        if meta.document_type:
+            label = meta.document_type
+            if meta.document_weight == "record":
+                label += ", historisk uppgift"
+            elif meta.document_weight == "norm":
+                label += ", normkälla"
+            header += f" [{label}]"
         blocks.append(f"{header}\n{hit.text}")
     return "\n\n".join(blocks)
 

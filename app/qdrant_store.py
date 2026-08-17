@@ -75,6 +75,7 @@ class QdrantStore:
             "document_date": chunk.metadata.document_date,
             "diarienummer": chunk.metadata.diarienummer,
             "document_type": chunk.metadata.document_type,
+            "document_weight": chunk.metadata.document_weight,
             "keywords": chunk.metadata.keywords,
             "roles": chunk.metadata.roles,
             "actions": chunk.metadata.actions,

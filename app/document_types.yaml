@@ -1,0 +1,73 @@
+# Härledning av dokumenttyp ur sökvägen.
+#
+# document_type styr två promptregler i syntesen som funnits sedan
+# åtgärd 3 men aldrig haft underlag:
+#
+#   - normkälleregeln: normkällor och anvisningar väger tyngre än
+#     historiska protokolluppgifter
+#   - aktualitetsregeln: vid motstridiga uppgifter har nyare källa
+#     företräde
+#
+# Fältet sattes tidigare bara av enrich, som är en dyr LLM-operation
+# och sällan körs. Katalogstrukturen bär redan klassningen, och att
+# läsa den är deterministiskt och gratis.
+#
+# MATCHNINGEN GÅR PÅ SÖKVÄGENS DELAR, inte på filnamn. Den första
+# regeln som matchar vinner, så ordningen betyder något: mer specifika
+# mönster först.
+#
+# type-värdet används av syntesprompten. weight anger normativ tyngd:
+#   norm      bindande regel eller beslut — bär svaret
+#   guidance  anvisning eller rutin — bär svaret men viker för norm
+#   record    protokoll eller minnesanteckning — bakgrund, inte norm
+#
+# Okänd sökväg ger null, vilket är samma läge som före ändringen.
+
+rules:
+  # IIT-lokala beslut. Filnamnskonventionen "20250311_beslut_..." är
+  # tydligare än katalogen och prövas först.
+  - match_filename: "_beslut_"
+    type: beslut
+    weight: norm
+
+  - match_path: ["Högskolan-policy-regler-handlägnginsordningar", "Regel"]
+    type: regel
+    weight: norm
+
+  - match_path: ["Högskolan-policy-regler-handlägnginsordningar", "Policy"]
+    type: policy
+    weight: norm
+
+  - match_path: ["Högskolan-policy-regler-handlägnginsordningar", "Handläggningsordning"]
+    type: handläggningsordning
+    weight: guidance
+
+  # Övriga dokument under policykatalogen: regelverk av något slag.
+  - match_path: ["Högskolan-policy-regler-handlägnginsordningar"]
+    type: regel
+    weight: norm
+
+  - match_path: ["IL-protokoll"]
+    type: protokoll
+    weight: record
+
+  # IIT-lokala regler och rutiner utan beslutsprefix i filnamnet.
+  - match_path: ["IIT-lokala-regler-och-rutiner"]
+    type: rutin
+    weight: guidance
+
+  - match_path: ["IIT-lokala regler och rutiner"]
+    type: rutin
+    weight: guidance
+
+# Filnamnsmönster som kan förfina typen oavsett katalog.
+filename_hints:
+  - contains: "protokoll"
+    type: protokoll
+    weight: record
+  - contains: "anvisning"
+    type: anvisning
+    weight: guidance
+  - contains: "instruktion"
+    type: anvisning
+    weight: guidance

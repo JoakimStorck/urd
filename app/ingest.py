@@ -365,6 +365,83 @@ def infer_category(path: Path, docs_root: Path) -> str | None:
         return None
 
 
+_DOC_TYPE_RULES: dict | None = None
+
+
+def _load_document_type_rules() -> dict:
+    """
+    Läs härledningsreglerna, från instansen om de finns där.
+
+    Samma mönster som synonyms och concepts: repot bär en mall,
+    instansen kan ha en egen. Tyst fallback till tom konfiguration —
+    utan regler blir document_type null, alltså samma läge som före
+    ändringen.
+    """
+    global _DOC_TYPE_RULES
+    if _DOC_TYPE_RULES is not None:
+        return _DOC_TYPE_RULES
+
+    import yaml
+    for candidate in (Path(".urd") / "document_types.yaml",
+                      Path(__file__).parent / "document_types.yaml"):
+        if not candidate.exists():
+            continue
+        try:
+            with candidate.open(encoding="utf-8") as f:
+                _DOC_TYPE_RULES = yaml.safe_load(f) or {}
+            logger.info(
+                "Laddade %d dokumenttypsregler från %s.",
+                len(_DOC_TYPE_RULES.get("rules", [])), candidate,
+            )
+            return _DOC_TYPE_RULES
+        except Exception as e:
+            logger.warning("Kunde inte läsa %s (%s).", candidate, e)
+    _DOC_TYPE_RULES = {}
+    return _DOC_TYPE_RULES
+
+
+def infer_document_type(
+    path: Path, docs_root: Path
+) -> tuple[str | None, str | None]:
+    """
+    Härled dokumenttyp och normativ tyngd ur sökvägen.
+
+    Returnerar (type, weight). Deterministiskt och gratis, till skillnad
+    från enrich som är ett LLM-anrop per sektion och därför sällan körs
+    — vilket är skälet till att document_type varit null på varje träff
+    sedan fältet infördes, och att normkälle- och aktualitetsreglerna i
+    syntesprompten aldrig haft underlag.
+
+    Okänd sökväg ger (None, None), samma läge som före ändringen.
+    """
+    rules = _load_document_type_rules()
+    if not rules:
+        return None, None
+
+    name = path.name.lower()
+    try:
+        parts = [p.lower() for p in path.relative_to(docs_root).parts]
+    except Exception:
+        parts = [p.lower() for p in path.parts]
+
+    for rule in rules.get("rules", []):
+        needle = rule.get("match_filename")
+        if needle and needle.lower() in name:
+            return rule.get("type"), rule.get("weight")
+
+        wanted = rule.get("match_path")
+        if wanted and all(
+            any(w.lower() == p for p in parts) for w in wanted
+        ):
+            return rule.get("type"), rule.get("weight")
+
+    for hint in rules.get("filename_hints", []):
+        if hint.get("contains", "").lower() in name:
+            return hint.get("type"), hint.get("weight")
+
+    return None, None
+
+
 def make_chunk_id(path: Path, idx: int, text: str) -> str:
     h = hashlib.sha1(f"{path}:{idx}:{text}".encode("utf-8")).hexdigest()
     return h
@@ -675,7 +752,13 @@ def build_chunks_from_sections(
                 page_number=None,
                 document_date=document_date,
                 diarienummer=diarienummer,
-                document_type=semantic.document_type,
+                # Sökvägen först, enrich som komplement: härledningen är
+                # deterministisk och alltid tillgänglig, medan
+                # semantic.document_type kräver att enrich körts — och
+                # det är skälet till att fältet varit null på varje
+                # träff sedan det infördes.
+                document_type=doc_type or semantic.document_type,
+                document_weight=doc_weight,
                 keywords=semantic.keywords,
                 roles=semantic.roles,
                 actions=semantic.actions,
@@ -715,6 +798,7 @@ def ingest_path(
     )
     document_title = infer_document_title(raw)
     category = infer_category(path, docs_root)
+    doc_type, doc_weight = infer_document_type(path, docs_root)
     source_fingerprint = compute_source_fingerprint(path)
 
     sections = split_markdown_sections(raw.text)
@@ -780,6 +864,7 @@ def ingest_path_with_evidence(
 
     document_title = infer_document_title(raw)
     category = infer_category(path, docs_root)
+    doc_type, doc_weight = infer_document_type(path, docs_root)
     source_fingerprint = compute_source_fingerprint(path)
     sections = split_markdown_sections(raw.text)
 

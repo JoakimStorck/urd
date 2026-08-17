@@ -54,7 +54,10 @@ HELP = """Kommandon (allt annat tolkas som en fråga):
   .ny               starta ny session (glömmer samtalshistorik)
   .källor på|av     visa eller dölj källor i svaren
   .debug på|av      visa eller dölj teknisk info
-  .avsluta          avsluta (även Ctrl-D)
+  .attest <term>    slå upp vad beståndet belägger om en roll
+                    (.attest "N.N." --person för uppslag på person)
+  .stopp            avsluta SERVERN (sessionen fortsätter lokalt)
+  .avsluta          avsluta läget (även Ctrl-D)
 
 Sessionen behålls mellan frågor: följdfrågor som "berätta mer" och
 "stämmer det?" fungerar som i webbgränssnittet."""
@@ -142,6 +145,44 @@ class Repl:
             show_debug=self.show_debug,
         )
 
+    def _attest(self, args: list[str]) -> None:
+        """
+        Slå upp en term i Attest utan att lämna sessionen.
+
+        Läser bara .urd/attest.db och rör inte Qdrant, så det fungerar
+        med servern igång.
+        """
+        if not args:
+            typer.echo("Ange en term:  .attest proprefekt")
+            typer.echo("Uppslag på person: .attest \"Anna Andersson\" --person")
+            return
+
+        by_subject = any(a in ("--person", "--subjekt") for a in args)
+        term = " ".join(a for a in args if not a.startswith("--")).strip('"')
+
+        try:
+            from app import attest
+            conn = attest.connect()
+        except Exception as e:
+            typer.echo(f"Attest otillgängligt: {e}")
+            return
+
+        fn = attest.lookup_subject if by_subject else attest.lookup_object
+        cands = fn(conn, term)
+        if not cands:
+            typer.echo(f"Inga observationer för {term!r}.")
+            return
+
+        for c in cands:
+            flag = "  [ENDAST TVETYDIGA]" if c.ambiguous_only else ""
+            avser = f" för {', '.join(c.scopes)}" if c.scopes else ""
+            typer.echo(f"  {c.subject} — {c.object}{avser}{flag}")
+            typer.echo(
+                f"      relevans {c.relevance:.2f}, {c.documents} dokument, "
+                f"{c.first_date or '?'} – {c.last_date or '?'}"
+            )
+        typer.echo("  (beläggning, inte sanning)")
+
     # -- kommandon ---------------------------------------------------
 
     def command(self, line: str) -> bool:
@@ -154,6 +195,14 @@ class Repl:
         if cmd in ("avsluta", "quit", "exit", "q"):
             return False
 
+        if cmd in ("stopp", "stop"):
+            # Avslutar SERVERN, inte sessionen. Namnet är avsiktligt
+            # skilt från .avsluta för att skillnaden ska synas.
+            import subprocess
+            subprocess.run(["python", "-m", "app.cli", "stop"], check=False)
+            self.use_server = None
+            return True
+
         if cmd in ("hjälp", "hjalp", "help", "h", "?"):
             typer.echo(HELP)
 
@@ -161,6 +210,9 @@ class Repl:
             self.session_id = None
             self.turns = 0
             typer.echo("Ny session. Samtalshistoriken är glömd.")
+
+        elif cmd == "attest":
+            self._attest(args)
 
         elif cmd == "status":
             backend = {

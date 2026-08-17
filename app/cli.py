@@ -188,7 +188,87 @@ def serve(
     """
     Starta den lokala backend-servern för API och webbgränssnitt.
     """
-    uvicorn.run("app.api:app", host=host, port=port, reload=autoreload)
+    # PID-fil så att 'urd stop' kan avsluta servern kontrollerat.
+    #
+    # PID-fil hellre än en shutdown-endpoint: en HTTP-väg som dödar
+    # processen bör inte ligga öppen ens på localhost utan
+    # auktorisering, och signalvägen fungerar även om servern hängt sig.
+    #
+    # Med autoreload kör uvicorn TVÅ processer — en reloader och en
+    # arbetare. os.getpid() här är reloaderns, vilket är den rätta:
+    # dödar man arbetaren startar reloadern bara en ny.
+    pid_file = Path(".urd") / "server.pid"
+    try:
+        pid_file.parent.mkdir(parents=True, exist_ok=True)
+        pid_file.write_text(f"{os.getpid()}\n{host}:{port}\n", encoding="utf-8")
+    except OSError as e:
+        logger.warning("Kunde inte skriva %s (%s).", pid_file, e)
+
+    try:
+        uvicorn.run("app.api:app", host=host, port=port, reload=autoreload)
+    finally:
+        try:
+            if pid_file.exists() and pid_file.read_text(
+                encoding="utf-8"
+            ).split("\n")[0].strip() == str(os.getpid()):
+                pid_file.unlink()
+        except OSError:
+            pass
+
+
+@app.command(
+    "stop",
+    help="Avsluta en lokalt körande urd-server.",
+)
+def stop(
+    force: bool = typer.Option(
+        False, "--force",
+        help="Skicka SIGKILL i stället för SIGTERM.",
+    ),
+) -> None:
+    """
+    Avsluta servern via PID-filen som 'urd serve' skriver.
+
+    Kontrollerar att processen fortfarande lever innan signalen skickas,
+    så att en kvarlämnad PID-fil efter en krasch inte får kommandot att
+    döda en obesläktad process som råkat få samma PID.
+    """
+    import signal
+
+    pid_file = Path(".urd") / "server.pid"
+    if not pid_file.exists():
+        typer.echo(
+            "Ingen server.pid i .urd/. Antingen kör ingen server, eller så "
+            "startades den utan 'urd serve'.\n"
+            "Hitta processen med:  lsof data/qdrant/.lock"
+        )
+        raise typer.Exit(code=1)
+
+    lines = pid_file.read_text(encoding="utf-8").splitlines()
+    try:
+        pid = int(lines[0].strip())
+    except (IndexError, ValueError):
+        typer.echo(f"Kunde inte läsa PID ur {pid_file}.")
+        raise typer.Exit(code=1)
+
+    address = lines[1].strip() if len(lines) > 1 else "okänd adress"
+
+    try:
+        os.kill(pid, 0)          # lever processen?
+    except ProcessLookupError:
+        typer.echo(
+            f"Ingen process med PID {pid} — servern verkar redan avslutad."
+        )
+        pid_file.unlink(missing_ok=True)
+        raise typer.Exit(code=0)
+    except PermissionError:
+        typer.echo(f"Saknar behörighet att signalera PID {pid}.")
+        raise typer.Exit(code=1)
+
+    sig = signal.SIGKILL if force else signal.SIGTERM
+    os.kill(pid, sig)
+    typer.echo(f"Skickade {sig.name} till PID {pid} ({address}).")
+    pid_file.unlink(missing_ok=True)
 
 
 @app.command(

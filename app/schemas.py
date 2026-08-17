@@ -33,6 +33,9 @@ class ChunkMetadata(BaseModel):
     diarienummer: str | None = None
 
     document_type: str | None = None
+    # Normativ tyngd: norm | guidance | record. Härleds ur sökvägen
+    # vid ingest och styr normkälleregeln i syntesen.
+    document_weight: str | None = None
     keywords: list[str] = Field(default_factory=list)
     roles: list[str] = Field(default_factory=list)
     actions: list[str] = Field(default_factory=list)
