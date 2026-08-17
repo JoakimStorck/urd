@@ -41,7 +41,17 @@ _OPERATION_RULES: list[tuple[str, re.Pattern]] = [
         re.compile(
             r"^\s*vem\b"
             r"|^\s*vilka\s+(?:är|har|innehar|ansvarar|sitter)\b"
-            r"|\bvem (?:är|har|innehar|ansvarar|utses|utsågs)\b",
+            r"|\bvem (?:är|har|innehar|ansvarar|utses|utsågs)\b"
+            # Frågan åt andra hållet: från person till roll. "Vilken
+            # roll har X", "vilket uppdrag har X". Uppmätt 2026-08-17
+            # klassades den formen inte som entity_lookup, med följden
+            # att signalen aldrig aktiverades och svaret byggdes på en
+            # enda tvetydig källa.
+            # "har/innehar/hade" krävs: "vilken roll SPELAR forskningen"
+            # är ingen entitetsfråga.
+            r"|\bvilk(?:en|et)\s+(?:roll|uppdrag|befattning|titel|funktion)"
+            r"\s+(?:har|innehar|hade|innehade)\b"
+            r"|\bvad (?:är|har) .{0,40}\bför (?:roll|uppdrag|titel)\b",
             re.IGNORECASE,
         ),
     ),

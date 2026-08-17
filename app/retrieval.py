@@ -1716,10 +1716,29 @@ class RagService:
 
         # Sökväg -> kandidatens relevans. Den bäst belagda bindningen
         # vinner om samma dokument bär flera.
+        # Uppslaget går åt BÅDA HÅLLEN.
+        #
+        # "Vem är proprefekt?" söker på rollen (objekt). "Vilken roll
+        # har X?" söker på personen (subjekt). Uppmätt 2026-08-17 gav
+        # den senare formen ett svar byggt på en enda tvetydig källa,
+        # medan Attest hade tre entydiga belägg för samma person —
+        # bindningen fanns men frågan nådde den aldrig.
+        #
+        # Personnamn känns igen på formen: två versalinledda ord i
+        # följd. Det kräver ingen lista över personer, och Attest
+        # avgör ändå om namnet finns i beståndet.
         rel_by_name: dict[str, float] = {}
-        for term in terms:
+        name_terms = re.findall(
+            r"\b[A-ZÅÄÖ][a-zåäöé\-]+(?:\s+[A-ZÅÄÖ][a-zåäöé\-]+)+", question
+        )
+        lookups: list[tuple[str, object]] = (
+            [(t, attest.lookup_object) for t in terms]
+            + [(n, attest.lookup_subject) for n in name_terms]
+        )
+
+        for term, lookup_fn in lookups:
             try:
-                cands = attest.lookup_object(conn, term)
+                cands = lookup_fn(conn, term)
             except Exception:
                 continue
             if not cands:
