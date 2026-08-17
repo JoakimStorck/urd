@@ -29,11 +29,13 @@ kalibrerats mot verkliga körningar — båda likheterna loggas därför
 alltid i debug/JSONL, så att tröskeln kan sättas från uppmätta
 fördelningar i stället för gissningar.
 
-Beslutet att överrida klassificeringen fattas av api-lagret, inte
-här — denna modul levererar bara mätningen. Notera att en felaktig
-drift-överridning numera är återhämtningsbar: den kontextuella
-fallbacken i api.py kör om retrieval med kontext om det kontextlösa
-försöket abstainar.
+Beslutet att överrida klassificeringen fattas av samtalslagret, inte
+här — denna modul levererar bara mätningen. Sedan samtalsstyrningen
+flyttades ur HTTP-lagret 2026-08-16 ligger både överridningen och den
+kontextuella fallbacken i RagService.converse (app/retrieval.py).
+Notera att en felaktig drift-överridning därmed är återhämtningsbar:
+fallbacken kör om retrieval med föregående QUD som ankare om det
+kontextlösa försöket abstainar.
 """
 
 from __future__ import annotations
