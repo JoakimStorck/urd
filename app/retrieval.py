@@ -28,6 +28,10 @@ from app.synonyms import load_synonyms
 from app.concepts import load_concepts
 from app.question_operations import load_question_operations
 from app.source_guard import check_answer as run_source_guard, format_warning
+from app.corpus_guard import (
+    check_answer as run_corpus_guard,
+    format_addition as format_corpus_addition,
+)
 from app.session_state import SessionStore, select_active_hits
 from app.intent import classify_utterance, Classification
 from app.social import handle_social
@@ -1306,6 +1310,31 @@ class RagService:
             synthesis_result.answer = (
                 synthesis_result.answer.rstrip() + "\n\n" + guard_warning
             )
+
+        # KORPUSKONTROLL av rollbindningar.
+        #
+        # source_guard ovan prövar svaret mot de källor som skickades
+        # till syntesen. Den här kontrollen prövar det mot HELA
+        # beståndet: ett svar kan vara troget en enda tvetydig källa och
+        # ändå strida mot flera entydiga belägg någon annanstans.
+        #
+        # Uppmätt 2026-08-17: en följdfråga ankrades till ett enda
+        # dokument och band en person till fel roll ur en samordnad
+        # konstruktion, medan Attest hade tre entydiga belägg för samma
+        # person. Attestsignalen i urvalet var verkningslös eftersom
+        # kontexten redan var låst.
+        #
+        # KOMPLETTERAR, SKRIVER INTE OM. Att tyst byta ut uppgiften vore
+        # att låta aggregatet bära svaret; originaltexten bär,
+        # aggregatet pekar ut.
+        corpus_report = None
+        if settings.attest_selection:
+            corpus_report = run_corpus_guard(synthesis_result.answer)
+            addition = format_corpus_addition(corpus_report)
+            if addition:
+                synthesis_result.answer = (
+                    synthesis_result.answer.rstrip() + "\n\n" + addition
+                )
         # Predikationslagret, steg 0: skuggläge. Kör EFTER källvakten och
         # påverkar ingenting — svaret är redan formulerat och lämnas
         # orört. Se app/predication.py. Avstängt som default; hela
@@ -1384,6 +1413,7 @@ class RagService:
                 "attest_boost": attest_boost_debug[:8],
                 "related_concepts": related_concepts,
                 "source_guard": guard_report.as_dict(),
+                "corpus_guard": corpus_report.as_dict() if corpus_report else None,
                 "predication": predication_debug,
 
                 "synthesis": synthesis_debug,
