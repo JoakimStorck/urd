@@ -6,9 +6,29 @@ import hashlib
 import logging
 import re
 
-from docling.document_converter import DocumentConverter
-
 from app.config import settings
+
+# Docling importeras LAT. Modulen konstruerade tidigare en
+# DocumentConverter redan vid import, vilket betydde att varje
+# importör av ingest — cli.py vid uppstart, operationslagrets
+# numreringshjälpare, ett testfall — betalade för en
+# dokumentkonverterare den kanske aldrig använder.
+#
+# Numreringslogiken (section_number, build_number_titles,
+# section_ancestors) är ren text- och regexbearbetning utan
+# docling-beroende, och den ska kunna läsas av inspektionen utan att
+# extraktionskedjan startas. Att den bor här är avsiktligt: kedjan
+# måste byggas på exakt samma sätt som vid ingest, och en delad
+# import är det som garanterar det.
+_converter = None
+
+
+def _get_converter():
+    global _converter
+    if _converter is None:
+        from docling.document_converter import DocumentConverter
+        _converter = DocumentConverter()
+    return _converter
 
 from app.schemas import (
     DocumentChunk,
@@ -17,7 +37,6 @@ from app.schemas import (
 )
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".xlsx"}
-_converter = DocumentConverter()
 
 
 @dataclass
@@ -55,7 +74,7 @@ def compute_source_fingerprint(path: Path) -> str:
 
 def extract_text_with_fallback(path: Path) -> RawDocument:
     try:
-        result = _converter.convert(str(path))
+        result = _get_converter().convert(str(path))
         doc = result.document
 
         text = doc.export_to_markdown()
