@@ -29,11 +29,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Kända frågeoperationer — hålls i synk med intent.QuestionOperation.
-# Definieras lokalt (inte importerat) för att hålla modulen fri från
-# appberoenden; valideringen varnar bara, så en avvikelse är ofarlig.
+# Kända frågeoperationer — hålls i synk med intent.QuestionOperation
+# och intent._VALID_OPERATIONS. Definieras lokalt (inte importerat) för
+# att hålla modulen fri från appberoenden.
+#
+# LISTAN SLÄPAR EFTER OM DEN INTE UNDERHÅLLS, och det är just den
+# felformen som redan kostat en gång: en operation som saknades i
+# intent._VALID_OPERATIONS avvisades tyst med fallback till
+# direct_lookup, med följden att en signal aldrig aktiverades trots att
+# regeln satte rätt operation. Här är utfallet mildare — valideringen
+# varnar bara — men en falsk varning om en operation som faktiskt
+# fungerar lär användaren att ignorera varningarna, vilket är samma
+# skada i långsam form.
 KNOWN_OPERATIONS = {
     "direct_lookup",
+    "entity_lookup",
+    "entity_aggregation",
     "relation_membership",
     "comparison",
     "requirements",
