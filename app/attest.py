@@ -329,6 +329,12 @@ class Candidate:
     statuses: list[str] = field(default_factory=list)
     confirmed_documents: int = 0
     scopes: list[str] = field(default_factory=list)
+    # Var bindningen står: (source_path, chunk_index) per observation,
+    # starkast först. Retrievalen behöver den EXAKTA chunken, inte bara
+    # dokumentet — en bindning i ett protokoll om tjugosex chunkar
+    # hjälper inte om fel chunk hämtas. Uppgiften har funnits i
+    # tabellen sedan schemat skrevs men aggregerades bort.
+    locations: list[tuple[str, int]] = field(default_factory=list)
     strength: float = 0.0
     recency: float = 0.0
     relevance: float = 0.0
@@ -400,6 +406,31 @@ def _same_person(a: str, b: str) -> bool:
     shorter, longer = (mid_a, mid_b) if len(mid_a) <= len(mid_b) else (mid_b, mid_a)
     it = iter(longer)
     return all(any(ends_match(m, x) for x in it) for m in shorter)
+
+
+def _locations(rows) -> list[tuple[str, int]]:
+    """
+    Var bindningen står, starkast belägg först.
+
+    Ordningen är entydigt före tvetydigt, bekräftat före föreslaget,
+    därefter nyast först. Den som bara vill ha EN passage ska få den
+    bäst belagda — inte den som råkade ligga först i tabellen.
+
+    Att ett FÖRSLAG rankas efter en bekräftad tillsättning är samma
+    skäl som ger det halv vikt i relevansmodellen: förslaget kan ha
+    bifallits utan att namnet upprepades, eller ha fallit.
+    """
+    # Stabil sortering, svagaste nyckel först: datum, sedan status,
+    # sist tvetydighet — så att tvetydighet väger tyngst.
+    ordered = sorted(rows, key=lambda r: (r["document_date"] or ""), reverse=True)
+    ordered.sort(key=lambda r: (1 if r["ambiguous"] else 0,
+                                1 if r["status"] == "föreslagen" else 0))
+    out: list[tuple[str, int]] = []
+    for r in ordered:
+        loc = (r["source_path"], r["chunk_index"])
+        if r["chunk_index"] is not None and loc not in out:
+            out.append(loc)
+    return out
 
 
 def _most_common(values) -> str:
@@ -570,6 +601,7 @@ def _rows_to_candidates(rows) -> list[Candidate]:
             constructions=sorted({x["construction"] for x in rs}),
             sentences=[x["sentence"] for x in rs if x["sentence"]],
             sources=sorted({x["file_name"] for x in rs if x["file_name"]}),
+            locations=_locations(rs),
         ))
     compute_relevance(out)
     # En kandidat med ENBART tvetydiga belägg kan aldrig rankas överst,
