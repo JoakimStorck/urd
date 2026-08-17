@@ -317,8 +317,11 @@ def format_role_holders(candidates, role_term: str, max_rows: int = 12) -> str:
             flagga = f"  ({', '.join(c.statuses)})"
         else:
             flagga = ""
+        # Avgränsningen hör till bindningen: elva programansvariga
+        # ansvarar för elva olika program, inte om samma post.
+        avser = f" för {', '.join(c.scopes)}" if c.scopes else ""
         rows.append(
-            f"- {c.subject} — {c.object} ({dok}{datum}){flagga}"
+            f"- {c.subject} — {c.object}{avser} ({dok}{datum}){flagga}"
         )
 
     fler = ""

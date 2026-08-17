@@ -1087,6 +1087,8 @@ def attest_lookup(
             f" {c.observations} observationer, {span}"
         )
         typer.echo(f"      konstruktioner: {', '.join(c.constructions)}")
+        if c.scopes:
+            typer.echo(f"      avser: {', '.join(c.scopes)}")
         if c.statuses:
             typer.echo(
                 f"      status: {', '.join(c.statuses)}"

@@ -81,6 +81,11 @@ CREATE TABLE IF NOT EXISTS observations (
     -- någon. Ett förslag är inte en tillsättning — beståndet är fullt
     -- av förslag som bifalls i nästa punkt, eller inte.
     status       TEXT,
+    -- Rollens avgränsning: "studierektor FÖR mikrodataanalys". Inte en
+    -- egen roll — samma roll, olika uppdrag. NULL när texten inte
+    -- anger någon, vilket är en fullgod observation och inte en
+    -- ofullständig. Systemet fyller aldrig i luckan.
+    scope        TEXT,
     strength     TEXT,
     sentence     TEXT,
     source_path  TEXT NOT NULL,
@@ -158,7 +163,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     NULL tills indexet byggs om.
     """
     have = {r[1] for r in conn.execute("PRAGMA table_info(observations)")}
-    for column, ddl in (("status", "TEXT"),):
+    for column, ddl in (("status", "TEXT"), ("scope", "TEXT")):
         if column not in have:
             conn.execute(f"ALTER TABLE observations ADD COLUMN {column} {ddl}")
             logger.info(
@@ -207,6 +212,7 @@ def _observations_from_chunk(chunk) -> list[dict]:
             "construction": f.relation,
             "ambiguous": 1 if f.ambiguous else 0,
             "status": (f.extra or {}).get("status"),
+            "scope": (f.extra or {}).get("scope"),
             "strength": f.strength,
             "sentence": f.sentence[:400],
             "source_path": md.source_path,
@@ -269,10 +275,10 @@ def build(chunks, conn: sqlite3.Connection, only_changed: bool = False,
         if rows:
             conn.executemany(
                 "INSERT INTO observations (subject, subject_key, relation, object,"
-                " object_key, kind, construction, ambiguous, status, strength, sentence,"
+                " object_key, kind, construction, ambiguous, status, scope, strength, sentence,"
                 " source_path, file_name, category, document_date, fingerprint,"
                 " chunk_index) VALUES (:subject, :subject_key, :relation, :object,"
-                " :object_key, :kind, :construction, :ambiguous, :status, :strength,"
+                " :object_key, :kind, :construction, :ambiguous, :status, :scope, :strength,"
                 " :sentence, :source_path, :file_name, :category, :document_date,"
                 " :fingerprint, :chunk_index)",
                 rows,
@@ -322,6 +328,7 @@ class Candidate:
     unambiguous_documents: int = 0
     statuses: list[str] = field(default_factory=list)
     confirmed_documents: int = 0
+    scopes: list[str] = field(default_factory=list)
     strength: float = 0.0
     recency: float = 0.0
     relevance: float = 0.0
@@ -334,6 +341,7 @@ class Candidate:
             "unambiguous_documents": self.unambiguous_documents,
             "statuses": self.statuses,
             "confirmed_documents": self.confirmed_documents,
+            "scopes": self.scopes,
             "ambiguous_only": self.ambiguous_only,
             "first_date": self.first_date, "last_date": self.last_date,
             "days_since_last": self.days_since_last,
@@ -481,6 +489,7 @@ def _rows_to_candidates(rows) -> list[Candidate]:
         # kan också ha fallit. Att räkna dem lika vore att belägga
         # något som kanske aldrig hänt.
         statuses = sorted({x["status"] for x in rs if x["status"]})
+        scopes = sorted({x["scope"] for x in rs if x["scope"]})
         confirmed_docs = {
             x["source_path"] for x in rs
             if not x["ambiguous"] and x["status"] != "föreslagen"
@@ -491,6 +500,7 @@ def _rows_to_candidates(rows) -> list[Candidate]:
             documents=len(docs), observations=len(rs),
             unambiguous_documents=len(unambiguous_docs),
             statuses=statuses,
+            scopes=scopes,
             confirmed_documents=len(confirmed_docs),
             # Bär SAMTLIGA belägg tvetydighet är bindningen inte
             # entydigt belagd, oavsett hur många de är. Ett enda

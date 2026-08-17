@@ -660,6 +660,7 @@ _APPOINTMENT_VERBS = {
     "föreslå": "föreslagen",
     "nominera": "föreslagen",
     "förlänga": "förlängd",
+    "få": "tillsatt",
     "förnya": "förlängd",
     "entlediga": "avslutad",
     "avsluta": "avslutad",
@@ -668,6 +669,60 @@ _APPOINTMENT_VERBS = {
 # Markörer som binder rollen till verbet: "utse X TILL roll",
 # "föreslå X SOM roll".
 _APPOINTMENT_MARKS = {"till", "som"}
+
+# Substantiv som bär uppdraget: "får UPPDRAG som X", "förlänger
+# FÖRORDNANDE som X". Rollen hänger under dem, inte under verbet.
+# Verb där MOTTAGAREN är subjekt: "X får uppdrag som Y". Skiljer sig
+# från "utse X till Y", där X är objekt.
+_RECEIVING_VERBS = {"få", "erhålla", "tillträda"}
+
+_ASSIGNMENT_NOUNS = {
+    "uppdrag", "uppdraget", "förordnande", "förordnandet",
+    "roll", "rollen", "befattning", "befattningen",
+}
+
+
+# ROLLENS AVGRÄNSNING.
+#
+# "Studierektor för forskarutbildningen i mikrodataanalys",
+# "programansvarig för Digitala tjänster". Prepositionsfrasen säger
+# VILKET uppdrag rollen gäller, och utan den ser elva programansvariga
+# ut att konkurrera om samma post när de i själva verket ansvarar för
+# elva olika program.
+#
+# Avgränsningen är INTE en egen roll. Att dela upp studierektor i
+# forskarutbildning respektive grundutbildning vore ett antagande om
+# hur verksamheten är organiserad — det finns flera studierektorer för
+# forskarutbildning, och avgränsningen kan lika gärna vara ett ämne,
+# ett program eller ett område. Rollen är studierektor; avgränsningen
+# följer med som eget fält.
+#
+# VALFRITT. "Studierektor Xingxing Zhang presenterade ärendet" ger en
+# bindning UTAN avgränsning, och det är en fullgod observation — inte
+# en ofullständig. Personen är studierektor; texten säger bara inte
+# för vad. Systemet fyller aldrig i luckan: att ärva avgränsningen
+# från en annan observation vore en slutledning det inte har täckning
+# för, eftersom en person kan ha bytt uppdrag mellan två protokoll.
+_SCOPE_MARKS = {"för", "inom", "vid"}
+
+
+def _role_scope(words, role_id: int) -> str | None:
+    """Prepositionsfrasen som avgränsar rollen, om den finns."""
+    for x in words:
+        if x.head != role_id or not x.deprel.startswith("nmod"):
+            continue
+        mark = next(
+            (m.text.lower() for m in words
+             if m.head == x.id and m.deprel == "case"),
+            None,
+        )
+        if mark not in _SCOPE_MARKS:
+            continue
+        scope = _phrase(words, x.id)
+        if _is_code_like(scope) or len(scope) < 3:
+            continue
+        return scope
+    return None
 
 
 def _appointment_identity(words, stext: str) -> list[Feature]:
@@ -686,19 +741,41 @@ def _appointment_identity(words, stext: str) -> list[Feature]:
         if not status:
             continue
 
-        # Personen: objekt i aktiv sats, subjekt i passiv.
+        # Personen: objekt i aktiv sats ("utser X till Y"), subjekt i
+        # passiv ("X utses till Y") — eller subjekt i aktiv när verbet
+        # är mottagande: "X FÅR uppdrag som Y". Vem som handlar skiljer
+        # sig mellan konstruktionerna, men den som binds till rollen är
+        # densamma.
+        person_deprels = ("obj", "nsubj:pass")
+        if lemma in _RECEIVING_VERBS:
+            person_deprels = ("nsubj",)
         person_node = next(
             (x for x in words if x.head == w.id
-             and x.deprel in ("obj", "nsubj:pass")
+             and x.deprel in person_deprels
              and words[x.id - 1].upos == "PROPN"),
             None,
         )
         if person_node is None:
             continue
 
-        # Rollen: obl med markören till/som.
+        # Rollen: obl under verbet med markören till/som.
+        #
+        # ELLER under verbets objekt: "får UPPDRAG som studierektor",
+        # "förlänger FÖRORDNANDE som programansvarig". Där är rollen
+        # bestämning till uppdraget, inte till verbet — uppmätt
+        # 2026-08-17 missades tre sådana bindningar för studierektor.
+        role_heads = [w.id]
+        for x in words:
+            if (
+                x.head == w.id and x.deprel == "obj"
+                and (x.lemma or x.text).lower() in _ASSIGNMENT_NOUNS
+            ):
+                role_heads.append(x.id)
+
         for cand in words:
-            if cand.head != w.id or not cand.deprel.startswith("obl"):
+            if cand.head not in role_heads or not cand.deprel.startswith(
+                ("obl", "nmod")
+            ):
                 continue
             if words[cand.id - 1].upos not in _NOMINAL_UPOS:
                 continue
@@ -720,11 +797,15 @@ def _appointment_identity(words, stext: str) -> list[Feature]:
             if _is_code_like(role) or _is_placeholder(role):
                 continue
 
+            extra = {"status": status}
+            scope = _role_scope(words, cand.id)
+            if scope:
+                extra["scope"] = scope
             out.append(Feature(
                 kind="identitet", a=name, b=role,
                 relation="tillsattning:" + lemma,
                 sentence=stext, strength=ASSERTED,
-                extra={"status": status},
+                extra=extra,
             ))
     return out
 
@@ -850,6 +931,7 @@ def _title_identity(words, stext: str) -> list[Feature]:
                 title_text = _phrase(words, t.id)
                 if _EMAIL.search(title_text):
                     continue
+                scope = _role_scope(words, t.id)
                 out.append(Feature(
                     kind="identitet", a=n,
                     b=normalize_title(
@@ -858,6 +940,7 @@ def _title_identity(words, stext: str) -> list[Feature]:
                     ),
                     relation="titel:" + w.deprel, sentence=stext,
                     strength=PRESUPPOSED, ambiguous=ambiguous,
+                    extra={"scope": scope} if scope else {},
                 ))
     return out
 
