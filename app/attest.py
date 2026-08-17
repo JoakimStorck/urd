@@ -680,6 +680,30 @@ def _match(conn, column: str, term: str, kind: str) -> list[dict]:
 # Ersatt av compute_relevance, som rangordnar utan att utesluta.
 
 
+def observations_for_document(conn, source_path: str) -> list[dict]:
+    """
+    Observationer ur ETT dokument, i chunkordning.
+
+    Uppslagen ovan går från termens håll: vilka subjekt binds till
+    detta objekt, vilka objekt till detta subjekt. Ingen av dem svarar
+    på vad ett enskilt dokument gav — trots att source_path är
+    indexerad sedan schemat skrevs.
+
+    conn=None öppnar en egen anslutning; samma mönster som
+    corpus_guard.check_answer.
+    """
+    if conn is None:
+        conn = connect()
+    conn.row_factory = sqlite3.Row
+    return [
+        dict(r) for r in conn.execute(
+            "SELECT * FROM observations WHERE source_path = ?"
+            " ORDER BY chunk_index, id",
+            (source_path,),
+        )
+    ]
+
+
 def coverage(conn, source_paths: list[str]) -> dict:
     """
     Täckning per dokument: vilka av beståndets dokument har

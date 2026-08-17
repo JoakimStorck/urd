@@ -2,9 +2,12 @@
 Inspektera vad indexet innehåller för ett dokument — och diagnostisera
 varför en fråga inte når det.
 
-Ersätter det hårdkodade inspect_chunks.py (som bara kände till
-proprefekt-dokumentet) med ett generellt verktyg. Detta är ett första
-steg mot 'urd docs inspect' ur white paper.
+Skriptet är numera ett SKAL. Analysen bor i app/inspect.py som typade
+operationer, så att samma rapport kan bäras av 'urd docs inspect', av
+ett punktkommando i interaktivt läge och av en endpoint utan att
+logiken finns i tre exemplar. Kvar här: argumenthantering, uppstart av
+RagService och retrievaldiagnosen (som ännu reproducerar framkedjan
+för hand — den ska bli en projektion av ett verkligt anrop).
 
 Körs från projektroten med URD-servern AVSTÄNGD (inbäddad Qdrant
 tillåter bara en process):
@@ -35,183 +38,20 @@ i kandidatinsamlingen (t.ex. språkgap eller embeddingkvalitet). Ett
 dokument som kommer in men får negativa CE-scores filtreras bort i
 rerankingsteget. De två felen har olika åtgärder.
 
-Mönstermatchningen unicode-normaliserar (NFC) både mönster och
-filnamn — macOS/vissa verktyg lagrar 'ö' dekomponerat, vilket annars
-ger tysta mismatchar.
+Mönstermatchningen (i app/inspect.py) unicode-normaliserar NFC både
+mönster och filnamn — macOS/vissa verktyg lagrar 'ö' dekomponerat,
+vilket annars ger tysta mismatchar.
 """
 
 from __future__ import annotations
 
 import argparse
-import re
 import sys
-import unicodedata
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
-
-
-def _norm(s: str) -> str:
-    """NFC-normalisera och casefolda för robust substrängsmatchning."""
-    return unicodedata.normalize("NFC", s).casefold()
-
-
-_NUMBERING_RE = re.compile(r"^\s*\d+(?:[.:]\d+)*[.:)]?\s+")
-
-
-def _strip_numbering(title: str) -> str:
-    """
-    Ta bort ledande avsnittsnumrering ("7.3.4 ", "12 ", "3) ").
-
-    Numreringen är en ordningsmarkör, inte innehåll. För embedding
-    och cross-encoder är "7.2 Behörighet" och "8.2 Behörighet"
-    praktiskt taget samma sträng — det är den skillnaden mätningen
-    ska fånga.
-    """
-    return _NUMBERING_RE.sub("", title).strip()
-
-
-def _sections_in_order(chunks) -> list[dict]:
-    """
-    Rekonstruera dokumentets sektioner ur de indexerade chunkarna.
-
-    chunk_index är ett löpande index i dokumentordning, så chunkar som
-    tillhör samma sektion ligger sammanhängande. Qdrants scroll-ordning
-    är däremot inte garanterad — därför sorteras det explicit.
-    """
-    ordered = sorted(chunks, key=lambda c: c.metadata.chunk_index)
-    sections: list[dict] = []
-    for c in ordered:
-        title = c.metadata.section_title
-        level = c.metadata.section_level
-        if sections and sections[-1]["title"] == title and sections[-1]["level"] == level:
-            sections[-1]["chunks"] += 1
-            sections[-1]["chars"] += len(c.text)
-        else:
-            sections.append({
-                "title": title,
-                "level": level,
-                "chunks": 1,
-                "chars": len(c.text),
-                "first_index": c.metadata.chunk_index,
-            })
-    return sections
-
-
-def _attach_chains(sections: list[dict]) -> list[dict]:
-    """
-    Bygg full rubrikkedja per sektion med en nivåstack.
-
-    Sektioner utan nivå (text före första rubriken, eller dokument där
-    Docling inte hittat rubrikstruktur) får inte störa stacken — de
-    bär ingen hierarkisk information.
-    """
-    stack: list[tuple[int, str]] = []
-    for s in sections:
-        level = s["level"]
-        title = s["title"]
-        if level is None:
-            s["chain"] = [title] if title else []
-            continue
-        while stack and stack[-1][0] >= level:
-            stack.pop()
-        s["chain"] = [t for _, t in stack] + ([title] if title else [])
-        if title:
-            stack.append((level, title))
-    return sections
-
-
-def _print_sections(chunks) -> None:
-    """Skriv rubrikträd i dokumentordning plus rapport över kollisioner."""
-    from app.ingest import build_number_titles, section_ancestors
-
-    sections = _attach_chains(_sections_in_order(chunks))
-    no_level = sum(1 for s in sections if s["level"] is None)
-
-    # Kedjan byggs som vid ingest: ur avsnittsnumreringen, med
-    # dokumentets innehållsförteckning som andrahandskälla för
-    # kapitelrubriker som extraktionen tappat. Fulltexten
-    # rekonstrueras ur chunkarna, så förhandsgranskningen kan köras
-    # mot det befintliga indexet utan omindexering.
-    class _S:
-        def __init__(self, title):
-            self.title = title
-
-    full_text = "\n".join(c.text for c in chunks)
-    number_titles = build_number_titles(
-        [_S(s["title"]) for s in sections], full_text
-    )
-    for s in sections:
-        ancestors = section_ancestors(s["title"], number_titles)
-        s["numbered_chain"] = ancestors + ([s["title"]] if s["title"] else [])
-
-    print(f"STRUKTUR: {len(sections)} sektioner, {len(chunks)} chunkar")
-    if no_level:
-        print(f"  Varning: sektioner utan nivå: {no_level} — rubrikstrukturen är "
-              "ofullständig för detta dokument.")
-    print()
-
-    for s in sections:
-        level = s["level"]
-        indent = "  " * ((level - 1) if level else 0)
-        title = s["title"] or "(ingen rubrik)"
-        print(f"  {indent}{title}"
-              f"   [nivå {level if level is not None else '-'}, "
-              f"{s['chunks']} chunkar, {s['chars']} tecken]")
-    print()
-
-    # Kollisionsrapport.
-    #
-    # Mätningen görs på AVNUMRERAD rubrik, inte på exakt sträng.
-    # "7.2 Behörighet" och "8.2 Behörighet" är olika strängar men
-    # bär samma betydelse: siffrorna är ordningsmarkörer utan
-    # semantiskt innehåll för en embedding eller cross-encoder.
-    # Det är alltså den avnumrerade formen som avgör om två
-    # sektioner är särskiljbara för modellerna.
-    by_key: dict[str, list[dict]] = {}
-    for s in sections:
-        if s["title"]:
-            by_key.setdefault(_strip_numbering(s["title"]), []).append(s)
-    collisions = {t: ss for t, ss in by_key.items() if len(ss) > 1}
-
-    print("SEMANTISKT ICKE-UNIKA RUBRIKER (numrering bortstädad):")
-    if not collisions:
-        print("  Inga — varje rubrik är särskiljbar även utan sin numrering.")
-        return
-
-    resolved = 0
-    total = 0
-    for key, group in sorted(collisions.items(), key=lambda kv: -len(kv[1])):
-        print(f"  {key!r} förekommer {len(group)} gånger:")
-        chains = []
-        for s in group:
-            chain = " > ".join(
-                _strip_numbering(t) for t in s["numbered_chain"]
-            ) or key
-            chains.append(chain)
-            print(f"     {chain}   [{s['chunks']} chunkar]")
-        total += len(group)
-        if len(set(chains)) == len(chains):
-            resolved += len(group)
-        print()
-
-    print(f"  {total} sektioner bär en semantiskt icke-unik rubrik "
-          f"av totalt {len(sections)}.")
-    print(f"  {resolved} blir särskiljbara med numreringsbaserad rubrikkedja "
-          f"({total - resolved} förblir tvetydiga även då).")
-
-    orphans = [
-        s for s in sections
-        if len(s["numbered_chain"]) <= 1 and _strip_numbering(s["title"] or "") in collisions
-    ]
-    if orphans:
-        print()
-        print(f"  {len(orphans)} av dem saknar föräldrarubrik helt "
-              "(varken sektion eller innehållsförteckning bär numret):")
-        for s in orphans[:15]:
-            print(f"     {s['title']}")
 
 
 def main() -> None:
@@ -222,6 +62,11 @@ def main() -> None:
     parser.add_argument("--question", help="Kör retrievaldiagnos mot denna fråga")
     parser.add_argument("--full", action="store_true", help="Visa chunktexter i sin helhet (annars 300 tecken)")
     parser.add_argument("--evidence", action="store_true", help="Visa även evidensobjekt för dokumentet")
+    parser.add_argument(
+        "--attest",
+        action="store_true",
+        help="Visa Attests observationer ur dokumentet",
+    )
     parser.add_argument(
         "--sections",
         action="store_true",
@@ -241,53 +86,39 @@ def main() -> None:
         raise SystemExit(1)
     print("Klart.\n")
 
-    pattern = _norm(args.pattern)
+    from app import inspect as ins
 
-    # ---- Hitta dokument i BM25-indexet (speglar chunk-collectionen) ----
     all_paths = sorted(rag.bm25_index._by_source.keys())
-    matches = [p for p in all_paths if pattern in _norm(p)]
-
-    if not matches:
-        print(f"Inget indexerat dokument matchar {args.pattern!r}.")
-        print(f"Indexet innehåller {len(all_paths)} dokument. Närliggande kandidater:")
-        tokens = [t for t in pattern.split() if len(t) >= 4]
-        near = [p for p in all_paths if any(t in _norm(p) for t in tokens)]
-        for p in near[:10]:
-            print(f"  - {p}")
+    resolution = ins.resolve_document(args.pattern, all_paths)
+    print(ins.format_resolution(resolution))
+    if not resolution.found:
+        # Grep-konventionen: 1 = lyckades men gav ingen träff.
         raise SystemExit(1)
+    print()
 
-    if len(matches) > 1:
-        print(f"{len(matches)} dokument matchar — visar alla. Precisera mönstret om det är för många.\n")
-
+    matches = resolution.matched
     for source_path in matches:
-        chunks = rag.bm25_index.get_chunks_by_source(source_path)
-        print("=" * 72)
-        print(f"DOKUMENT: {source_path}")
-        print(f"Antal chunkar: {len(chunks)}")
-        total_chars = sum(len(c.text) for c in chunks)
-        print(f"Total textmängd: {total_chars} tecken")
+        report = ins.inspect_document(
+            source_path,
+            rag.store,
+            sections=args.sections,
+            chunks=not args.sections,
+            evidence=args.evidence,
+            attest=args.attest,
+            all_chunks=rag.bm25_index.hits,
+        )
+        if report is None:
+            continue
+        if report.chunks and not args.full:
+            for ch in report.chunks:
+                if len(ch.text) > 300:
+                    ch.text = ch.text[:300] + "..."
+        if report.evidence and not args.full:
+            for e in report.evidence:
+                if len(e.text) > 300:
+                    e.text = e.text[:300] + "..."
+        print(ins.format_document_report(report))
         print()
-
-        if args.sections:
-            _print_sections(chunks)
-        else:
-            for i, c in enumerate(chunks, start=1):
-                text = c.text if args.full else c.text[:300] + ("..." if len(c.text) > 300 else "")
-                print(f"--- chunk {i}/{len(chunks)}  [{c.metadata.section_title}]  {len(c.text)} tecken")
-                print(text)
-                print()
-
-        if args.evidence:
-            evidence = [
-                h for h in rag.store.iter_all_evidence()
-                if h.metadata.source_path == source_path
-            ]
-            print(f"Evidensobjekt: {len(evidence)}")
-            for i, e in enumerate(evidence, start=1):
-                text = e.text if args.full else e.text[:300] + ("..." if len(e.text) > 300 else "")
-                print(f"--- evidens {i}/{len(evidence)}  [{e.metadata.section_title}]")
-                print(text)
-                print()
 
     # ---- Retrievaldiagnos ----
     if not args.question:
