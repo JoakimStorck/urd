@@ -161,6 +161,12 @@ class QdrantStore:
                 document_date=payload.get("document_date"),
                 diarienummer=payload.get("diarienummer"),
                 document_type=payload.get("document_type"),
+                # Skrevs men lästes inte tillbaka: fältet var None på
+                # varje träff trots korrekt indexering, och
+                # normkälleregeln fick därmed dokumenttypen men inte
+                # normativiteten. Kräver ingen omindexering — värdet
+                # finns redan i payloaden.
+                document_weight=payload.get("document_weight"),
                 keywords=payload.get("keywords") or [],
                 roles=payload.get("roles") or [],
                 actions=payload.get("actions") or [],
