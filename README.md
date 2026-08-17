@@ -62,7 +62,7 @@ The system uses four models, each chosen for its specific role:
 |---|---|---|
 | Embeddings | `intfloat/multilingual-e5-large` | Multilingual model that handles Swedish well. Encodes both queries and chunks for semantic search. |
 | Reranking | `jeffwan/mmarco-mMiniLMv2-L12-H384-v1` | Multilingual cross-encoder. Chosen after the English-only model (`ms-marco-MiniLM`) failed to distinguish Swedish compounds like `kursansvar` and `kursutbud`. |
-| Answer generation | Mistral-Nemo 12B (via Ollama) | Replaced Mistral 7B, which distorted logic in delegation rules and mixed terms inconsistently. Nemo handles synthesis from English sources to Swedish answers better, though not perfectly. |
+| Answer generation | Gemma 4 12B (via Ollama) | Replaced Mistral-Nemo 12B, which produced language errors the mechanical guards cannot catch: inverted delegation order, tangled negation, invented words in generated text. The guards check numbers and references, not phrasing, so that error class could only be addressed by a better model. Reasoning mode must stay off — see `llm_think`. |
 | Metadata extraction | Mistral 7B (via Ollama) | Structured metadata extraction (keywords, roles, document type) is a simpler task that does not require the synthesis ability of a larger model. |
 
 Using different models per role reflects a deliberate trade-off: each task has different requirements for language understanding, reasoning and speed. The reranker and embedding model run as local inference with sentence-transformers; the generative models run through Ollama.
@@ -76,7 +76,7 @@ Using different models per role reflects a deliberate trade-off: each task has d
 - Python 3.10+
 - [Ollama](https://ollama.com/) installed and running
 - Models pulled:
-  - `ollama pull mistral-nemo`
+  - `ollama pull gemma4:12b`
   - `ollama pull mistral`
 
 ### Install
@@ -162,7 +162,7 @@ urd config reset              # Reset to defaults
 | ----------------- | -------------------------------------- | ----------------------------------------- |
 | `docs_path`       | `./docs`                               | Document folder                           |
 | `server`          | empty                                  | Default upstream server for `urd connect` |
-| `ollama_model`    | `mistral-nemo`                         | Model for answer generation               |
+| `ollama_model`    | `gemma4:12b`                           | Model for answer generation               |
 | `top_k`           | `3`                                    | Number of sources used per answer         |
 | `chunk_size`      | `1200`                                 | Max characters per chunk                  |
 | `embedding_model` | `intfloat/multilingual-e5-large`       | Embedding model                           |

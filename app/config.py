@@ -20,7 +20,7 @@ DEFAULTS = {
     "collection_name": "iit_docs",
     "embedding_model": "intfloat/multilingual-e5-large",
     "reranker_model": "jeffwan/mmarco-mMiniLMv2-L12-H384-v1",
-    "ollama_model": "mistral-nemo",
+    "ollama_model": "gemma4:12b",
     "preprocess_ollama_model": "mistral",
     "llm_num_ctx": 8192,
     "llm_think": False,
@@ -230,7 +230,18 @@ class Settings(BaseModel):
     embedding_model: str = "intfloat/multilingual-e5-large"
     reranker_model: str = "jeffwan/mmarco-mMiniLMv2-L12-H384-v1"
 
-    ollama_model: str = "mistral-nemo"
+    # Syntesmodell. gemma4:12b sedan 2026-08-17, efter att
+    # modellutvärderingen visat ett tydligt lyft mot mistral-nemo.
+    # Nemos språkbrus var dokumenterat och låg utanför vad prompt och
+    # vakter kan åtgärda: inverterad delegationsordning, trasslig
+    # negation, uppfunna ord i genererad text. Vakterna prövar tal och
+    # referenser, inte formuleringar — den felklassen kunde bara mötas
+    # med en bättre modell.
+    #
+    # Defaulten styr bara NYA instanser: en befintlig .urd/config.json
+    # har företräde, och miljövariabeln OLLAMA_MODEL över båda.
+    # llm_think måste vara av (se nedan).
+    ollama_model: str = "gemma4:12b"
     preprocess_ollama_model: str = "mistral"
 
     # Kontextfönster för Ollama-anropen. Ollama har ett lågt default
@@ -239,7 +250,7 @@ class Settings(BaseModel):
     # som annars ser ut som modellfel: fabrikation, ignorerade
     # instruktioner, svar som bara bygger på delar av källorna.
     # Därför sätts num_ctx alltid explicit. 8192 rymmer huvudsyntesens
-    # och rework-vägarnas prompter med god marginal för mistral-nemo.
+    # och rework-vägarnas prompter med god marginal.
     llm_num_ctx: int = 8192
 
     # Resonemangsläge ("thinking") i modeller som stödjer det.
