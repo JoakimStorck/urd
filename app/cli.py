@@ -1087,6 +1087,11 @@ def attest_lookup(
             f" {c.observations} observationer, {span}"
         )
         typer.echo(f"      konstruktioner: {', '.join(c.constructions)}")
+        if c.statuses:
+            typer.echo(
+                f"      status: {', '.join(c.statuses)}"
+                f"  ({c.confirmed_documents} bekräftade dokument)"
+            )
         for sent in c.sentences[:2]:
             typer.echo(f"      \"{sent[:100]}\"")
         typer.echo("")

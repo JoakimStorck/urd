@@ -54,7 +54,7 @@ import logging
 import re
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.config import settings
@@ -76,6 +76,11 @@ CREATE TABLE IF NOT EXISTS observations (
     kind         TEXT NOT NULL,
     construction TEXT NOT NULL,
     ambiguous    INTEGER NOT NULL DEFAULT 0,
+    -- Bindningens status ur tillsättningsverbet: tillsatt, föreslagen,
+    -- förlängd, avslutad. NULL för appositioner, som inte uttrycker
+    -- någon. Ett förslag är inte en tillsättning — beståndet är fullt
+    -- av förslag som bifalls i nästa punkt, eller inte.
+    status       TEXT,
     strength     TEXT,
     sentence     TEXT,
     source_path  TEXT NOT NULL,
@@ -139,7 +144,28 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(p))
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """
+    Lägg till kolumner som saknas i äldre databaser.
+
+    Observationerna är oföränderliga och byggs om med attest-build, så
+    en saknad kolumn är inte datakritisk — men att krascha på ett
+    index byggt före en schemaändring vore onödigt. Nya kolumner blir
+    NULL tills indexet byggs om.
+    """
+    have = {r[1] for r in conn.execute("PRAGMA table_info(observations)")}
+    for column, ddl in (("status", "TEXT"),):
+        if column not in have:
+            conn.execute(f"ALTER TABLE observations ADD COLUMN {column} {ddl}")
+            logger.info(
+                "attest: la till kolumn %r — bygg om med 'urd attest-build' "
+                "för att fylla den.", column
+            )
+    conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +206,7 @@ def _observations_from_chunk(chunk) -> list[dict]:
             "kind": f.kind,
             "construction": f.relation,
             "ambiguous": 1 if f.ambiguous else 0,
+            "status": (f.extra or {}).get("status"),
             "strength": f.strength,
             "sentence": f.sentence[:400],
             "source_path": md.source_path,
@@ -242,10 +269,10 @@ def build(chunks, conn: sqlite3.Connection, only_changed: bool = False,
         if rows:
             conn.executemany(
                 "INSERT INTO observations (subject, subject_key, relation, object,"
-                " object_key, kind, construction, ambiguous, strength, sentence,"
+                " object_key, kind, construction, ambiguous, status, strength, sentence,"
                 " source_path, file_name, category, document_date, fingerprint,"
                 " chunk_index) VALUES (:subject, :subject_key, :relation, :object,"
-                " :object_key, :kind, :construction, :ambiguous, :strength,"
+                " :object_key, :kind, :construction, :ambiguous, :status, :strength,"
                 " :sentence, :source_path, :file_name, :category, :document_date,"
                 " :fingerprint, :chunk_index)",
                 rows,
@@ -293,6 +320,8 @@ class Candidate:
     sentences: list[str]
     sources: list[str]
     unambiguous_documents: int = 0
+    statuses: list[str] = field(default_factory=list)
+    confirmed_documents: int = 0
     strength: float = 0.0
     recency: float = 0.0
     relevance: float = 0.0
@@ -303,6 +332,8 @@ class Candidate:
             "subject": self.subject, "object": self.object,
             "documents": self.documents, "observations": self.observations,
             "unambiguous_documents": self.unambiguous_documents,
+            "statuses": self.statuses,
+            "confirmed_documents": self.confirmed_documents,
             "ambiguous_only": self.ambiguous_only,
             "first_date": self.first_date, "last_date": self.last_date,
             "days_since_last": self.days_since_last,
@@ -358,6 +389,11 @@ def _most_common(values) -> str:
 # fall finns.
 _AMBIGUOUS_WEIGHT = 0.25
 
+# Ett förslag väger hälften av en tillsättning. Det är verklig men
+# svagare evidens: förslaget kan ha bifallits utan att namnet
+# upprepades, eller ha fallit. Provisoriskt värde.
+_PROPOSED_WEIGHT = 0.5
+
 # Halveringstid i dagar för aktualitet. Två år, satt mot
 # mandatperioderna i beståndet (tre år med möjlighet till förnyelse).
 # Kortare halveringstid lät en enda färsk observation slå ut ett
@@ -395,8 +431,12 @@ def compute_relevance(candidates: list[Candidate], horizon: str | None = None) -
 
     for c in candidates:
         # Vägt dokumentantal: tvetydiga belägg räknas som bråkdelar.
+        proposed_only = max(
+            c.unambiguous_documents - c.confirmed_documents, 0
+        )
         weighted = (
-            c.unambiguous_documents
+            c.confirmed_documents
+            + proposed_only * _PROPOSED_WEIGHT
             + (c.documents - c.unambiguous_documents) * _AMBIGUOUS_WEIGHT
         )
         # Avtagande avkastning, kalibrerad mot omdömet att ETT belägg
@@ -435,11 +475,23 @@ def _rows_to_candidates(rows) -> list[Candidate]:
         unambiguous_docs = {
             x["source_path"] for x in rs if not x["ambiguous"]
         }
+        # Ett FÖRSLAG är inte en tillsättning. Dokument vars enda
+        # bidrag är ett förslag räknas separat: förslaget kan ha
+        # bifallits i nästa punkt utan att namnet upprepas, men det
+        # kan också ha fallit. Att räkna dem lika vore att belägga
+        # något som kanske aldrig hänt.
+        statuses = sorted({x["status"] for x in rs if x["status"]})
+        confirmed_docs = {
+            x["source_path"] for x in rs
+            if not x["ambiguous"] and x["status"] != "föreslagen"
+        }
         out.append(Candidate(
             subject=_most_common(x["subject"] for x in rs),
             object=_most_common(x["object"] for x in rs),
             documents=len(docs), observations=len(rs),
             unambiguous_documents=len(unambiguous_docs),
+            statuses=statuses,
+            confirmed_documents=len(confirmed_docs),
             # Bär SAMTLIGA belägg tvetydighet är bindningen inte
             # entydigt belagd, oavsett hur många de är. Ett enda
             # entydigt belägg väger tyngre än tio tvetydiga.

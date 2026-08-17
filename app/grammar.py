@@ -626,6 +626,109 @@ def _has_own_title(words, name_id: int) -> bool:
     )
 
 
+# TILLSÄTTNINGSVERB — beslutsspråkets sätt att binda person till roll.
+#
+# Protokollens BESKRIVANDE text sätter rollen via apposition
+# ("proprefekt N.N. föredrog"), som _title_identity fångar. Men
+# BESLUTSTEXT sätter den via verbet, och personen är då objekt:
+#
+#     "bifaller beslutet att utse N.N. till programansvarig"
+#     "föreslås N.N. som ny programansvarig"
+#     "förlänger N.N:s förordnande som programansvarig"
+#
+# Uppmätt 2026-08-17: rollen programansvarig hade tre belägg i
+# beståndet, alla ur appositioner, medan sextio rader i beslutstext
+# band personer till rollen utan att fångas. Roller som omnämns i
+# löptext (proprefekt) fungerade därför medan roller som bara TILLSÄTTS
+# inte gjorde det.
+#
+# STATUS FALLER UT UR VERBET. Ett förslag är inte en tillsättning, och
+# beståndet är fullt av förslag som bifalls i nästa punkt — eller inte.
+# Att räkna dem lika vore att belägga något som ännu inte hänt.
+# Statusen lagras på draget och låter beläggningen tolkas därefter.
+#
+# Verblistan är genrespecifik och hör till instansen, inte till
+# grammatiken. Den är kort och sluten till sin natur: svenskt
+# förvaltningsspråk har ett fåtal sätt att tillsätta någon.
+_APPOINTMENT_VERBS = {
+    "utse": "tillsatt",
+    "tillsätta": "tillsatt",
+    "förordna": "tillsatt",
+    "anställa": "tillsatt",
+    "välja": "tillsatt",
+    "utnämna": "tillsatt",
+    "föreslå": "föreslagen",
+    "nominera": "föreslagen",
+    "förlänga": "förlängd",
+    "förnya": "förlängd",
+    "entlediga": "avslutad",
+    "avsluta": "avslutad",
+}
+
+# Markörer som binder rollen till verbet: "utse X TILL roll",
+# "föreslå X SOM roll".
+_APPOINTMENT_MARKS = {"till", "som"}
+
+
+def _appointment_identity(words, stext: str) -> list[Feature]:
+    """
+    Person bunden till roll via ett tillsättningsverb.
+
+    Personen är objekt (obj) eller subjekt vid passiv (nsubj:pass);
+    rollen hänger som obl med markören till/som.
+    """
+    out: list[Feature] = []
+    for w in words:
+        if w.upos != "VERB":
+            continue
+        lemma = (w.lemma or w.text).lower()
+        status = _APPOINTMENT_VERBS.get(lemma)
+        if not status:
+            continue
+
+        # Personen: objekt i aktiv sats, subjekt i passiv.
+        person_node = next(
+            (x for x in words if x.head == w.id
+             and x.deprel in ("obj", "nsubj:pass")
+             and words[x.id - 1].upos == "PROPN"),
+            None,
+        )
+        if person_node is None:
+            continue
+
+        # Rollen: obl med markören till/som.
+        for cand in words:
+            if cand.head != w.id or not cand.deprel.startswith("obl"):
+                continue
+            if words[cand.id - 1].upos not in _NOMINAL_UPOS:
+                continue
+            mark = next(
+                (m.text.lower() for m in words
+                 if m.head == cand.id and m.deprel in ("case", "mark")),
+                None,
+            )
+            if mark not in _APPOINTMENT_MARKS:
+                continue
+
+            role = normalize_title(
+                _phrase(words, cand.id),
+                getattr(words[cand.id - 1], "lemma", None),
+            )
+            name = _phrase(words, person_node.id)
+            if _is_code_like(name) or _is_placeholder(name) or _EMAIL.search(name):
+                continue
+            if _is_code_like(role) or _is_placeholder(role):
+                continue
+
+            out.append(Feature(
+                kind="identitet", a=name, b=role,
+                relation="tillsattning:" + lemma,
+                sentence=stext, strength=ASSERTED,
+                extra={"status": status},
+            ))
+    return out
+
+
 def _title_identity(words, stext: str) -> list[Feature]:
     """
     Titel bunden till egennamn.
@@ -856,7 +959,7 @@ def _identity(words, stext: str) -> list[Feature]:
     kostar inget och är rätt mekanismer om konstruktionerna återinförs
     med bättre avgränsning.
     """
-    return _title_identity(words, stext)
+    return _title_identity(words, stext) + _appointment_identity(words, stext)
 
 
 # Parentesen bär tre SKILDA relationer, som handklassningen

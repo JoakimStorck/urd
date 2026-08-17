@@ -307,7 +307,16 @@ def format_role_holders(candidates, role_term: str, max_rows: int = 12) -> str:
     for c in candidates[:max_rows]:
         dok = f"{c.documents} dokument"
         datum = f", senast {c.last_date}" if c.last_date else ""
-        flagga = "  (tvetydig källa)" if c.ambiguous_only else ""
+        if c.ambiguous_only:
+            flagga = "  (tvetydig källa)"
+        elif c.statuses == ["föreslagen"]:
+            # Endast förslag: bindningen kan ha bifallits utan att
+            # namnet upprepades, eller ha fallit. Beståndet vet inte.
+            flagga = "  (endast föreslagen)"
+        elif c.statuses:
+            flagga = f"  ({', '.join(c.statuses)})"
+        else:
+            flagga = ""
         rows.append(
             f"- {c.subject} — {c.object} ({dok}{datum}){flagga}"
         )
