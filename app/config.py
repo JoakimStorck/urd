@@ -21,16 +21,13 @@ DEFAULTS = {
     "embedding_model": "intfloat/multilingual-e5-large",
     "reranker_model": "jeffwan/mmarco-mMiniLMv2-L12-H384-v1",
     "ollama_model": "gemma4:12b",
-    "preprocess_ollama_model": "mistral",
     "llm_num_ctx": 8192,
     "llm_think": False,
     "predication_enabled": False,
     "attest_selection": False,
     "attest_boost": 0.15,
-    "preprocess_semantic_version": "v1",
     "chunk_size": 1200,
     "chunk_overlap": 150,
-    "preprocess_max_section_chars": 6000,
     "server": "",
     "qud_background_turns": 1,
     "social_history_turns": 4,
@@ -62,16 +59,13 @@ _ENV_KEYS = {
     "embedding_model": "EMBEDDING_MODEL",
     "reranker_model": "RERANKER_MODEL",
     "ollama_model": "OLLAMA_MODEL",
-    "preprocess_ollama_model": "PREPROCESS_OLLAMA_MODEL",
     "llm_num_ctx": "LLM_NUM_CTX",
     "llm_think": "LLM_THINK",
     "predication_enabled": "PREDICATION_ENABLED",
     "attest_selection": "ATTEST_SELECTION",
     "attest_boost": "ATTEST_BOOST",
-    "preprocess_semantic_version": "PREPROCESS_SEMANTIC_VERSION",
     "chunk_size": "CHUNK_SIZE",
     "chunk_overlap": "CHUNK_OVERLAP",
-    "preprocess_max_section_chars": "PREPROCESS_MAX_SECTION_CHARS",
     "server": "URD_SERVER",
     "qud_background_turns": "QUD_BACKGROUND_TURNS",
     "social_history_turns": "SOCIAL_HISTORY_TURNS",
@@ -192,16 +186,13 @@ def _build_settings() -> "Settings":
         embedding_model=s("embedding_model"),
         reranker_model=s("reranker_model"),
         ollama_model=s("ollama_model"),
-        preprocess_ollama_model=s("preprocess_ollama_model"),
         llm_num_ctx=i("llm_num_ctx"),
         llm_think=b("llm_think"),
         predication_enabled=b("predication_enabled"),
         attest_selection=b("attest_selection"),
         attest_boost=f("attest_boost"),
-        preprocess_semantic_version=s("preprocess_semantic_version"),
         chunk_size=i("chunk_size"),
         chunk_overlap=i("chunk_overlap"),
-        preprocess_max_section_chars=i("preprocess_max_section_chars"),
         server=server,
         qud_background_turns=i("qud_background_turns"),
         social_history_turns=i("social_history_turns"),
@@ -242,7 +233,6 @@ class Settings(BaseModel):
     # har företräde, och miljövariabeln OLLAMA_MODEL över båda.
     # llm_think måste vara av (se nedan).
     ollama_model: str = "gemma4:12b"
-    preprocess_ollama_model: str = "mistral"
 
     # Kontextfönster för Ollama-anropen. Ollama har ett lågt default
     # (2048–4096 tokens beroende på version/modellfil) och TRUNKERAR
@@ -285,13 +275,9 @@ class Settings(BaseModel):
     # värde; kalibreras mot batteriet.
     attest_boost: float = 0.15
 
-    preprocess_semantic_version: str = "v1"
-
-
     chunk_size: int = 1200
     chunk_overlap: int = 150
 
-    preprocess_max_section_chars: int = 6000
     server: str | None = None
 
     # Samtalskontext — hur mycket historik som skickas med i olika steg.

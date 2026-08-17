@@ -63,9 +63,8 @@ The system uses four models, each chosen for its specific role:
 | Embeddings | `intfloat/multilingual-e5-large` | Multilingual model that handles Swedish well. Encodes both queries and chunks for semantic search. |
 | Reranking | `jeffwan/mmarco-mMiniLMv2-L12-H384-v1` | Multilingual cross-encoder. Chosen after the English-only model (`ms-marco-MiniLM`) failed to distinguish Swedish compounds like `kursansvar` and `kursutbud`. |
 | Answer generation | Gemma 4 12B (via Ollama) | Replaced Mistral-Nemo 12B, which produced language errors the mechanical guards cannot catch: inverted delegation order, tangled negation, invented words in generated text. The guards check numbers and references, not phrasing, so that error class could only be addressed by a better model. Reasoning mode must stay off — see `llm_think`. |
-| Metadata extraction | Mistral 7B (via Ollama) | Structured metadata extraction (keywords, roles, document type) is a simpler task that does not require the synthesis ability of a larger model. |
 
-Using different models per role reflects a deliberate trade-off: each task has different requirements for language understanding, reasoning and speed. The reranker and embedding model run as local inference with sentence-transformers; the generative models run through Ollama.
+The reranker and embedding model run as local inference with sentence-transformers; the generative model runs through Ollama. Document type and normative weight are derived deterministically from the document path (`document_types.yaml`), not from a model.
 
 ---
 
@@ -77,7 +76,6 @@ Using different models per role reflects a deliberate trade-off: each task has d
 - [Ollama](https://ollama.com/) installed and running
 - Models pulled:
   - `ollama pull gemma4:12b`
-  - `ollama pull mistral`
 
 ### Install
 
@@ -187,7 +185,6 @@ urd ask "follow-up" --new-session  # Start fresh session
 urd ingest                         # Index new and changed documents
 urd ingest --force                 # Re-index all documents
 urd reindex                        # Reset index and re-ingest everything
-urd enrich                         # Run LLM metadata extraction
 urd stats                          # Show index and document status
 urd config                         # Show configuration
 urd config set key value           # Change a setting
@@ -241,7 +238,6 @@ app/
   followup.py         # Follow-up question rewriting
   ingest.py           # Document extraction and chunking
   llm.py              # Ollama LLM wrapper
-  preprocess_llm.py   # LLM-based metadata extraction
   prompting.py        # Single-step prompt (fallback)
   qdrant_store.py     # Qdrant vector store
   retrieval.py        # Hybrid retrieval pipeline

@@ -29,7 +29,7 @@ def _storage_locked_message(path: str) -> str:
         "Kontrollera vad som håller låset:\n"
         f"    lsof {path}/.lock\n"
         "\n"
-        "Kommandon som behöver ensam åtkomst: ingest, reindex, enrich,\n"
+        "Kommandon som behöver ensam åtkomst: ingest, reindex,\n"
         "stats, attest-build och skripten under scripts/."
     )
 

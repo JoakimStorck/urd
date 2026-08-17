@@ -65,11 +65,10 @@ if not _config_report.ok:
 # (107,6 s median per tur mot 9,0 s med det avstängt), och en körning
 # till att reda ut om en modellväxling ens hade slagit igenom.
 logger.info(
-    "modell: %s | think=%s | num_ctx=%d | enrich-modell=%s",
+    "modell: %s | think=%s | num_ctx=%d",
     settings.ollama_model,
     settings.llm_think,
     settings.llm_num_ctx,
-    settings.preprocess_ollama_model,
 )
 
 static_dir = Path(__file__).parent / "static"
@@ -96,7 +95,6 @@ def health() -> dict:
             "model": settings.ollama_model,
             "think": settings.llm_think,
             "num_ctx": settings.llm_num_ctx,
-            "enrich_model": settings.preprocess_ollama_model,
         },
     }
 

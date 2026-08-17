@@ -411,13 +411,11 @@ def infer_document_type(
     """
     Härled dokumenttyp och normativ tyngd ur sökvägen.
 
-    Returnerar (type, weight). Deterministiskt och gratis, till skillnad
-    från enrich som är ett LLM-anrop per sektion och därför sällan körs
-    — vilket är skälet till att document_type varit null på varje träff
-    sedan fältet infördes, och att normkälle- och aktualitetsreglerna i
-    syntesprompten aldrig haft underlag.
+    Returnerar (type, weight). Deterministiskt och gratis. Detta är
+    ENDA källan till document_type sedan enrich togs bort; fältet bär
+    normkälle- och aktualitetsreglerna i syntesprompten.
 
-    Okänd sökväg ger (None, None), samma läge som före ändringen.
+    Okänd sökväg ger (None, None).
     """
     rules = _load_document_type_rules()
     if not rules:
