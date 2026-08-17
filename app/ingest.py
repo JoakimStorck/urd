@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from dataclasses import dataclass
 import hashlib
+import logging
 import re
 
 from docling.document_converter import DocumentConverter
@@ -389,13 +390,19 @@ def _load_document_type_rules() -> dict:
         try:
             with candidate.open(encoding="utf-8") as f:
                 _DOC_TYPE_RULES = yaml.safe_load(f) or {}
-            logger.info(
+            # ingest.py har ingen modulnivå-logger; filen hämtar den
+            # där den behövs. Att skriva logger.info här gav
+            # NameError vid varje ingest — py_compile fångar inte
+            # odefinierade namn.
+            logging.getLogger(__name__).info(
                 "Laddade %d dokumenttypsregler från %s.",
                 len(_DOC_TYPE_RULES.get("rules", [])), candidate,
             )
             return _DOC_TYPE_RULES
         except Exception as e:
-            logger.warning("Kunde inte läsa %s (%s).", candidate, e)
+            logging.getLogger(__name__).warning(
+                "Kunde inte läsa %s (%s).", candidate, e
+            )
     _DOC_TYPE_RULES = {}
     return _DOC_TYPE_RULES
 
