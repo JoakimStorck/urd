@@ -107,15 +107,27 @@ class CorpusReport:
 # Mönstret är avsiktligt snävt — det ska hitta EXPLICITA bindningar,
 # inte gissa. Missar är ofarliga; falska träffar producerar
 # förvirrande tillägg.
+# "som X" har företräde framför "är X". I "N.N. är tillsvidareanställd
+# SOM professor" är rollen professor, inte tillsvidareanställd —
+# uppmätt 2026-08-17 tog uttaget participet och producerade ett
+# obegripligt tillägg. Anställningsform, tidsbegränsning och
+# rekryteringsstatus står regelmässigt mellan verbet och rollen i
+# förvaltningstext.
 _BINDING_PATTERNS = [
     re.compile(
         r"\b(?P<person>[A-ZÅÄÖ][a-zåäöé\-]+(?:\s+[A-ZÅÄÖ][a-zåäöé\-]+)+)\s+"
-        r"(?:är|var)\s+(?:en\s+|den\s+)?"
+        r"(?:är|var)\s+[^.,;:]{0,40}?\bsom\s+(?:en\s+|den\s+)?"
         r"(?P<role>[a-zåäöA-ZÅÄÖ\-]{4,40})",
     ),
     re.compile(
         r"\b(?P<person>[A-ZÅÄÖ][a-zåäöé\-]+(?:\s+[A-ZÅÄÖ][a-zåäöé\-]+)+)\s+"
-        r"har\s+(?:rollen|uppdraget|befattningen)\s+som\s+"
+        r"har\s+(?:rollen|uppdraget|befattningen)\s+som\s+(?:en\s+|den\s+)?"
+        r"(?P<role>[a-zåäöA-ZÅÄÖ\-]{4,40})",
+    ),
+    # Enkel form sist: bara när ingen "som"-konstruktion matchat.
+    re.compile(
+        r"\b(?P<person>[A-ZÅÄÖ][a-zåäöé\-]+(?:\s+[A-ZÅÄÖ][a-zåäöé\-]+)+)\s+"
+        r"(?:är|var)\s+(?:en\s+|den\s+)?"
         r"(?P<role>[a-zåäöA-ZÅÄÖ\-]{4,40})",
     ),
 ]
@@ -125,20 +137,32 @@ _NOT_ROLES = {
     "utsedd", "utsett", "föreslagen", "närvarande", "frånvarande",
     "med", "och", "eller", "samt", "inte", "även", "också", "här",
     "kvar", "borta", "ansvarig",
+    # Anställningsform och status, inte roll.
+    "tillsvidareanställd", "tidsbegränsad", "tidsbegränsat",
+    "anställd", "vikarierande", "tillförordnad", "adjungerad",
+    "rekryterad", "befordrad", "antagen", "aktuell", "aktuellt",
 }
 
 
 def extract_bindings(answer: str) -> list[tuple[str, str]]:
     """Hitta explicita rollbindningar i svarstexten."""
     found: list[tuple[str, str]] = []
-    for pattern in _BINDING_PATTERNS:
+    seen_persons: set[str] = set()
+    for i, pattern in enumerate(_BINDING_PATTERNS):
         for m in pattern.finditer(answer):
             person = m.group("person").strip()
             role = m.group("role").strip().lower().rstrip(".,;:")
             if role in _NOT_ROLES or len(role) < 4:
                 continue
+            # Sista mönstret är den enkla "är X"-formen. Har en
+            # "som"-konstruktion redan bundit personen är den mer
+            # precis, och den enkla formen skulle bara fånga
+            # participet före rollordet.
+            if i == len(_BINDING_PATTERNS) - 1 and person in seen_persons:
+                continue
             if (person, role) not in found:
                 found.append((person, role))
+                seen_persons.add(person)
     return found
 
 
@@ -179,21 +203,18 @@ def check_answer(answer: str, conn=None) -> CorpusReport:
         )
 
         if claimed is None:
-            # Svaret påstår en roll som beståndet inte belägger alls.
-            # Det är svagare information än en konflikt: uppgiften kan
-            # stå i en källa vars konstruktion uttaget inte täcker.
-            # Kommenteras därför bara när en tydligt bättre finns.
-            if best.relevance >= MIN_RELEVANCE_GAP:
-                report.findings.append(BindingCheck(
-                    person=person, claimed_role=role,
-                    claimed_relevance=0.0, claimed_ambiguous=False,
-                    claimed_documents=0,
-                    best_role=best.object, best_relevance=best.relevance,
-                    best_documents=best.documents,
-                    best_last_date=best.last_date,
-                    reason="obelagd_i_bestandet",
-                ))
-                report.ok = False
+            # FRÅNVARO AV BELÄGG ÄR INTE ETT FYND.
+            #
+            # Att Attest saknar en bindning betyder inte att uppgiften
+            # är fel — uttaget missar ungefär vart femte fall, och
+            # ingen enskild person har bara en roll. Uppmätt
+            # 2026-08-17 gav den tidigare regeln tillägget "uppgiften
+            # om tillsvidareanställd har inget motsvarande stöd" om ett
+            # korrekt svar, eftersom personen också var studierektor.
+            #
+            # Kontrollen jämför därför bara belägg systemet FAKTISKT
+            # HAR mot varandra. Samma princip som abstain: att inte
+            # hitta något är inte ett fynd.
             continue
 
         gap = best.relevance - claimed.relevance
@@ -241,22 +262,15 @@ def format_addition(report: CorpusReport) -> str:
     for f in report.findings:
         dok = "dokument" if f.best_documents != 1 else "dokument"
         datum = f" (senast {f.best_last_date})" if f.best_last_date else ""
-        if f.reason == "obelagd_i_bestandet":
-            lines.append(
-                f"Beståndet binder {f.person} till {f.best_role} i "
-                f"{f.best_documents} {dok}{datum}. Uppgiften om "
-                f"{f.claimed_role} har inget motsvarande stöd."
-            )
-        else:
-            grund = (
-                "en källa som tillåter två läsningar"
-                if f.claimed_ambiguous
-                else f"{f.claimed_documents} dokument"
-            )
-            lines.append(
-                f"Beståndet binder {f.person} till {f.best_role} i "
-                f"{f.best_documents} {dok}{datum}, medan uppgiften om "
-                f"{f.claimed_role} vilar på {grund}."
-            )
+        grund = (
+            "en källa som tillåter två läsningar"
+            if f.claimed_ambiguous
+            else f"{f.claimed_documents} dokument"
+        )
+        lines.append(
+            f"Beståndet binder {f.person} till {f.best_role} i "
+            f"{f.best_documents} {dok}{datum}, medan uppgiften om "
+            f"{f.claimed_role} vilar på {grund}."
+        )
 
     return "Observera: " + " ".join(lines)
