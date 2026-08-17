@@ -1782,18 +1782,25 @@ class RagService:
         till och retrievalen beter sig som förut. Hittar det fel
         dokument konkurrerar de med den globala poolen och
         cross-encodern gör fortfarande den slutliga bedömningen.
+
+        Felfallen returnerar en TOM AVBILDNING, inte en tom lista.
+        Anroparen truthiness-testar värdet och märkte därför inte
+        skillnaden, men signaturen lovar en dict — och nästa anropare
+        som gör ett uppslag i den skulle få AttributeError just när
+        Attest är otillgängligt, alltså i det fall som ska vara
+        ofarligt.
         """
         debug: dict = {"terms": [], "candidates": [], "documents": 0}
         try:
             from app import attest
         except ImportError:
-            return [], debug
+            return {}, debug
 
         try:
             conn = attest.connect()
         except Exception as e:
             logger.warning("attest: kunde inte öppna indexet (%s)", e)
-            return [], debug
+            return {}, debug
 
         # Kandidattermer ur frågan: allt utom frågeord och funktionsord.
         words = re.findall(r"[\wÅÄÖåäö-]+", question.lower())
