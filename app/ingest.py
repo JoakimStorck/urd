@@ -14,7 +14,6 @@ from app.schemas import (
     DocumentChunk,
     ChunkMetadata,
     EvidenceObject,
-    SectionSemanticMetadata,
 )
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".xlsx"}
@@ -39,7 +38,6 @@ class StructuredSection:
     level: int | None
     text: str
     order: int
-    semantic: SectionSemanticMetadata | None = None
 
 
 def iter_document_paths(root: Path) -> list[Path]:
@@ -745,8 +743,6 @@ def build_chunks_from_sections(
         ) or None
 
         for piece in pieces:
-            semantic = section.semantic or SectionSemanticMetadata()
-
             # Bädda in kontextuellt prefix i den text som indexeras
             contextualized_text = context_prefix + piece
 
@@ -761,24 +757,12 @@ def build_chunks_from_sections(
                 page_number=None,
                 document_date=document_date,
                 diarienummer=diarienummer,
-                # Sökvägen först, enrich som komplement: härledningen är
-                # deterministisk och alltid tillgänglig, medan
-                # semantic.document_type kräver att enrich körts — och
-                # det är skälet till att fältet varit null på varje
-                # träff sedan det infördes.
-                document_type=doc_type or semantic.document_type,
+                # Härledd ur sökvägen vid ingest: deterministiskt och
+                # alltid tillgängligt. Bär normkälle- och
+                # aktualitetsreglerna i syntesprompten.
+                document_type=doc_type,
                 document_weight=doc_weight,
-                keywords=semantic.keywords,
-                roles=semantic.roles,
-                actions=semantic.actions,
-                time_markers=semantic.time_markers,
-                applies_to=semantic.applies_to,
-                section_summary=semantic.summary,
                 source_fingerprint=source_fingerprint,
-                semantic_enriched=False,
-                semantic_model=None,
-                semantic_version=None,
-                semantic_source_hash=None,
                 chunk_index=global_idx,
             )
             chunks.append(

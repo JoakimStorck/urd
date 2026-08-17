@@ -552,7 +552,7 @@ def _section_key(hit: SourceHit) -> tuple[str, str | None, int | None]:
 
 @app.command(
     "stats",
-    help="Visa översikt över dokument på disk, indexerade chunkar, sektioner och enrich-status.",
+    help="Visa översikt över dokument på disk, indexerade chunkar och sektioner.",
 )
 def stats(
     docs_path: Path | None = typer.Option(
@@ -593,18 +593,6 @@ def stats(
     for hit in hits:
         section_groups[_section_key(hit)].append(hit)
 
-    enriched_chunks = sum(1 for h in hits if h.metadata.semantic_enriched)
-    not_enriched_chunks = len(hits) - enriched_chunks
-
-    enriched_sections = 0
-    not_enriched_sections = 0
-
-    for _, group_hits in section_groups.items():
-        if group_hits and all(h.metadata.semantic_enriched for h in group_hits):
-            enriched_sections += 1
-        else:
-            not_enriched_sections += 1
-
     indexed_set = set(indexed_docs.keys())
     fs_set = set(fs_map.keys())
 
@@ -633,14 +621,6 @@ def stats(
     typer.echo(f"Indexerade dokument:     {len(indexed_docs)}")
     typer.echo(f"Indexerade sektioner:    {len(section_groups)}")
     typer.echo(f"Indexerade chunkar:      {len(hits)}")
-
-    typer.echo("")
-    typer.echo("Enrich")
-    typer.echo("------")
-    typer.echo(f"Enrichade sektioner:     {enriched_sections}")
-    typer.echo(f"Ej enrichade sektioner:  {not_enriched_sections}")
-    typer.echo(f"Enrichade chunkar:       {enriched_chunks}")
-    typer.echo(f"Ej enrichade chunkar:    {not_enriched_chunks}")
 
     typer.echo("")
     typer.echo("Synk mot disk")
