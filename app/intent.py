@@ -248,8 +248,15 @@ _VALID_INTENTS = {
 }
 _VALID_SUBSTYLES = {"subquestion", "broadening", "narrowing_or_repair"}
 
+# MÅSTE hållas i synk med QuestionOperation-literalen ovan. De två
+# listorna är separata av historiska skäl, och en operation som saknas
+# HÄR avvisas tyst med fallback till direct_lookup — uppmätt
+# 2026-08-16 aktiverades attestsignalen aldrig av den anledningen,
+# trots att regeln satte rätt operation. Felet syntes bara som en
+# INFO-rad i serverloggen.
 _VALID_OPERATIONS = {
     "direct_lookup",
+    "entity_lookup",
     "relation_membership",
     "comparison",
     "requirements",

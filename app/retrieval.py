@@ -181,6 +181,7 @@ def _apply_attest_boost(
             })
         boosted.append(
             SourceHit(
+                chunk_id=hit.chunk_id,
                 text=hit.text,
                 metadata=hit.metadata,
                 score=new_score,
