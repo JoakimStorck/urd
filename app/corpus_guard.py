@@ -274,3 +274,52 @@ def format_addition(report: CorpusReport) -> str:
         )
 
     return "Observera: " + " ".join(lines)
+
+# ---------------------------------------------------------------------------
+# Uppräkning av rollinnehavare
+# ---------------------------------------------------------------------------
+
+def format_role_holders(candidates, role_term: str, max_rows: int = 12) -> str:
+    """
+    Sammanställ alla personer som beståndet binder till en roll.
+
+    AGGREGATET BÄR HÄR SVARET, till skillnad från övriga vägar. Det är
+    en medveten precisering av white paperns regel, inte ett avsteg:
+
+    Ingen enskild källa innehåller listan — den finns bara som en
+    sammanräkning över beståndet. Regelns syfte är att systemet inte
+    ska FORMULERA påståenden ur ett aggregat i stället för ur text. En
+    uppräkning gör inte det: varje rad är en bindning med sina egna
+    källor och datum, och läsaren kan gå till dokumenten. Aggregatet
+    organiserar, det påstår inget nytt.
+
+    Villkoret är att underlaget redovisas PER RAD och att listan är
+    märkt som en sammanställning, inte som ett citat ur en källa.
+
+    Svaga belägg stryks INTE. Att tyst utesluta en person med ett enda
+    gammalt belägg vore att låta systemet avgöra vem som räknas; att
+    visa beläggningen låter läsaren göra det.
+    """
+    if not candidates:
+        return ""
+
+    rows: list[str] = []
+    for c in candidates[:max_rows]:
+        dok = f"{c.documents} dokument"
+        datum = f", senast {c.last_date}" if c.last_date else ""
+        flagga = "  (tvetydig källa)" if c.ambiguous_only else ""
+        rows.append(
+            f"- {c.subject} — {c.object} ({dok}{datum}){flagga}"
+        )
+
+    fler = ""
+    if len(candidates) > max_rows:
+        fler = f"\n({len(candidates) - max_rows} till med svagare beläggning.)"
+
+    return (
+        f"Sammanställning ur beståndet — personer som bundits till "
+        f"{role_term}:\n" + "\n".join(rows) + fler + "\n\n"
+        "Listan är sammanräknad ur dokumentens formuleringar och visar "
+        "vad beståndet belägger, inte en fastställd förteckning. "
+        "Antalet dokument anger hur väl bindningen är belagd."
+    )

@@ -31,6 +31,7 @@ from app.source_guard import check_answer as run_source_guard, format_warning
 from app.corpus_guard import (
     check_answer as run_corpus_guard,
     format_addition as format_corpus_addition,
+    format_role_holders,
 )
 from app.session_state import SessionStore, select_active_hits
 from app.intent import classify_utterance, Classification
@@ -1327,6 +1328,32 @@ class RagService:
         # KOMPLETTERAR, SKRIVER INTE OM. Att tyst byta ut uppgiften vore
         # att låta aggregatet bära svaret; originaltexten bär,
         # aggregatet pekar ut.
+        # UPPRÄKNING AV ROLLINNEHAVARE.
+        #
+        # "Vilka professorer finns?" kan inte besvaras ur en enskild
+        # källa — listan existerar bara som en sammanräkning över
+        # beståndet. Uppmätt 2026-08-17 abstainade frågan trots att
+        # Attest hade materialet.
+        #
+        # Sammanställningen läggs TILL svaret i stället för att ersätta
+        # det: den vanliga retrievalen kan ha hittat sammanhang som
+        # listan saknar, och varje rad bär sina egna källor.
+        role_summary_debug: dict | None = None
+        if (
+            question_operation == "entity_aggregation"
+            and settings.attest_selection
+        ):
+            role_term, holders = self._attest_role_holders(question)
+            role_summary_debug = {
+                "role_term": role_term,
+                "num_holders": len(holders),
+            }
+            summary = format_role_holders(holders, role_term)
+            if summary:
+                synthesis_result.answer = (
+                    synthesis_result.answer.rstrip() + "\n\n" + summary
+                )
+
         corpus_report = None
         if settings.attest_selection:
             corpus_report = run_corpus_guard(synthesis_result.answer)
@@ -1414,6 +1441,7 @@ class RagService:
                 "related_concepts": related_concepts,
                 "source_guard": guard_report.as_dict(),
                 "corpus_guard": corpus_report.as_dict() if corpus_report else None,
+                "role_summary": role_summary_debug,
                 "predication": predication_debug,
 
                 "synthesis": synthesis_debug,
@@ -1707,6 +1735,36 @@ class RagService:
     # ------------------------------------------------------------------
     # Samtal
     # ------------------------------------------------------------------
+
+    def _attest_role_holders(self, question: str) -> tuple[str, list]:
+        """
+        Hämta alla personer som beståndet binder till frågans roll.
+
+        Returnerar (rollterm, kandidater). Tom lista när ingen term i
+        frågan finns i indexet — då faller svaret tillbaka på vanlig
+        retrieval, som förut.
+        """
+        try:
+            from app import attest
+            conn = attest.connect()
+        except Exception as e:
+            logger.debug("attest: uppräkning ej möjlig (%s)", e)
+            return "", []
+
+        words = re.findall(r"[\wÅÄÖåäö-]+", question.lower())
+        terms = [
+            w for w in words
+            if len(w) >= 4 and w not in _QUESTION_STOPWORDS
+        ]
+        # Längsta termen först: "forskningssamordnare" före "samordnare".
+        for term in sorted(terms, key=len, reverse=True):
+            try:
+                cands = attest.lookup_object(conn, term)
+            except Exception:
+                continue
+            if cands:
+                return term, cands
+        return "", []
 
     def _attest_source_paths(
         self, question: str, max_docs: int = 5

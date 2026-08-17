@@ -76,6 +76,7 @@ Substyle = Literal["subquestion", "broadening", "narrowing_or_repair"]
 QuestionOperation = Literal[
     "direct_lookup",
     "entity_lookup",
+    "entity_aggregation",
     "relation_membership",
     "comparison",
     "requirements",
@@ -186,6 +187,9 @@ FRÅGEOPERATIONER:
 question_operation beskriver vilken sorts dokumentläsning som krävs.
 
 Använd:
+- entity_aggregation för frågor som "vilka professorer finns", "vilka
+  är studierektorer" — frågan efter ALLA innehavare av en roll, inte
+  efter en enskild
 - entity_lookup för frågor som "vem är X", "vem har uppdraget som X",
   "vem ansvarar för X" — frågor efter en NAMNGIVEN INNEHAVARE av en
   roll, inte efter rollens innehåll
@@ -257,6 +261,7 @@ _VALID_SUBSTYLES = {"subquestion", "broadening", "narrowing_or_repair"}
 _VALID_OPERATIONS = {
     "direct_lookup",
     "entity_lookup",
+    "entity_aggregation",
     "relation_membership",
     "comparison",
     "requirements",

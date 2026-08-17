@@ -28,6 +28,22 @@ import re
 # aggregation.
 _OPERATION_RULES: list[tuple[str, re.Pattern]] = [
     (
+        # "Vilka professorer finns vid IIT?" — frågan efter ALLA
+        # innehavare av en roll. Skiljer sig från entity_lookup i att
+        # svaret är en mängd, och från aggregation i att mängden består
+        # av personer bundna till en roll.
+        #
+        # Ingen enskild källa innehåller listan; den finns bara som en
+        # sammanräkning över beståndet. Prövas FÖRE entity_lookup, som
+        # annars fångar "vilka är studierektorer".
+        "entity_aggregation",
+        re.compile(
+            r"^\s*vilka\s+\w+(?:er|ar|or|ter|na)\b[^?]*\b(?:finns|är|har)\b"
+            r"|^\s*vilka\s+(?:är|arbetar|tjänstgör)\s+(?:som\s+)?\w{4,}",
+            re.IGNORECASE,
+        ),
+    ),
+    (
         # "Vem är proprefekt?" — frågan efter en NAMNGIVEN INNEHAVARE.
         # Skiljer sig från direct_lookup i vad som efterfrågas: inte
         # rollens innehåll utan vem som bär den. Cross-encodern kan
