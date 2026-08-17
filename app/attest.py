@@ -680,6 +680,43 @@ def _match(conn, column: str, term: str, kind: str) -> list[dict]:
 # Ersatt av compute_relevance, som rangordnar utan att utesluta.
 
 
+def coverage(conn, source_paths: list[str]) -> dict:
+    """
+    Täckning per dokument: vilka av beståndets dokument har
+    observationer, och vilka gav noll?
+
+    NOLLFALLET ÄR POÄNGEN. Ett dokument utan observationer bidrar
+    ingenting till entitetsuppslag, korpuskontroll eller uppräkning —
+    men det syns inte någonstans idag, lika lite som evidenslösa
+    dokument syntes innan ingest började leta efter dem. Frånvaro av
+    belägg är inte ett fynd om något, men frånvaron av UTTAG är ett
+    fynd om systemet: den skiljer ett dokument som inte säger något om
+    roller från ett vars konstruktioner uttaget inte bär.
+
+    source_paths är beståndets dokument enligt indexet, så att
+    dokument som aldrig nått Attest räknas med — inte bara de som
+    finns i observationstabellen.
+    """
+    with_obs = {
+        row[0] for row in conn.execute(
+            "SELECT DISTINCT source_path FROM observations"
+        )
+    }
+    known = set(source_paths)
+    covered = sorted(known & with_obs)
+    empty = sorted(known - with_obs)
+    # Dokument i Attest som inte längre finns i indexet: stale, och
+    # ett tecken på att attest-build behöver köras om.
+    stale = sorted(with_obs - known)
+    return {
+        "documents_indexed": len(known),
+        "documents_with_observations": len(covered),
+        "documents_without_observations": len(empty),
+        "without_observations": empty,
+        "stale_documents": stale,
+    }
+
+
 def stats(conn) -> dict:
     conn.row_factory = sqlite3.Row
     row = conn.execute(

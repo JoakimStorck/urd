@@ -623,6 +623,32 @@ def stats(
     typer.echo(f"Indexerade chunkar:      {len(hits)}")
 
     typer.echo("")
+    typer.echo("Attest")
+    typer.echo("------")
+    try:
+        from app import attest
+        conn = attest.connect()
+        cov = attest.coverage(conn, list(indexed_docs.keys()))
+        totals = attest.stats(conn)
+        typer.echo(f"Observationer:           {totals['observations']}")
+        typer.echo(f"Dokument med belägg:     {cov['documents_with_observations']}")
+        typer.echo(f"Dokument utan belägg:    {cov['documents_without_observations']}")
+        if cov["stale_documents"]:
+            typer.echo(
+                f"Stale i attest.db:       {len(cov['stale_documents'])}"
+                "  (kör attest-build)"
+            )
+        for path in cov["without_observations"][:10]:
+            typer.echo(f"    {Path(path).name}")
+        if cov["documents_without_observations"] > 10:
+            typer.echo(
+                f"    ... och {cov['documents_without_observations'] - 10} till"
+            )
+    except Exception as e:
+        # Attest är ett tillägg, inte en förutsättning för stats.
+        typer.echo(f"Attest otillgängligt: {e}")
+
+    typer.echo("")
     typer.echo("Synk mot disk")
     typer.echo("------------")
     typer.echo(f"Nya dokument:            {len(new_docs)}")
