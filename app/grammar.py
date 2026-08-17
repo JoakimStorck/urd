@@ -585,8 +585,8 @@ def _conj_chain(words, head_id: int) -> list[int]:
 
     ETT NAMN MED EGEN TITEL ÄRVER INTE.
 
-        Pro-dekan Katherina Dodou, utvecklingsledare Daniel Broman
-        och pro-rektor Jonas Tosteby besökte mötet
+        Pro-dekan A A, utvecklingsledare B B och pro-rektor C C
+        besökte mötet
 
     Här är samordningen mellan TITEL–NAMN-PAR, inte mellan namn under
     en gemensam titel, och alla tre fick tidigare den första titeln.
@@ -594,8 +594,8 @@ def _conj_chain(words, head_id: int) -> list[int]:
 
     Skillnaden är strukturell: bär ett samordnat namn ett eget
     nmod-barn har det sin egen titel. Utan eget nmod delas titeln, som
-    i "Hållbarhetsrådets representanter Anton Grenholm, Maria Rappfors
-    och Jayaraj Jayamani" — där är arvet korrekt.
+    i "Hållbarhetsrådets representanter A A, B B och C C" — där är
+    arvet korrekt.
     """
     chain = [head_id]
     frontier = [head_id]
@@ -697,13 +697,55 @@ _ASSIGNMENT_NOUNS = {
 # ett program eller ett område. Rollen är studierektor; avgränsningen
 # följer med som eget fält.
 #
-# VALFRITT. "Studierektor Xingxing Zhang presenterade ärendet" ger en
+# VALFRITT. "Studierektor N.N. presenterade ärendet" ger en
 # bindning UTAN avgränsning, och det är en fullgod observation — inte
 # en ofullständig. Personen är studierektor; texten säger bara inte
 # för vad. Systemet fyller aldrig i luckan: att ärva avgränsningen
 # från en annan observation vore en slutledning det inte har täckning
 # för, eftersom en person kan ha bytt uppdrag mellan två protokoll.
 _SCOPE_MARKS = {"för", "inom", "vid"}
+
+
+def _full_phrase(words, head_idx: int, max_depth: int = 3) -> str:
+    """
+    Hela frasen under ett huvudord, rekursivt.
+
+    Till skillnad från _phrase, som tar huvudordet och dess omedelbara
+    modifierare, samlar denna även samordningar och efterställda
+    bestämningar på djupet.
+
+    Uppmätt 2026-08-17: "forskarutbildningsområdet resurseffektiv byggd
+    miljö" blev "forskarutbildningsområdet", och "Byggteknik Produktion
+    och förvaltning" blev "Produktion". Programtitlar och ämnesnamn är
+    flerordsfraser där bestämningarna hänger på flera nivåer, och just
+    de leden bär informationen.
+
+    Prepositionsfraser under noden tas INTE med: "programansvarig för X
+    vid institutionen" ska ge X, inte X plus institutionen.
+    """
+    keep = {
+        "flat", "flat:name", "compound", "amod", "nmod:poss",
+        "conj", "cc", "appos",
+    }
+    parts = {head_idx}
+    frontier = [(head_idx, 0)]
+    while frontier:
+        nxt = []
+        for node, depth in frontier:
+            if depth >= max_depth:
+                continue
+            for w in words:
+                if w.head != node or w.id in parts:
+                    continue
+                if w.deprel not in keep:
+                    continue
+                # Preposition under ledet => ny fras, inte del av denna.
+                if any(c.head == w.id and c.deprel == "case" for c in words):
+                    continue
+                parts.add(w.id)
+                nxt.append((w.id, depth + 1))
+        frontier = nxt
+    return " ".join(_word_text(words, i) for i in sorted(parts)).strip()
 
 
 def _role_scope(words, role_id: int) -> str | None:
@@ -718,7 +760,7 @@ def _role_scope(words, role_id: int) -> str | None:
         )
         if mark not in _SCOPE_MARKS:
             continue
-        scope = _phrase(words, x.id)
+        scope = _full_phrase(words, x.id)
         if _is_code_like(scope) or len(scope) < 3:
             continue
         return scope

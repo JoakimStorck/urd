@@ -354,6 +354,54 @@ class Candidate:
         }
 
 
+def _same_person(a: str, b: str) -> bool:
+    """
+    Är två namnformer samma person?
+
+    REGELN ÄR STRUKTURELL, INTE ETT AVSTÅNDSMÅTT.
+
+        "A Lind" / "A Maria Lind"      -> samma person
+        "A Lund" / "A Lundgren"        -> OLIKA personer
+
+    Redigeringsavståndet är i praktiken lika stort i båda fallen, och
+    ingen tröskel kan skilja dem: skillnaden ligger i verkligheten, inte
+    i tecknen. Fuzzy matching löser det därför inte.
+
+    Det som bär är att första och sista NAMNLEDET är identiska och att
+    skillnaden ligger i mellanled. Ett extra mellannamn är ett extra
+    LED; ett längre efternamn är ett annat ORD.
+
+    Böjningstolerans på ändpunkterna fångar genitivvarianter (samma
+    efternamn med och utan -s) utan att slå ihop två skilda efternamn,
+    eftersom avledningsändelser inte är böjningsändelser.
+
+    SAMMANVÄGNINGEN SKER VID UPPSLAG, inte vid lagring. Observationerna
+    behåller källans ordalydelse; det är bara i aggregeringen de förs
+    samman. Då går beslutet att ändra utan att indexet byggs om.
+    """
+    at, bt = a.split(), b.split()
+    if not at or not bt:
+        return False
+    if at == bt:
+        return True
+    if len(at) < 2 or len(bt) < 2:
+        return False
+
+    def ends_match(x: str, y: str) -> bool:
+        if x == y:
+            return True
+        return is_inflection_of(x, y) or is_inflection_of(y, x)
+
+    if not ends_match(at[0], bt[0]) or not ends_match(at[-1], bt[-1]):
+        return False
+    # Ändpunkterna stämmer; mellanleden får skilja sig i antal men de
+    # som finns i båda måste stämma överens i ordning.
+    mid_a, mid_b = at[1:-1], bt[1:-1]
+    shorter, longer = (mid_a, mid_b) if len(mid_a) <= len(mid_b) else (mid_b, mid_a)
+    it = iter(longer)
+    return all(any(ends_match(m, x) for x in it) for m in shorter)
+
+
 def _most_common(values) -> str:
     """Vanligaste skrivformen; vid lika utfall den alfabetiskt första."""
     counts: dict[str, int] = {}
@@ -468,9 +516,20 @@ def compute_relevance(candidates: list[Candidate], horizon: str | None = None) -
 
 
 def _rows_to_candidates(rows) -> list[Candidate]:
+    # Gruppera på nyckelpar, och slå därefter ihop grupper vars subjekt
+    # är samma person i olika namnform. Objektnyckeln måste vara
+    # identisk: samma person i två roller är två bindningar.
     groups: dict[tuple, list] = {}
     for r in rows:
-        groups.setdefault((r["subject_key"], r["object_key"]), []).append(r)
+        key = (r["subject_key"], r["object_key"])
+        merged = None
+        for existing in groups:
+            if existing[1] != key[1]:
+                continue
+            if _same_person(existing[0], key[0]):
+                merged = existing
+                break
+        groups.setdefault(merged or key, []).append(r)
 
     out: list[Candidate] = []
     for (_, _), rs in groups.items():
