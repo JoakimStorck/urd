@@ -26,6 +26,7 @@ DEFAULTS = {
     "llm_think": False,
     "predication_enabled": False,
     "attest_selection": False,
+    "attest_boost": 0.15,
     "preprocess_semantic_version": "v1",
     "chunk_size": 1200,
     "chunk_overlap": 150,
@@ -66,6 +67,7 @@ _ENV_KEYS = {
     "llm_think": "LLM_THINK",
     "predication_enabled": "PREDICATION_ENABLED",
     "attest_selection": "ATTEST_SELECTION",
+    "attest_boost": "ATTEST_BOOST",
     "preprocess_semantic_version": "PREPROCESS_SEMANTIC_VERSION",
     "chunk_size": "CHUNK_SIZE",
     "chunk_overlap": "CHUNK_OVERLAP",
@@ -195,6 +197,7 @@ def _build_settings() -> "Settings":
         llm_think=b("llm_think"),
         predication_enabled=b("predication_enabled"),
         attest_selection=b("attest_selection"),
+        attest_boost=f("attest_boost"),
         preprocess_semantic_version=s("preprocess_semantic_version"),
         chunk_size=i("chunk_size"),
         chunk_overlap=i("chunk_overlap"),
@@ -263,6 +266,13 @@ class Settings(BaseModel):
     # så här är en configflagga rätt mekanism i stället.
     # Kräver att .urd/attest.db är byggd med 'urd attest-build'.
     attest_selection: bool = False
+
+    # Påslagets storlek i sannolikhetsskala, viktat med kandidatens
+    # relevans. 0.15 betyder att en bindning med full relevans lyfter
+    # en träff 0.15 — nog för att passera golvet 0.50 från 0.36, men
+    # aldrig nog att kasta om en klart bättre chunk. Provisoriskt
+    # värde; kalibreras mot batteriet.
+    attest_boost: float = 0.15
 
     preprocess_semantic_version: str = "v1"
 

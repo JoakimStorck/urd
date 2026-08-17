@@ -150,6 +150,48 @@ class BM25Index:
         return self._by_source.get(source_path, [])
 
 
+def _apply_attest_boost(
+    hits: list[SourceHit],
+    relevance_by_path: dict[str, float],
+    max_boost: float,
+) -> tuple[list[SourceHit], list[dict]]:
+    """
+    Lyft träffar ur dokument där Attest funnit en rollbindning.
+
+    Påslaget är max_boost × kandidatens relevans, additivt i
+    sannolikhetsskala och kapat vid 1.0. En träff kan alltså lyftas
+    över tröskeln av sitt atteststöd, men aldrig hoppa förbi en
+    tydligt bättre chunk med mer än påslagets storlek.
+    """
+    boosted: list[SourceHit] = []
+    debug: list[dict] = []
+
+    for hit in hits:
+        rel = relevance_by_path.get(hit.metadata.source_path, 0.0)
+        applied = max_boost * rel
+        new_score = min(1.0, hit.score + applied)
+        if applied > 0:
+            debug.append({
+                "file_name": hit.metadata.file_name,
+                "section_title": hit.metadata.section_title,
+                "attest_relevance": round(rel, 3),
+                "original_score": round(hit.score, 4),
+                "applied_boost": round(applied, 4),
+                "boosted_score": round(new_score, 4),
+            })
+        boosted.append(
+            SourceHit(
+                text=hit.text,
+                metadata=hit.metadata,
+                score=new_score,
+            )
+        )
+
+    boosted.sort(key=lambda h: h.score, reverse=True)
+    debug.sort(key=lambda d: d["boosted_score"], reverse=True)
+    return boosted, debug
+
+
 # ---------------------------------------------------------------------------
 # Kandidatpool – slå ihop semantisk sökning och BM25
 # ---------------------------------------------------------------------------
@@ -936,11 +978,15 @@ class RagService:
         # finns; syntesen formulerar ur originaltexten som vanligt.
         # White paperns regel gäller oförändrad.
         attest_debug: dict | None = None
+        attest_relevance_by_path: dict[str, float] = {}
         if question_operation == "entity_lookup" and settings.attest_selection:
-            attest_paths, attest_debug = self._attest_source_paths(question)
-            if attest_paths:
+            attest_relevance_by_path, attest_debug = self._attest_source_paths(question)
+            if attest_relevance_by_path:
                 preferred_source_paths = list(
-                    dict.fromkeys((preferred_source_paths or []) + attest_paths)
+                    dict.fromkeys(
+                        (preferred_source_paths or [])
+                        + list(attest_relevance_by_path)
+                    )
                 )
 
         if preferred_source_paths:
@@ -1063,6 +1109,31 @@ class RagService:
         expanded_doc_paths = sorted({
             hit.metadata.source_path for hit in expanded_new
         })
+
+        # 5b. ATTESTBOOST.
+        #
+        # Att utvidga kandidatpoolen räckte inte. Uppmätt 2026-08-16:
+        # attestdokumenten nådde poolen (num_semantic_anchored 8,
+        # kandidater 15 -> 29) men rankades under de protokoll som
+        # redan låg där. Cross-encodern mäter aboutness, och ett
+        # dokument som NÄMNER proprefektuppdraget ser mer relevant ut
+        # än ett som BINDER namnet till rollen — vilket är precis det
+        # problem signalen finns för.
+        #
+        # Attest måste därför påverka rangordningen, inte bara vilka
+        # som får delta. Samma mekanism som evidensobjektens boost:
+        # additiv i sannolikhetsskala, kapad vid 1.0.
+        #
+        # Påslaget viktas med kandidatens relevans, så att Attests
+        # rangordning fortplantar sig: en bindning belagd i nio
+        # dokument över tre år lyfter mer än en tvetydig i ett enda.
+        attest_boost_debug: list[dict] = []
+        if attest_relevance_by_path:
+            all_reranked, attest_boost_debug = _apply_attest_boost(
+                all_reranked,
+                attest_relevance_by_path,
+                settings.attest_boost,
+            )
 
         # 6. Texturval efter vanlig retrieval
         text_hits = _dedup_and_select(all_reranked)
@@ -1309,6 +1380,7 @@ class RagService:
                 "bm25_additions": bm25_additions,
                 "comparison_tracks": comparison_track_debug,
                 "attest": attest_debug,
+                "attest_boost": attest_boost_debug[:8],
                 "related_concepts": related_concepts,
                 "source_guard": guard_report.as_dict(),
                 "predication": predication_debug,
@@ -1607,7 +1679,7 @@ class RagService:
 
     def _attest_source_paths(
         self, question: str, max_docs: int = 5
-    ) -> tuple[list[str], dict]:
+    ) -> tuple[dict[str, float], dict]:
         """
         Slå upp frågans rolltermer i Attest och returnera de dokument
         som binder ett namn till rollen.
@@ -1641,7 +1713,9 @@ class RagService:
             if len(w) >= 4 and w not in _QUESTION_STOPWORDS
         ]
 
-        paths: list[str] = []
+        # Sökväg -> kandidatens relevans. Den bäst belagda bindningen
+        # vinner om samma dokument bär flera.
+        rel_by_name: dict[str, float] = {}
         for term in terms:
             try:
                 cands = attest.lookup_object(conn, term)
@@ -1659,25 +1733,23 @@ class RagService:
                     "ambiguous_only": c.ambiguous_only,
                     "last_date": c.last_date,
                 })
-                # Kandidaterna är rangordnade på relevans; källorna
-                # tas i den ordningen så att den bäst belagda
-                # bindningens dokument kommer först.
                 for src in c.sources:
-                    if src not in paths:
-                        paths.append(src)
+                    rel_by_name[src] = max(rel_by_name.get(src, 0.0), c.relevance)
 
         # sources är filnamn; retrieval matchar på full sökväg.
-        full_paths: list[str] = []
-        for name in paths[:max_docs]:
+        ranked = sorted(rel_by_name.items(), key=lambda kv: kv[1], reverse=True)
+        by_path: dict[str, float] = {}
+        for name, rel in ranked[:max_docs]:
             for chunk in self.bm25_index.hits:
                 if chunk.metadata.file_name == name:
-                    p = chunk.metadata.source_path
-                    if p not in full_paths:
-                        full_paths.append(p)
+                    by_path.setdefault(chunk.metadata.source_path, rel)
                     break
 
-        debug["documents"] = len(full_paths)
-        return full_paths, debug
+        debug["documents"] = len(by_path)
+        debug["relevance_by_path"] = {
+            k.rsplit("/", 1)[-1]: round(v, 3) for k, v in by_path.items()
+        }
+        return by_path, debug
 
     def converse(self, question: str, session_id: str | None = None) -> ChatResponse:
         """
@@ -1991,8 +2063,14 @@ class RagService:
             response.debug["background_max_turns"] = background_max_turns
         if retrieval_question is not None:
             response.debug["retrieval_question"] = retrieval_question
+        # Skriv INTE över preferred_source_paths om answer redan satt
+        # det: attestsignalen lägger till sökvägar där, och converse
+        # egen variabel är None vid entitetsfrågor. Uppmätt 2026-08-16
+        # visade debugfältet None trots att fem dokument ankrats.
         if preferred_source_paths is not None:
-            response.debug["preferred_source_paths"] = preferred_source_paths
+            response.debug.setdefault(
+                "preferred_source_paths", preferred_source_paths
+            )
 
         response.session_id = state.session_id
 
