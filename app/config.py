@@ -26,6 +26,7 @@ DEFAULTS = {
     "predication_enabled": False,
     "attest_selection": False,
     "attest_boost": 0.15,
+    "attest_required_min_relevance": 0.25,
     "chunk_size": 1200,
     "chunk_overlap": 150,
     "server": "",
@@ -64,6 +65,7 @@ _ENV_KEYS = {
     "predication_enabled": "PREDICATION_ENABLED",
     "attest_selection": "ATTEST_SELECTION",
     "attest_boost": "ATTEST_BOOST",
+    "attest_required_min_relevance": "ATTEST_REQUIRED_MIN_RELEVANCE",
     "chunk_size": "CHUNK_SIZE",
     "chunk_overlap": "CHUNK_OVERLAP",
     "server": "URD_SERVER",
@@ -191,6 +193,7 @@ def _build_settings() -> "Settings":
         predication_enabled=b("predication_enabled"),
         attest_selection=b("attest_selection"),
         attest_boost=f("attest_boost"),
+        attest_required_min_relevance=f("attest_required_min_relevance"),
         chunk_size=i("chunk_size"),
         chunk_overlap=i("chunk_overlap"),
         server=server,
@@ -274,6 +277,18 @@ class Settings(BaseModel):
     # aldrig nog att kasta om en klart bättre chunk. Provisoriskt
     # värde; kalibreras mot batteriet.
     attest_boost: float = 0.15
+
+    # Lägsta beläggning för att en passage ska RESERVERAS i
+    # syntesunderlaget, oavsett cross-encoderns bedömning. Se
+    # _add_required_passages i retrieval.py.
+    #
+    # 0.25 släpper igenom en enda entydig och färsk observation
+    # (strength 0.33 x recency ~1.0 = 0.33) men stoppar en enda
+    # tvetydig (0.33 x 0.25-vikt). Ett belägg kan vara ett
+    # extraktionsfel, men ett entydigt sådant är fortfarande det bästa
+    # beståndet har — och alternativet i det uppmätta fallet var
+    # abstain. Provisoriskt värde; kalibreras mot batteriet.
+    attest_required_min_relevance: float = 0.25
 
     chunk_size: int = 1200
     chunk_overlap: int = 150

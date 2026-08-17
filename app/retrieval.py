@@ -164,9 +164,18 @@ def _apply_attest_boost(
     Lyft träffar ur dokument där Attest funnit en rollbindning.
 
     Påslaget är max_boost × kandidatens relevans, additivt i
-    sannolikhetsskala och kapat vid 1.0. En träff kan alltså lyftas
-    över tröskeln av sitt atteststöd, men aldrig hoppa förbi en
-    tydligt bättre chunk med mer än påslagets storlek.
+    sannolikhetsskala och kapat vid 1.0.
+
+    VAD DEN INTE GÖR. Funktionen körs på listan EFTER rerankens golv,
+    så den kan bara ändra inbördes ordning bland träffar som redan
+    passerat 0.5 — inte lyfta någon över tröskeln, vilket en tidigare
+    kommentar här påstod. En chunk på 0.36 finns inte längre i listan
+    när boosten körs.
+
+    Passager som cross-encodern dömt ut men som beståndet belägger
+    hanteras av en annan mekanism, _add_required_passages, av skäl som
+    står där: aboutness och evidentiell nödvändighet är olika frågor
+    och ska inte pressas genom samma skala.
     """
     boosted: list[SourceHit] = []
     debug: list[dict] = []
@@ -478,6 +487,66 @@ def _ensure_comparison_balance(
                 break
 
     return result
+
+
+def _add_required_passages(
+    selected: list[SourceHit],
+    required: list[SourceHit],
+) -> tuple[list[SourceHit], list[dict]]:
+    """
+    Lägg till passager som ett annat lager pekat ut som NÖDVÄNDIGA.
+
+    EN ANDRA URVALSPRINCIP, INTE EN JUSTERING AV DEN FÖRSTA.
+
+    Systemet har hittills haft en enda kanal — cross-encoderns poäng —
+    och varje annan sorts information har fått pressas genom den.
+    Attestboosten är ett sådant försök, och mätningen 2026-08-18 visar
+    varför det inte kan fungera: chunken som ordagrant binder namnet
+    till proprefektuppdraget får 0.0847 mot frågan "Vem är proprefekt
+    vid IIT?", medan protokoll som bara NÄMNER uppdraget ligger på
+    0.977–1.000. Gapet är 0.92 mot en boost på 0.15. Dessutom appliceras
+    boosten efter rerankens golv 0.5, så en chunk på 0.08 är redan
+    borta när den körs.
+
+    Felet är inte kalibrering utan kategori. Cross-encodern mäter
+    ABOUTNESS, och i ett protokollbestånd handlar femtio passager om
+    proprefekten medan en enda predicerar bindningen. Att koda
+    evidentiell nödvändighet i en relevansskala är att svara på fel
+    fråga med rätt siffra.
+
+    Kanalen är därför separat: relevansurvalet gör sitt, och passager
+    som pekats ut som nödvändiga läggs till UTÖVER det. Samma form som
+    _ensure_comparison_balance redan har — en jämförelse utan båda
+    sidorna är värdelös oavsett tak, och ett entitetssvar utan
+    passagen som bär bindningen likaså.
+
+    Mekanismen är blind för vem som bidrar. Attest är första
+    bidragsgivaren via identitetsuppslaget; agens- och
+    förkortningsuppslag, och senare en predikationsvakt, kan bli
+    nästa utan att den här funktionen ändras.
+    """
+    if not required:
+        return selected, []
+
+    result = list(selected)
+    present = {h.chunk_id for h in result}
+    debug: list[dict] = []
+
+    for hit in required:
+        already = hit.chunk_id in present
+        debug.append({
+            "file_name": hit.metadata.file_name,
+            "section_title": hit.metadata.section_title,
+            "chunk_index": hit.metadata.chunk_index,
+            "relevance_prob": round(hit.score, 4),
+            "already_selected": already,
+        })
+        if already:
+            continue
+        present.add(hit.chunk_id)
+        result.append(hit)
+
+    return result, debug
 
 
 def _select_hits_for_synthesis(
@@ -985,8 +1054,10 @@ class RagService:
         # White paperns regel gäller oförändrad.
         attest_debug: dict | None = None
         attest_relevance_by_path: dict[str, float] = {}
+        attest_locations: list[tuple[str, int]] = []
         if question_operation == "entity_lookup" and settings.attest_selection:
             attest_relevance_by_path, attest_debug = self._attest_source_paths(question)
+            attest_locations = (attest_debug or {}).get("locations", [])
             if attest_relevance_by_path:
                 preferred_source_paths = list(
                     dict.fromkeys(
@@ -1264,6 +1335,18 @@ class RagService:
                 comparison_labels,
             )
 
+        # NÖDVÄNDIGA PASSAGER. Se _add_required_passages för varför
+        # detta är en egen kanal och inte en boost. Chunkarna slås upp
+        # på (source_path, chunk_index) ur BM25-indexet, som håller
+        # hela beståndet — passagen behöver alltså varken ha nått
+        # kandidatpoolen eller passerat rerankens golv.
+        required_debug: list[dict] = []
+        if attest_locations:
+            required_hits = self._chunks_at(attest_locations)
+            hits_for_synthesis, required_debug = _add_required_passages(
+                hits_for_synthesis, required_hits,
+            )
+
         synthesis_result = synthesize(
             question,
             hits_for_synthesis,
@@ -1438,6 +1521,7 @@ class RagService:
                 "comparison_tracks": comparison_track_debug,
                 "attest": attest_debug,
                 "attest_boost": attest_boost_debug[:8],
+                "required_passages": required_debug,
                 "related_concepts": related_concepts,
                 "source_guard": guard_report.as_dict(),
                 "corpus_guard": corpus_report.as_dict() if corpus_report else None,
@@ -1790,7 +1874,9 @@ class RagService:
         Attest är otillgängligt, alltså i det fall som ska vara
         ofarligt.
         """
-        debug: dict = {"terms": [], "candidates": [], "documents": 0}
+        debug: dict = {
+            "terms": [], "candidates": [], "documents": 0, "locations": [],
+        }
         try:
             from app import attest
         except ImportError:
@@ -1850,6 +1936,14 @@ class RagService:
                 })
                 for src in c.sources:
                     rel_by_name[src] = max(rel_by_name.get(src, 0.0), c.relevance)
+                # Var bindningen står. Reserveras som nödvändig passage
+                # bara när beläggningen når golvet — en enda tvetydig
+                # observation ska inte kunna tvinga in en passage som
+                # cross-encodern dömt ut.
+                if c.relevance >= settings.attest_required_min_relevance:
+                    for loc in c.locations[:2]:
+                        if loc not in debug["locations"]:
+                            debug["locations"].append(loc)
 
         # sources är filnamn; retrieval matchar på full sökväg.
         ranked = sorted(rel_by_name.items(), key=lambda kv: kv[1], reverse=True)
@@ -1865,6 +1959,30 @@ class RagService:
             k.rsplit("/", 1)[-1]: round(v, 3) for k, v in by_path.items()
         }
         return by_path, debug
+
+    def _chunks_at(
+        self, locations: list[tuple[str, int]]
+    ) -> list[SourceHit]:
+        """
+        Slå upp chunkar på (source_path, chunk_index).
+
+        BM25-indexet håller hela beståndet, så uppslaget når passager
+        som varken kommit in i kandidatpoolen eller passerat rerankens
+        golv. Det är hela poängen: den chunk som binder en roll får
+        typiskt låg aboutness mot frågan (uppmätt 0.0847), och kan
+        därför bara nås utanför relevanskedjan.
+
+        Sökvägar som inte finns i indexet hoppas tyst över — Attest kan
+        innehålla dokument som sedan tagits bort ur beståndet, och det
+        är samma stale-läge som attest.coverage rapporterar.
+        """
+        out: list[SourceHit] = []
+        for source_path, chunk_index in locations:
+            for chunk in self.bm25_index.get_chunks_by_source(source_path):
+                if chunk.metadata.chunk_index == chunk_index:
+                    out.append(chunk)
+                    break
+        return out
 
     def converse(self, question: str, session_id: str | None = None) -> ChatResponse:
         """
