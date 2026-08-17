@@ -722,6 +722,8 @@ def build_chunks_from_sections(
     document_date: str | None = None,
     diarienummer: str | None = None,
     full_text: str | None = None,
+    doc_type: str | None = None,
+    doc_weight: str | None = None,
 ) -> list[DocumentChunk]:
     chunks: list[DocumentChunk] = []
     global_idx = 0
@@ -819,6 +821,8 @@ def ingest_path(
         document_date=document_date,
         diarienummer=diarienummer,
         full_text=raw.text,
+        doc_type=doc_type,
+        doc_weight=doc_weight,
     )
 
 
@@ -884,6 +888,8 @@ def ingest_path_with_evidence(
         document_date=document_date,
         diarienummer=diarienummer,
         full_text=raw.text,
+        doc_type=doc_type,
+        doc_weight=doc_weight,
     )
 
     evidence_objects = extract_evidence_objects_from_sections(
