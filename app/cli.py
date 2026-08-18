@@ -7,6 +7,7 @@ import os
 # Måste sättas före import av typer.
 os.environ["TYPER_USE_RICH"] = "0"
 
+import datetime as _dt
 import hashlib
 import json
 import logging
@@ -116,10 +117,17 @@ def _server_is_available(base_url: str) -> bool:
         return False
 
 
+# Lager som öppnats under kommandots gång, så att de kan stängas
+# medvetet i main(). Listan och inte en global: flera kommandon öppnar
+# lagret mer än en gång, och alla ska stängas.
+_open_stores: list[QdrantStore] = []
+
+
 def _build_store_and_embedder() -> tuple[QdrantStore, Embedder]:
     embedder = Embedder()
     dim = len(embedder.embed_query("test"))
     store = QdrantStore(vector_size=dim)
+    _open_stores.append(store)
     return store, embedder
 
 
@@ -127,7 +135,9 @@ def _build_store_only() -> QdrantStore:
     # Samlingen finns redan efter ingest/reset-index.
     # Dummy-dimension används bara för init; _ensure_collection skapar inget nytt
     # om samlingen redan finns.
-    return QdrantStore(vector_size=1024)
+    store = QdrantStore(vector_size=1024)
+    _open_stores.append(store)
+    return store
 
 
 def _is_qdrant_lock_error(exc: Exception) -> bool:
@@ -1087,7 +1097,8 @@ def auth_cmd(
         typer.echo(f"{len(users)} användare i {path}:")
         for u in users:
             grupper = ", ".join(u.get("groups") or []) or "(inga grupper)"
-            typer.echo(f"  {u.get('name')}  [{grupper}]")
+            skapad = u.get("created") or "okänt datum"
+            typer.echo(f"  {u.get('name'):<20} [{grupper}]  skapad {skapad}")
         return
 
     if not name:
@@ -1127,6 +1138,10 @@ def auth_cmd(
         "name": name,
         "token_sha256": A.hash_token(token),
         "groups": grupper,
+        # Skapandedatum är den enda kontrollmekanism som finns när
+        # administration sker genom filredigering: utan det går det
+        # inte att se om någon lagts till som inte borde vara där.
+        "created": _dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
     })
     _skriv(users)
 
@@ -2198,6 +2213,11 @@ def main() -> None:
         # ersätta dem. "from None" bryter kedjan, SystemExit avslutar
         # tyst.
         raise SystemExit(1) from None
+    finally:
+        # Stäng lagringen medan importsystemet fortfarande finns kvar.
+        # Se QdrantStore.close.
+        for store in _open_stores:
+            store.close()
 
 
 if __name__ == "__main__":

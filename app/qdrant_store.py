@@ -287,6 +287,31 @@ class QdrantStore:
 
         return all_hits
 
+    def close(self) -> None:
+        """
+        Stäng klienten medvetet, innan tolken river ned importsystemet.
+
+        Utan detta gör QdrantClient.__del__ jobbet under nedstängning,
+        och dess close() behöver importera saker när sys.meta_path
+        redan är None. Python skriver då ut "Exception ignored in
+        __del__" med ett traceback som ser ut som ett fel men inte är
+        det: exitkoden påverkas inte och ingen data berörs.
+
+        Kosmetiskt alltså — men det ser ut som ett haveri för den som
+        möter det första gången, och det gör det mitt i en
+        förevisning. Nedstängningen ska ske medan tolken lever.
+        """
+        client = getattr(self, "client", None)
+        if client is None:
+            return
+        try:
+            client.close()
+        except Exception:
+            # Nedstängning får aldrig fälla ett kommando som lyckats.
+            pass
+        finally:
+            self.client = None
+
     def get_indexed_documents(self, batch_size: int = 256) -> dict[str, str | None]:
         hits = self.iter_all_chunks(batch_size=batch_size)
         by_path: dict[str, str | None] = {}
