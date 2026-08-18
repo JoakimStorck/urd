@@ -642,6 +642,170 @@ def format_term_coverage(cov: TermCoverage) -> str:
     return "\n".join(lines)
 
 
+class StageResult(BaseModel):
+    """Ett dokuments utfall i ett steg av kedjan. Nivå: dokument."""
+    level: Literal["document"] = "document"
+    reached: bool
+    rank: int | None = None
+    score: float | None = None
+    pool_size: int = 0
+    top_competitor: str | None = None
+
+
+class ChunkScore(BaseModel):
+    """Cross-encoderns bedömning av en chunk. Nivå: chunk."""
+    level: Literal["chunk"] = "chunk"
+    section_title: str | None = None
+    chunk_index: int | None = None
+    probability: float
+    filtered: bool
+
+
+class RetrievalTrace(BaseModel):
+    """
+    Var i kedjan ett dokument föll bort. Nivå: dokument.
+
+    fell_out_at ÄR DATA, INTE PROSA. Ett dokument som saknas i både
+    semantisk pool och BM25 har ett kandidatinsamlingsfel — språkgap
+    eller embeddingkvalitet. Ett som kommer in men filtreras bort har
+    ett rerankingfel. Olika fel, olika åtgärd, och anroparen ska inte
+    behöva härleda skillnaden ur en utskrift.
+    """
+    level: Literal["document"] = "document"
+    question: str
+    source_path: str
+    semantic: StageResult
+    bm25: StageResult
+    reranking: list[ChunkScore]
+    required_passage: bool = False
+    fell_out_at: Literal[
+        "candidate_collection", "reranking", "selection", "passed"
+    ]
+
+
+def _stage(hits: list[SourceHit], source_path: str) -> StageResult:
+    for rank, hit in enumerate(hits, start=1):
+        if hit.metadata.source_path == source_path:
+            return StageResult(
+                reached=True, rank=rank, score=hit.score, pool_size=len(hits),
+            )
+    return StageResult(
+        reached=False,
+        pool_size=len(hits),
+        top_competitor=hits[0].metadata.file_name if hits else None,
+    )
+
+
+def trace_retrieval(source_path: str, question: str, rag) -> RetrievalTrace:
+    """
+    Spåra ett dokument genom retrievalkedjan.
+
+    DEN IAKTTAR, DEN KÖR INTE OM. Anropet går genom
+    RagService.collect_and_rank — exakt den kod som besvarar frågor.
+    En diagnos som reproducerar kedjan för hand glider från den, och
+    ljuger då mest i de fall den finns till för: skriptets tidigare
+    kopia saknade broader-expansionen, operationstermerna, den ankrade
+    attestpoolen och dokumentexpansionens andra pass.
+
+    Detta är den enda operationen som tar RagService, och inte som ett
+    beroendeval: den ÄR retrievalkedjan.
+
+    Frågeoperationen bestäms av regellagret, samma väg som answer()
+    använder när LLM-klassificeraren inte hunnit säga sitt. Utan den
+    skulle attestsignalen aldrig slå till i spårningen och diagnosen
+    visa en annan kedja än den verkliga.
+    """
+    from app.question_rules import rule_based_operation
+
+    operation = rule_based_operation(question) or "direct_lookup"
+    pool = rag.collect_and_rank(
+        question=question,
+        search_text=question,
+        rerank_text=question,
+        question_operation=operation,
+    )
+
+    semantic = _stage(pool.semantic_hits, source_path)
+    bm25 = _stage(pool.bm25_hits, source_path)
+
+    scored = [
+        ChunkScore(
+            section_title=d.get("section_title"),
+            chunk_index=d.get("chunk_index"),
+            probability=d.get("relevance_prob", 0.0),
+            filtered=bool(d.get("filtered")),
+        )
+        for d in pool.rerank_debug
+        if d.get("source_path") == source_path
+    ]
+    scored.sort(key=lambda c: c.probability, reverse=True)
+
+    survived = any(
+        h.metadata.source_path == source_path for h in pool.reranked
+    )
+    required = any(loc[0] == source_path for loc in pool.attest_locations)
+
+    if survived:
+        fell_out_at = "passed"
+    elif scored:
+        fell_out_at = "reranking"
+    elif semantic.reached or bm25.reached:
+        fell_out_at = "selection"
+    else:
+        fell_out_at = "candidate_collection"
+
+    return RetrievalTrace(
+        question=question,
+        source_path=source_path,
+        semantic=semantic,
+        bm25=bm25,
+        reranking=scored[:12],
+        required_passage=required,
+        fell_out_at=fell_out_at,
+    )
+
+
+_FELL_OUT_TEXT = {
+    "candidate_collection":
+        "Dokumentet kommer inte in i kandidatpoolen. Felet sitter i\n"
+        "  kandidatinsamlingen (embedding/BM25), inte i rerankern.",
+    "reranking":
+        "Dokumentet når rerankern men filtreras bort av golvet.\n"
+        "  Cross-encodern bedömer det som irrelevant för frågan.",
+    "selection":
+        "Dokumentet når poolen men ingen av dess chunkar bedömdes.",
+    "passed":
+        "Dokumentet passerar hela kedjan.",
+}
+
+
+def format_retrieval_trace(trace: RetrievalTrace) -> str:
+    def stage(namn: str, r: StageResult) -> str:
+        if r.reached:
+            return (f"  {namn:<10} plats {r.rank} av {r.pool_size}"
+                    f"  score {r.score:.4f}")
+        top = f"  (topp: {r.top_competitor})" if r.top_competitor else ""
+        return f"  {namn:<10} ej i poolen ({r.pool_size} kandidater){top}"
+
+    lines = [
+        f"Retrievaldiagnos: {trace.source_path.rsplit('/', 1)[-1]}",
+        f"Fråga: {trace.question!r}",
+        "",
+        stage("semantisk", trace.semantic),
+        stage("BM25", trace.bm25),
+    ]
+    if trace.required_passage:
+        lines.append("  attest     dokumentet bär en reserverad passage")
+    if trace.reranking:
+        lines.append("")
+        lines.append("  cross-encoder (sannolikhet, ✗ = under golvet):")
+        for c in trace.reranking:
+            mark = "✗" if c.filtered else "✓"
+            lines.append(f"    {mark} {c.probability:.4f}  {c.section_title}")
+    lines += ["", "  " + _FELL_OUT_TEXT[trace.fell_out_at]]
+    return "\n".join(lines)
+
+
 def format_document_report(report: DocumentReport) -> str:
     i, c = report.identity, report.counts
     lines = [

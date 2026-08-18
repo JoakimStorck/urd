@@ -54,7 +54,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="Inspektera indexerade chunkar/evidens för ett dokument.",
     )
@@ -128,78 +128,27 @@ def main() -> None:
 
     # ---- Retrievaldiagnos ----
     if not args.question:
-        return
+        return 0 if matches else 1
 
-    question = args.question
-    match_set = set(matches)
-    print("=" * 72)
-    print(f"RETRIEVALDIAGNOS för frågan: {question!r}")
-    print()
+    # SPÅRNINGEN IAKTTAR, DEN KÖR INTE OM. Skriptet reproducerade
+    # tidigare kedjan för hand och hade glidit från den: kopian körde
+    # BM25 med bara synonymexpansion, utan broader-expansionen ur
+    # begreppsmodellen, utan operationstermerna, utan den ankrade
+    # attestpoolen och utan dokumentexpansionens andra rerankingpass.
+    # Ett dokument som i verkligheten nådde poolen enbart via
+    # broader-expansion redovisades som frånvarande — diagnosen ljög
+    # alltså mest i de fall den fanns till för.
+    #
+    # Nu går båda vägarna genom RagService.collect_and_rank.
+    for path in matches:
+        print("=" * 72)
+        trace = ins.trace_retrieval(path, args.question, rag)
+        print(ins.format_retrieval_trace(trace))
+        print()
 
-    # 1. Semantisk kandidatpool (samma limit som RagService.answer)
-    query_vector = rag.embedder.embed_query(question)
-    semantic_hits = rag.store.search(query_vector, limit=15)
-    sem_ranks = [
-        (rank, h) for rank, h in enumerate(semantic_hits, start=1)
-        if h.metadata.source_path in match_set
-    ]
-    print(f"1. SEMANTISK sökning (topp-{len(semantic_hits)}):")
-    if sem_ranks:
-        for rank, h in sem_ranks:
-            print(f"   TRÄFF på plats {rank}: [{h.metadata.section_title}] score={h.score:.4f}")
-    else:
-        print("   INTE i kandidatpoolen. Dokumentet kan aldrig nå rerankern den vägen.")
-        top = semantic_hits[0] if semantic_hits else None
-        if top:
-            print(f"   (plats 1 gick till: {top.metadata.file_name} score={top.score:.4f})")
-    print()
-
-    # 2. BM25 med samma synonymexpansion som den riktiga vägen
-    synonym_additions = rag.synonyms.expand_terms(question)
-    bm25_text = question + (" " + " ".join(synonym_additions) if synonym_additions else "")
-    bm25_hits = rag.bm25_index.top_k(bm25_text, k=10)
-    bm25_ranks = [
-        (rank, h) for rank, h in enumerate(bm25_hits, start=1)
-        if h.metadata.source_path in match_set
-    ]
-    print(f"2. BM25 (topp-{len(bm25_hits)}"
-          + (f", synonymtillägg: {synonym_additions}" if synonym_additions else ", inga synonymtillägg")
-          + "):")
-    if bm25_ranks:
-        for rank, h in bm25_ranks:
-            print(f"   TRÄFF på plats {rank}: [{h.metadata.section_title}]")
-    else:
-        print("   INTE bland BM25-kandidaterna (ordagrann matchning saknas — "
-              "t.ex. språkgap eller annan terminologi).")
-    print()
-
-    # 3. Cross-encoderns bedömning av dokumentets egna chunkar.
-    # filter_floor=0.0 så att ALLA sannolikheter visas, även de som
-    # den riktiga vägen skulle filtrera bort (< 0.5).
-    doc_chunks = [c for p in matches for c in rag.bm25_index.get_chunks_by_source(p)]
-    reranked, _ = rag.reranker.rerank(question, doc_chunks, filter_floor=0.0)
-    print(f"3. CROSS-ENCODER: dokumentets {len(doc_chunks)} chunkar mot frågan "
-          "(sannolikhet < 0.5 = filtreras bort i den riktiga kedjan):")
-    for h in reranked[:10]:
-        marker = "  " if h.score >= 0.5 else "✗ "
-        print(f"   {marker}prob={h.score:.4f}  [{h.metadata.section_title}]")
-    print()
-
-    # Sammanfattande slutsats
-    in_pool = bool(sem_ranks or bm25_ranks)
-    best_ce = reranked[0].score if reranked else 0.0
-    print("SLUTSATS:")
-    if not in_pool:
-        print("  Dokumentet kommer inte in i kandidatpoolen — felet sitter i")
-        print("  kandidatinsamlingen (embedding/BM25), inte i rerankern.")
-    elif best_ce < 0.5:
-        print("  Dokumentet når rerankern men ingen chunk når sannolikhet 0.5 —")
-        print("  cross-encodern bedömer dem som irrelevanta för frågan.")
-    else:
-        print("  Dokumentet når rerankern och har minst en chunk med positiv")
-        print("  score. Om det ändå inte bär svaret: kontrollera urvalssteget")
-        print("  (score-gap-regler, dokumentexpansion) i JSONL-spåret.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    # Grep-konventionen: 0 = träff, 1 = ingen träff, 2 = fel.
+    sys.exit(main())

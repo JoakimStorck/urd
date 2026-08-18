@@ -187,6 +187,12 @@ def _apply_attest_boost(
         if applied > 0:
             debug.append({
                 "file_name": hit.metadata.file_name,
+                # Sökväg och chunkindex gör spåret entydigt: filnamn
+                # räcker inte när två dokument delar namn i olika
+                # mappar, och utan index går en bedömd chunk inte att
+                # peka ut i dokumentet.
+                "source_path": hit.metadata.source_path,
+                "chunk_index": hit.metadata.chunk_index,
                 "section_title": hit.metadata.section_title,
                 "attest_relevance": round(rel, 3),
                 "original_score": round(hit.score, 4),
@@ -724,6 +730,12 @@ class Reranker:
             prob = _sigmoid(float(ce_score))
             debug.append({
                 "file_name": hit.metadata.file_name,
+                # Sökväg och chunkindex gör spåret entydigt: filnamn
+                # räcker inte när två dokument delar namn i olika
+                # mappar, och utan index går en bedömd chunk inte att
+                # peka ut i dokumentet.
+                "source_path": hit.metadata.source_path,
+                "chunk_index": hit.metadata.chunk_index,
                 "section_title": hit.metadata.section_title,
                 "section_path": hit.metadata.section_path,
                 "document_title": hit.metadata.document_title,
@@ -749,6 +761,42 @@ class Reranker:
 # ---------------------------------------------------------------------------
 # RagService
 # ---------------------------------------------------------------------------
+
+@dataclass
+class CandidatePool:
+    """
+    Kandidatinsamlingens och rangordningens utfall.
+
+    Fälten är exakt de lokala variabler answer() höll före
+    utbrytningen — inget mer, inget mindre. Att listan är lång är en
+    ärlig beskrivning av hur mycket tillstånd steget bär, inte ett
+    tecken på att något extra lagts till.
+    """
+    query_vector: list[float]
+    semantic_hits: list[SourceHit]
+    bm25_hits: list[SourceHit]
+    candidates: list[SourceHit]
+    reranked: list[SourceHit]
+    rerank_debug: list[dict]
+    expanded_doc_paths: list[str]
+    num_expanded: int
+    num_semantic_global: int
+    num_semantic_anchored: int
+    bm25_additions: list[str]
+    operation_additions: list[str]
+    synonym_additions: list[str]
+    broader_additions: list[str]
+    comparison_labels: list[list[str]]
+    comparison_track_debug: list[dict]
+    attest_debug: dict | None
+    attest_relevance_by_path: dict[str, float]
+    attest_locations: list[tuple[str, int]]
+    attest_boost_debug: list[dict]
+    t1: float
+    t2: float
+    t3: float
+    t4: float
+
 
 class RagService:
     def __init__(self) -> None:
@@ -952,82 +1000,38 @@ class RagService:
 
         return _ordered_unique(terms)
 
-    def answer(
+    def collect_and_rank(
         self,
+        *,
         question: str,
-        qud_anchor: str | None = None,
-        background_turns: list[dict] | None = None,
-        background_max_turns: int = 0,
-        retrieval_question: str | None = None,
-        preferred_source_paths: list[str] | None = None,
+        search_text: str,
+        rerank_text: str,
         question_operation: str = "direct_lookup",
+        preferred_source_paths: list[str] | None = None,
         matched_concept_ids: list[str] | None = None,
-    ) -> ChatResponse:
+    ) -> "CandidatePool":
         """
-        Kör retrieval och syntes.
+        Samla kandidater och rangordna dem. Retrievalkedjans framdel.
 
-        Parametrar:
-        - question: originalfrågan som användaren ställde. Det är den
-          som syntesen refererar till, och det är den som cross-encodern
-          bedömer chunkar mot.
-        - qud_anchor: om satt, en QUD-text som konkateneras med question
-          för att bredda kandidatpoolen i semantisk sökning och BM25.
-          Cross-encoder-rerankingen använder däremot alltid den rena
-          frågan (question eller retrieval_question), eftersom mMARCO-
-          tränade rerankers är känsliga för konkatenerade söktexter och
-          ger kollapsade scores när frågan innehåller meta-formulering
-          som "Huvudfråga i samtalet: ...". QUD-ankaret påverkar alltså
-          *vad som tas upp i poolen*, inte *hur det bedöms*.
-        - background_turns, background_max_turns: samtalsbakgrund som
-          skickas med till syntesen.
-        - retrieval_question: omskriven fråga för retrieval. Om satt
-          används den i stället för question i embedding, BM25 och
-          cross-encoder-reranking. question används fortfarande i syntesen.
-        - preferred_source_paths: dokument som bör prioriteras i
-          retrieval, t.ex. aktiva dokument från föregående svar.
+        UTBRUTEN UR answer() 2026-08-18, oförändrad rad för rad.
+
+        Skälet är inte städning utan att spårningen ska kunna IAKTTA
+        retrieval i stället för att köra om den.
+        scripts/inspect_doc.py reproducerade tidigare kedjan för hand —
+        embed, store.search(limit=15), synonymexpansion,
+        bm25.top_k(k=10), rerank — och hade redan glidit: kopian saknade
+        broader-expansionen, operationstermerna, den ankrade
+        attestpoolen och dokumentexpansionens andra rerankingpass. Ett
+        dokument som i verkligheten nådde poolen enbart via
+        broader-expansion redovisades som frånvarande, alltså ljög
+        diagnosen mest i de fall den fanns till för.
+
+        En kopia glider alltid. En projektion av det verkliga anropet
+        kan inte göra det, och därför måste båda gå genom samma kod.
+
+        Metoden gör ingen syntes, ingen evidensläsning och inget urval
+        till svar — den slutar där _dedup_and_select tar vid.
         """
-        t0 = time.perf_counter()
-
-        # Bygg söktexten. Två varianter:
-        #
-        # - search_text används i kandidatinsamling (embedding + BM25).
-        #   Här är QUD-konkatenering mindre skadlig — embeddings klarar
-        #   längre texter, och BM25 kan dra nytta av bredare ordmängd.
-        #
-        # - rerank_text används i cross-encoder-reranking och är alltid
-        #   den rena frågan. Cross-encodern (mMARCO-tränad) är känslig
-        #   för konkatenerade fråge-strängar som innehåller meta-text
-        #   av formen "(Huvudfråga i samtalet: ...)" och ger kollapsade
-        #   scores i det fallet. Att hålla den rena bevarar rerankerns
-        #   precision även när QUD-ankaret breddar kandidatpoolen.
-        if retrieval_question:
-            search_text = retrieval_question
-            rerank_text = retrieval_question
-        elif qud_anchor:
-            search_text = f"{question}\n\n(Huvudfråga i samtalet: {qud_anchor})"
-            rerank_text = question
-        else:
-            search_text = question
-            rerank_text = question
-
-        # 1. Semantisk sökning via Qdrant.
-        #
-        # preferred_source_paths (broadening: dokumenten som bar
-        # föregående svar) är en PREFERENS, inte ett hårt filter.
-        # Tidigare skickades den som source_paths-filter till Qdrant,
-        # vilket i praktiken låste den semantiska sökningen till de
-        # gamla dokumenten — motsatsen till broadenings syfte att nå
-        # närliggande områden som INTE täcks av tidigare källor. Bara
-        # BM25 var då global, och rätt dokument nåddes bara om det
-        # råkade ordmatcha (sågs i baslinjen 2026-08-11: broadening
-        # till anvisningarna för halvtidsseminarium hittade i stället
-        # ett protokoll som nämner dem).
-        #
-        # Nu görs alltid en global sökning, och de föredragna
-        # dokumenten bidrar med en KOMPLETTERANDE ankrad pool så att
-        # borderline-chunkar ur den aktiva kontexten inte trängs ut
-        # ur den globala toppen. Cross-encodern gör som vanligt den
-        # slutliga relevansbedömningen över hela kandidatmängden.
         query_vector = self.embedder.embed_query(search_text)
         t1 = time.perf_counter()
 
@@ -1211,6 +1215,138 @@ class RagService:
                 attest_relevance_by_path,
                 settings.attest_boost,
             )
+
+
+        return CandidatePool(
+            query_vector=query_vector,
+            semantic_hits=semantic_hits,
+            bm25_hits=bm25_hits,
+            candidates=candidates,
+            reranked=all_reranked,
+            rerank_debug=rerank_debug,
+            expanded_doc_paths=expanded_doc_paths,
+            num_expanded=num_expanded,
+            num_semantic_global=num_semantic_global,
+            num_semantic_anchored=num_semantic_anchored,
+            bm25_additions=bm25_additions,
+            operation_additions=operation_additions,
+            synonym_additions=synonym_additions,
+            broader_additions=broader_additions,
+            comparison_labels=comparison_labels,
+            comparison_track_debug=comparison_track_debug,
+            attest_debug=attest_debug,
+            attest_relevance_by_path=attest_relevance_by_path,
+            attest_locations=attest_locations,
+            attest_boost_debug=attest_boost_debug,
+            t1=t1, t2=t2, t3=t3, t4=t4,
+        )
+
+    def answer(
+        self,
+        question: str,
+        qud_anchor: str | None = None,
+        background_turns: list[dict] | None = None,
+        background_max_turns: int = 0,
+        retrieval_question: str | None = None,
+        preferred_source_paths: list[str] | None = None,
+        question_operation: str = "direct_lookup",
+        matched_concept_ids: list[str] | None = None,
+    ) -> ChatResponse:
+        """
+        Kör retrieval och syntes.
+
+        Parametrar:
+        - question: originalfrågan som användaren ställde. Det är den
+          som syntesen refererar till, och det är den som cross-encodern
+          bedömer chunkar mot.
+        - qud_anchor: om satt, en QUD-text som konkateneras med question
+          för att bredda kandidatpoolen i semantisk sökning och BM25.
+          Cross-encoder-rerankingen använder däremot alltid den rena
+          frågan (question eller retrieval_question), eftersom mMARCO-
+          tränade rerankers är känsliga för konkatenerade söktexter och
+          ger kollapsade scores när frågan innehåller meta-formulering
+          som "Huvudfråga i samtalet: ...". QUD-ankaret påverkar alltså
+          *vad som tas upp i poolen*, inte *hur det bedöms*.
+        - background_turns, background_max_turns: samtalsbakgrund som
+          skickas med till syntesen.
+        - retrieval_question: omskriven fråga för retrieval. Om satt
+          används den i stället för question i embedding, BM25 och
+          cross-encoder-reranking. question används fortfarande i syntesen.
+        - preferred_source_paths: dokument som bör prioriteras i
+          retrieval, t.ex. aktiva dokument från föregående svar.
+        """
+        t0 = time.perf_counter()
+
+        # Bygg söktexten. Två varianter:
+        #
+        # - search_text används i kandidatinsamling (embedding + BM25).
+        #   Här är QUD-konkatenering mindre skadlig — embeddings klarar
+        #   längre texter, och BM25 kan dra nytta av bredare ordmängd.
+        #
+        # - rerank_text används i cross-encoder-reranking och är alltid
+        #   den rena frågan. Cross-encodern (mMARCO-tränad) är känslig
+        #   för konkatenerade fråge-strängar som innehåller meta-text
+        #   av formen "(Huvudfråga i samtalet: ...)" och ger kollapsade
+        #   scores i det fallet. Att hålla den rena bevarar rerankerns
+        #   precision även när QUD-ankaret breddar kandidatpoolen.
+        if retrieval_question:
+            search_text = retrieval_question
+            rerank_text = retrieval_question
+        elif qud_anchor:
+            search_text = f"{question}\n\n(Huvudfråga i samtalet: {qud_anchor})"
+            rerank_text = question
+        else:
+            search_text = question
+            rerank_text = question
+
+        # 1. Semantisk sökning via Qdrant.
+        #
+        # preferred_source_paths (broadening: dokumenten som bar
+        # föregående svar) är en PREFERENS, inte ett hårt filter.
+        # Tidigare skickades den som source_paths-filter till Qdrant,
+        # vilket i praktiken låste den semantiska sökningen till de
+        # gamla dokumenten — motsatsen till broadenings syfte att nå
+        # närliggande områden som INTE täcks av tidigare källor. Bara
+        # BM25 var då global, och rätt dokument nåddes bara om det
+        # råkade ordmatcha (sågs i baslinjen 2026-08-11: broadening
+        # till anvisningarna för halvtidsseminarium hittade i stället
+        # ett protokoll som nämner dem).
+        #
+        # Nu görs alltid en global sökning, och de föredragna
+        # dokumenten bidrar med en KOMPLETTERANDE ankrad pool så att
+        # borderline-chunkar ur den aktiva kontexten inte trängs ut
+        # ur den globala toppen. Cross-encodern gör som vanligt den
+        # slutliga relevansbedömningen över hela kandidatmängden.
+        pool = self.collect_and_rank(
+            question=question,
+            search_text=search_text,
+            rerank_text=rerank_text,
+            question_operation=question_operation,
+            preferred_source_paths=preferred_source_paths,
+            matched_concept_ids=matched_concept_ids,
+        )
+        # Namnen behålls så att resten av answer() är oförändrad.
+        query_vector = pool.query_vector
+        semantic_hits = pool.semantic_hits
+        bm25_hits = pool.bm25_hits
+        candidates = pool.candidates
+        all_reranked = pool.reranked
+        rerank_debug = pool.rerank_debug
+        expanded_doc_paths = pool.expanded_doc_paths
+        num_expanded = pool.num_expanded
+        num_semantic_global = pool.num_semantic_global
+        num_semantic_anchored = pool.num_semantic_anchored
+        bm25_additions = pool.bm25_additions
+        operation_additions = pool.operation_additions
+        synonym_additions = pool.synonym_additions
+        broader_additions = pool.broader_additions
+        comparison_labels = pool.comparison_labels
+        comparison_track_debug = pool.comparison_track_debug
+        attest_debug = pool.attest_debug
+        attest_relevance_by_path = pool.attest_relevance_by_path
+        attest_locations = pool.attest_locations
+        attest_boost_debug = pool.attest_boost_debug
+        t1, t2, t3, t4 = pool.t1, pool.t2, pool.t3, pool.t4
 
         # 6. Texturval efter vanlig retrieval
         text_hits = _dedup_and_select(all_reranked)
