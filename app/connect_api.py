@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -72,7 +73,31 @@ def on_startup() -> None:
 
 @app.get("/")
 def index():
-    return FileResponse(static_dir / "index.html")
+    """
+    Servera webbgränssnittet, med klientens token injicerad.
+
+    Den som startat klienten med --token har redan angett den en gång.
+    Att låta webbläsaren fråga igen är en onödig tröskel, och den som
+    klistrar in en token upprepade gånger slutar snart att vara noga
+    med var hen klistrar in den.
+
+    Injektionen sker bara i KLIENTLÄGE och bara mot loopback: klienten
+    binder 127.0.0.1, så tokenen lämnar aldrig maskinen den redan
+    ligger på i en miljövariabel. Servern (app/api.py) serverar samma
+    fil orörd, och där får användaren ange sin egen.
+    """
+    html = (static_dir / "index.html").read_text(encoding="utf-8")
+    token = os.getenv("URD_UPSTREAM_TOKEN")
+    if token:
+        # JSON-kodning, inte strängkonkatenering: en token med
+        # citattecken eller bakstreck skulle annars bryta skriptet.
+        injektion = (
+            "<script>window.URD_TOKEN = "
+            + json.dumps(token)
+            + ";</script>"
+        )
+        html = html.replace("</head>", injektion + "\n</head>", 1)
+    return Response(content=html, media_type="text/html")
 
 
 @app.get("/health")

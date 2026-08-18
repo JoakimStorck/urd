@@ -509,6 +509,100 @@
       questionInput.focus();
     });
 
+    // ---- Autentisering -------------------------------------------
+    //
+    // Token hämtas i tre steg, i fallande ordning:
+    //
+    //   1. window.URD_TOKEN, som klientläget injicerar när det startats
+    //      med --token. Då slipper användaren skriva in något alls.
+    //   2. sessionStorage, om hen redan skrivit in den i denna flik.
+    //   3. en fråga.
+    //
+    // sessionStorage och inte localStorage: tokenen försvinner när
+    // fliken stängs. På en delad maskin är det skillnaden mellan att
+    // nästa person får tillgång och inte.
+    const TOKEN_KEY = "urd_token";
+    let authRequired = false;
+
+    function getToken() {
+      if (window.URD_TOKEN) return window.URD_TOKEN;
+      try { return sessionStorage.getItem(TOKEN_KEY) || null; } catch (e) { return null; }
+    }
+
+    function setToken(value) {
+      try {
+        if (value) sessionStorage.setItem(TOKEN_KEY, value);
+        else sessionStorage.removeItem(TOKEN_KEY);
+      } catch (e) { /* privat läge: token lever då bara i minnet */ }
+    }
+
+    function authHeaders(base) {
+      const headers = Object.assign({}, base || {});
+      const token = getToken();
+      if (token) headers["Authorization"] = "Bearer " + token;
+      return headers;
+    }
+
+    function askForToken(message) {
+      const svar = window.prompt(
+        (message ? message + "\n\n" : "") +
+        "Ange din token för URD.\n" +
+        "Den fås av den som administrerar servern (urd auth add)."
+      );
+      if (svar && svar.trim()) {
+        setToken(svar.trim());
+        return true;
+      }
+      return false;
+    }
+
+    // Servern säger själv om token krävs. Uppgiften finns på /health,
+    // som medvetet är öppen — klienten måste kunna se kravet innan den
+    // har något att autentisera sig med.
+    async function checkAuth() {
+      try {
+        const res = await fetch("/health");
+        if (!res.ok) return;
+        const data = await res.json();
+        authRequired = !!data.auth_required;
+        if (authRequired && !getToken()) askForToken();
+      } catch (e) { /* servern nås inte; felet visas vid första frågan */ }
+    }
+
+    function handleUnauthorized() {
+      // Token var fel eller har återkallats. Släng den och fråga igen,
+      // annars fastnar gränssnittet i 401 utan att säga varför.
+      setToken(null);
+      askForToken("Token saknas eller är ogiltig.");
+    }
+
+    // ---- Dokument -------------------------------------------------
+    //
+    // /document kan inte öppnas som en vanlig länk när autentisering
+    // krävs: en webbläsare sätter inga huvuden på <a href>. Att lägga
+    // tokenen i URL:en vore enklare men fel — URL:er hamnar i
+    // webbserverloggar, i historiken och i delade skärmdumpar.
+    //
+    // Dokumentet hämtas därför med fetch, och visas som en blob-URL
+    // som bara lever i fliken.
+    async function openDocument(url, name) {
+      try {
+        const res = await fetch(url, { headers: authHeaders() });
+        if (res.status === 401) { handleUnauthorized(); return; }
+        if (!res.ok) {
+          alert("Kunde inte öppna dokumentet (" + res.status + ").");
+          return;
+        }
+        const blob = await res.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        window.open(objectUrl, "_blank", "noopener");
+        // Frigörs när fliken hunnit läsa den.
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+      } catch (err) {
+        alert("Kunde inte öppna dokumentet: " + err.message);
+      }
+    }
+
     function buildDocumentUrl(sourcePath) {
       if (!sourcePath) return null;
       // source_path kan vara absolut eller relativ.
@@ -627,6 +721,15 @@
             link.rel = "noopener";
             link.title = "Öppna originaldokument";
             link.textContent = s.metadata.file_name || "(okänd fil)";
+            // Hämtas med fetch så att Authorization kan sättas. href
+            // behålls för att länken ska se ut och kännas som en länk
+            // — högerklick och "kopiera adress" fungerar fortfarande,
+            // och utan autentisering är den direkt användbar.
+            link.addEventListener("click", (ev) => {
+              if (!getToken()) return;   // ingen token: låt href gälla
+              ev.preventDefault();
+              openDocument(docUrl, s.metadata.file_name);
+            });
             filename.appendChild(link);
           } else {
             filename.textContent = s.metadata.file_name || "(okänd fil)";
@@ -750,9 +853,19 @@
 
         const res = await fetch("/chat", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: authHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify(payload),
         });
+
+        if (res.status === 401) {
+          removeLoading();
+          handleUnauthorized();
+          addAssistantMessage(
+            "Servern kräver autentisering. Ange din token och ställ frågan igen.",
+            null, null
+          );
+          return;
+        }
 
         const data = await res.json();
         removeLoading();
@@ -772,6 +885,7 @@
       }
     });
 
+    checkAuth();
     questionInput.focus();
   </script>
 </body>
