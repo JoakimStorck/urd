@@ -527,6 +527,121 @@ def format_resolution(res: DocumentResolution) -> str:
     return "\n".join(lines)
 
 
+class TermCoverage(BaseModel):
+    """
+    Avståndet mellan hur ofta en term FÖREKOMMER i beståndet och hur
+    ofta uttaget fått ut en observation ur den. Nivå: bestånd.
+    """
+    level: Literal["corpus"] = "corpus"
+    term: str
+    text_occurrences: int
+    documents_with_text: int
+    observations: int
+    documents_with_observations: int
+    per_kind: dict[str, int]
+    # Dokument där termen står i texten men inget uttag skett. Detta är
+    # den handlingsbara listan — allt annat är sammanfattning.
+    documents_without_observations: list[str]
+
+
+def term_coverage(
+    term: str,
+    store: ChunkSource,
+    conn=None,
+) -> TermCoverage:
+    """
+    Mät uttagets täckning för en term.
+
+    VARFÖR DETTA BEHÖVS. Beläggningsmodellen räknar hur ofta något
+    skrivits, men säger ingenting om hur mycket som skrevs och inte
+    fångades. Uppmätt 2026-08-18: "studierektor" står i 222
+    textförekomster i 60 dokument, medan Attest har 16
+    identitetsobservationer i 13. Utan det måttet gick det inte att
+    skilja "beståndet säger inget om saken" från "uttaget missade
+    det", och det är två helt olika fel med två helt olika åtgärder.
+
+    Ett stort avstånd är INTE i sig ett fel. Delegations- och
+    handläggningsordningar nämner roller generiskt — "studierektor
+    beslutar om…" — vilket är agens, inte identitet. Måttet pekar ut
+    var man ska titta, det dömer inte.
+
+    Termen matchas som ordprefix, så att böjningar och bestämd form
+    räknas med. Sammansättningar där termen är efterled
+    (forskarstudierektor) räknas inte, av samma skäl som uppslaget
+    kräver avslutande ordföljd: de är andra ord.
+    """
+    pattern = re.compile(rf"\b{re.escape(term)}\w*", re.IGNORECASE)
+
+    text_occurrences = 0
+    docs_with_text: set[str] = set()
+    for chunk in store.iter_all_chunks():
+        found = len(pattern.findall(chunk.text))
+        if found:
+            text_occurrences += found
+            docs_with_text.add(chunk.metadata.source_path)
+
+    observations = 0
+    docs_with_obs: set[str] = set()
+    per_kind: dict[str, int] = {}
+    own_conn = conn is None
+    try:
+        if own_conn:
+            from app import attest
+            conn = attest.connect()
+        # Positionsindex, inte namn: anropare kan skicka en anslutning
+        # utan sqlite3.Row som radfabrik. Attest sätter den per
+        # uppslagsfunktion, inte på anslutningen.
+        rows = conn.execute(
+            "SELECT kind, source_path FROM observations"
+            " WHERE subject_key LIKE ? OR object_key LIKE ?",
+            (f"%{term.lower()}%", f"%{term.lower()}%"),
+        ).fetchall()
+        for kind, source_path in rows:
+            observations += 1
+            docs_with_obs.add(source_path)
+            per_kind[kind] = per_kind.get(kind, 0) + 1
+    finally:
+        if own_conn and conn is not None:
+            conn.close()
+
+    return TermCoverage(
+        term=term,
+        text_occurrences=text_occurrences,
+        documents_with_text=len(docs_with_text),
+        observations=observations,
+        documents_with_observations=len(docs_with_obs),
+        per_kind=dict(sorted(per_kind.items(), key=lambda x: -x[1])),
+        documents_without_observations=sorted(docs_with_text - docs_with_obs),
+    )
+
+
+def format_term_coverage(cov: TermCoverage) -> str:
+    lines = [
+        f"Täckning för {cov.term!r}",
+        "",
+        f"  I texten:        {cov.text_occurrences} förekomster"
+        f" i {cov.documents_with_text} dokument",
+        f"  I Attest:        {cov.observations} observationer"
+        f" i {cov.documents_with_observations} dokument",
+    ]
+    if cov.per_kind:
+        delar = ", ".join(f"{k} {n}" for k, n in cov.per_kind.items())
+        lines.append(f"  Per dragtyp:     {delar}")
+    saknas = len(cov.documents_without_observations)
+    lines.append(f"  Utan uttag:      {saknas} dokument")
+    for path in cov.documents_without_observations[:15]:
+        lines.append(f"      {path.rsplit('/', 1)[-1]}")
+    if saknas > 15:
+        lines.append(f"      ... och {saknas - 15} till")
+    lines += [
+        "",
+        "  Ett stort avstånd är inte i sig ett fel: generiska omnämnanden",
+        "  ('studierektor beslutar om...') är agens, inte identitet.",
+        "  Måttet pekar ut var man ska titta.",
+    ]
+    return "\n".join(lines)
+
+
 def format_document_report(report: DocumentReport) -> str:
     i, c = report.identity, report.counts
     lines = [

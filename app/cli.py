@@ -924,6 +924,34 @@ def attest_sample(
 
 
 @app.command(
+    "attest-coverage",
+    help="Mät uttagets täckning för en term: textförekomster mot observationer.",
+)
+def attest_coverage(
+    term: str = typer.Argument(..., help="Term att mäta, t.ex. studierektor"),
+) -> None:
+    from app import attest, inspect as ins
+
+    try:
+        store = _build_store_only()
+    except Exception as exc:
+        if _is_qdrant_lock_error(exc):
+            raise StorageLockedError() from exc
+        raise
+
+    conn = attest.connect()
+    try:
+        cov = ins.term_coverage(term, store, conn=conn)
+    finally:
+        conn.close()
+
+    typer.echo(ins.format_term_coverage(cov))
+    # Grep-konventionen: 1 = inget att rapportera, inte ett fel.
+    if cov.text_occurrences == 0:
+        raise typer.Exit(code=1)
+
+
+@app.command(
     "attest-lookup",
     help="Slå upp vad beståndet belägger om en term.",
 )
