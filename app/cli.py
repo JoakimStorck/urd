@@ -23,6 +23,8 @@ import uvicorn
 # "Extraction failed", som är exakt den rad som förklarar varför
 # ett dokument saknas i indexet. Konfigurera bara om ingen handler
 # redan finns, och dämpa pratiga tredjepartsbibliotek.
+logger = logging.getLogger(__name__)
+
 if not logging.getLogger().handlers:
     logging.basicConfig(
         level=logging.INFO,
@@ -176,6 +178,76 @@ def _print_response(
         typer.echo(json.dumps(response.debug, ensure_ascii=False, indent=2))
 
 
+def _check_bind_safety(host: str, insecure: bool, tls: bool) -> None:
+    """
+    Vägra exponera beståndet av misstag.
+
+    DETTA ÄR SYSTEMETS ENDA REALISTISKA KATASTROF. Allt annat i
+    hotbilden förutsätter att någon aktivt angriper; det här kräver
+    bara att någon provar --host 0.0.0.0 en gång för att se om
+    klientläget fungerar. I det ögonblicket är 235 dokument med
+    protokoll och personalärenden läsbara för alla som når porten,
+    utan inloggning och utan att det loggas.
+
+    En varning räcker inte. Varningar rullar förbi i en startlogg och
+    servern startar ändå. Vägran gör exponeringen till en medveten
+    handling: den som verkligen vill köra oskyddat skriver --insecure
+    och kan inte påstå att hen inte visste.
+
+    Loopback är alltid tillåtet utan autentisering — det är en
+    enanvändarmaskin där ingen åtkomstmodell är meningsfull.
+    """
+    from app import auth
+
+    if auth.is_loopback(host):
+        return
+
+    if insecure:
+        # Medvetet oskyddat. Sägs högt varje gång, så att det inte blir
+        # ett vanemässigt tillägg i ett startskript som ingen minns.
+        logger.warning(
+            "OSKYDDAD DRIFT: bunden till %s utan autentisering (--insecure). "
+            "Hela dokumentbeståndet är läsbart för alla som når porten.",
+            host,
+        )
+        return
+
+    if not settings.auth_enabled:
+        typer.echo("", err=True)
+        typer.echo(
+            f"VÄGRAR STARTA: bindning till {host} utan autentisering.",
+            err=True,
+        )
+        typer.echo("", err=True)
+        typer.echo(
+            "  Servern skulle vara nåbar från nätverket, och hela\n"
+            "  dokumentbeståndet läsbart utan inloggning.",
+            err=True,
+        )
+        typer.echo("", err=True)
+        typer.echo("  Slå på autentisering:", err=True)
+        typer.echo("      urd auth add <namn>", err=True)
+        typer.echo("      urd config set auth_enabled true", err=True)
+        typer.echo("", err=True)
+        typer.echo(
+            "  Eller, om beståndet bevisligen inte är känsligt:", err=True
+        )
+        typer.echo(f"      urd serve --host {host} --insecure", err=True)
+        typer.echo("", err=True)
+        raise typer.Exit(code=2)
+
+    # Autentisering finns, men trafiken kan vara okrypterad. Här räcker
+    # en varning: uppgiften är skyddad mot obehörig ÅTKOMST, och det
+    # som återstår är avlyssning på det egna nätet.
+    if not tls:
+        logger.warning(
+            "TLS saknas: frågor och svar går i klartext till %s. "
+            "Ange --ssl-certfile och --ssl-keyfile för krypterad "
+            "förbindelse.",
+            host,
+        )
+
+
 @app.command(
     "serve",
     help="Starta lokal API-server för dokumentchatten.",
@@ -188,10 +260,18 @@ def serve(
         "--autoreload/--no-autoreload",
         help="Ladda om servern automatiskt vid kodändringar.",
     ),
+    insecure: bool = typer.Option(
+        False,
+        "--insecure",
+        help="Tillåt bindning utanför loopback utan autentisering.",
+    ),
+    ssl_certfile: str = typer.Option(None, help="Certifikat för TLS."),
+    ssl_keyfile: str = typer.Option(None, help="Privat nyckel för TLS."),
 ) -> None:
     """
     Starta den lokala backend-servern för API och webbgränssnitt.
     """
+    _check_bind_safety(host, insecure, bool(ssl_certfile))
     # PID-fil så att 'urd stop' kan avsluta servern kontrollerat.
     #
     # PID-fil hellre än en shutdown-endpoint: en HTTP-väg som dödar
@@ -209,7 +289,14 @@ def serve(
         logger.warning("Kunde inte skriva %s (%s).", pid_file, e)
 
     try:
-        uvicorn.run("app.api:app", host=host, port=port, reload=autoreload)
+        uvicorn.run(
+            "app.api:app",
+            host=host,
+            port=port,
+            reload=autoreload,
+            ssl_certfile=ssl_certfile,
+            ssl_keyfile=ssl_keyfile,
+        )
     finally:
         try:
             if pid_file.exists() and pid_file.read_text(
@@ -286,6 +373,10 @@ def connect(
         help="Upstream-server, t.ex. pop-os:8000 eller http://100.96.76.110:8000",
     ),
     host: str = typer.Option("127.0.0.1", help="Host för den lokala klienten."),
+    token: str = typer.Option(
+        None,
+        help="Token för autentisering mot servern (fås av 'urd auth add').",
+    ),
     port: int = typer.Option(8765, help="Port för den lokala klienten."),
     autoreload: bool = typer.Option(
         False,
@@ -318,6 +409,12 @@ def connect(
         upstream = "http://" + upstream
 
     os.environ["URD_UPSTREAM_SERVER"] = upstream
+    # Klientens EGEN token, för det fall webbläsaren inte skickar
+    # någon. Den är en bekvämlighet för enanvändarfallet — proxyn
+    # vidarebefordrar alltid webbläsarens Authorization när det finns,
+    # så att principalen förblir användaren och inte klienten.
+    if token:
+        os.environ["URD_UPSTREAM_TOKEN"] = token
 
     typer.echo(f"Ansluter till URD-server: {upstream}")
     typer.echo(f"Lokal klient startas på: http://{host}:{port}")
@@ -926,6 +1023,116 @@ def attest_sample(
         "räkna precision per konstruktion. Under 90 % bör konstruktionen\n"
         "strykas ur uttaget — bedömning på stickprov, inte på intryck."
     )
+
+
+@app.command(
+    "auth",
+    help="Hantera användare och tokens (add, list, remove).",
+)
+def auth_cmd(
+    action: str = typer.Argument(..., help="add | list | remove"),
+    name: str = typer.Argument(None, help="Användarnamn"),
+    group: list[str] = typer.Option(
+        None, "--group", "-g", help="Grupptillhörighet (kan upprepas)."
+    ),
+) -> None:
+    """
+    Lägg upp, visa och ta bort användare.
+
+    Token visas EN gång vid skapandet och lagras bara som sha256.
+    Tappas den bort skapas en ny — den kan inte återskapas ur filen.
+    """
+    from app import auth as A
+    import yaml as _yaml
+
+    path = settings.users_path
+    store = A.load_users(path)
+    for fel in store.errors:
+        typer.echo(f"Varning: {fel}", err=True)
+
+    def _läs_rå() -> list[dict]:
+        if not path.exists():
+            return []
+        data = _yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return list(data.get("users") or [])
+
+    def _skriv(users: list[dict]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            _yaml.safe_dump({"users": users}, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        # Filen bär hashade tokens, men den avslöjar vilka användare
+        # som finns och vilka grupper de har. Läsbar bara för ägaren.
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+
+    if action == "list":
+        users = _läs_rå()
+        if not users:
+            typer.echo(f"Inga användare i {path}.")
+            raise typer.Exit(code=1)
+        typer.echo(f"{len(users)} användare i {path}:")
+        for u in users:
+            grupper = ", ".join(u.get("groups") or []) or "(inga grupper)"
+            typer.echo(f"  {u.get('name')}  [{grupper}]")
+        return
+
+    if not name:
+        typer.echo("Ange ett namn.", err=True)
+        raise typer.Exit(code=2)
+
+    users = _läs_rå()
+
+    if action == "remove":
+        kvar = [u for u in users if u.get("name") != name]
+        if len(kvar) == len(users):
+            typer.echo(f"Ingen användare {name!r}.", err=True)
+            raise typer.Exit(code=1)
+        _skriv(kvar)
+        typer.echo(f"Tog bort {name!r}. Servern måste startas om.")
+        return
+
+    if action != "add":
+        typer.echo(f"Okänd åtgärd {action!r}. Använd add, list eller remove.", err=True)
+        raise typer.Exit(code=2)
+
+    if any(u.get("name") == name for u in users):
+        typer.echo(f"{name!r} finns redan. Ta bort först, eller välj annat namn.", err=True)
+        raise typer.Exit(code=2)
+
+    grupper = list(group or [settings.default_access_group])
+    if A.UNRESTRICTED in grupper:
+        typer.echo(
+            f"Gruppen {A.UNRESTRICTED!r} är reserverad för lokal drift "
+            "och kan inte tilldelas.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    token = A.generate_token()
+    users.append({
+        "name": name,
+        "token_sha256": A.hash_token(token),
+        "groups": grupper,
+    })
+    _skriv(users)
+
+    typer.echo("")
+    typer.echo(f"Användare {name!r} skapad, grupper: {', '.join(grupper)}")
+    typer.echo("")
+    typer.echo("  TOKEN (visas bara denna gång):")
+    typer.echo(f"      {token}")
+    typer.echo("")
+    typer.echo("  Klienten använder den så här:")
+    typer.echo(f"      urd connect --server <värd>:8000 --token {token}")
+    typer.echo("")
+    if not settings.auth_enabled:
+        typer.echo("  Autentisering är ännu AVSTÄNGD. Slå på med:", err=True)
+        typer.echo("      urd config set auth_enabled true", err=True)
+        typer.echo("")
 
 
 @app.command(

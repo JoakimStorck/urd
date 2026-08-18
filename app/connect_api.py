@@ -45,6 +45,13 @@ def _proxy_headers(req: "Request | None" = None) -> dict[str, str]:
         värde = req.headers.get("authorization")
         if värde:
             headers["Authorization"] = värde
+            return headers
+    # Fallback: klientens egen token från --token. Används bara när
+    # anroparen inte bar någon, alltså i enanvändarfallet där
+    # webbläsaren inte har något att skicka.
+    egen = os.getenv("URD_UPSTREAM_TOKEN")
+    if egen:
+        headers["Authorization"] = f"Bearer {egen}"
     return headers
 
 
