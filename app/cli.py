@@ -616,17 +616,27 @@ def ingest(
             "Ej indexerade dokument försöks om automatiskt vid nästa 'urd ingest'."
         )
 
-    # Om servern körs, uppdatera BM25-indexet
-    if total_docs > 0 and _server_is_available("http://127.0.0.1:8000"):
-        try:
-            resp = requests.post("http://127.0.0.1:8000/refresh", timeout=30)
-            if resp.ok:
-                data = resp.json()
-                typer.echo(f"Serverns sökindex uppdaterat ({data.get('num_chunks', '?')} chunkar).")
-            else:
-                typer.echo("Varning: kunde inte uppdatera serverns sökindex.")
-        except Exception:
-            typer.echo("Varning: kunde inte nå servern för indexuppdatering.")
+    # Servern måste startas om för att se det nya innehållet.
+    #
+    # Här låg tidigare ett anrop till /refresh, villkorat på att
+    # servern kördes. DET VILLKORET KAN ALDRIG VARA SANT: ingest
+    # bygger sitt lager långt tidigare i funktionen, och inbäddad
+    # Qdrant släpper in en process i taget — kör servern avbryts
+    # kommandot med StorageLockedError innan det når hit.
+    #
+    # Blocket var alltså oåtkomlig kod som SÅG ut som en mekanism, och
+    # det dolde dessutom ett fel i endpointens returtyp i så lång tid
+    # att ingen märkte det. Rätt arbetsgång är stopp, ingest, start —
+    # och vid start byggs BM25-indexet ändå från Qdrant.
+    #
+    # /refresh finns kvar som endpoint. Den blir meningsfull den dag
+    # skrivoperationerna flyttar till servern, precis som
+    # samtalslogiken redan gjort.
+    if total_docs > 0 and (Path(".urd") / "server.pid").exists():
+        typer.echo("")
+        typer.echo(
+            "Starta servern igen så att sökindexet byggs om: urd serve"
+        )
 
 
 @app.command(
@@ -2179,7 +2189,15 @@ def main() -> None:
     except StorageLockedError as e:
         typer.echo("")
         typer.echo(str(e))
-        raise typer.Exit(code=1)
+        # SystemExit och inte typer.Exit, och utan orsakskedja.
+        #
+        # typer.Exit fångas av click INNE i kommandokörningen; här är
+        # vi utanför den, så den propagerade som ett vanligt undantag
+        # och skrev ut både det ursprungliga tracebacket och sitt eget
+        # — under det vänliga meddelande som fanns till för att
+        # ersätta dem. "from None" bryter kedjan, SystemExit avslutar
+        # tyst.
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":
