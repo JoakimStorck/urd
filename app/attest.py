@@ -612,16 +612,129 @@ def _rows_to_candidates(rows) -> list[Candidate]:
     return out
 
 
-def lookup_subject(conn, term: str, kind: str = "identitet") -> list[Candidate]:
+# Markörer som inleder en rollavgränsning. SAMMA MÄNGD som
+# grammar._SCOPE_MARKS, avsiktligt: frågan och källan ska beskrivas på
+# samma sätt, annars matchar de aldrig varandra.
+SCOPE_MARKS = {"för", "inom", "vid"}
+
+# Sluten klass av ord som aldrig är en avgränsning trots att de följer
+# en markör. "ansvarar FÖR ATT budget upprättas" är en bisats, inte en
+# rollavgränsning.
+_SCOPE_NONWORDS = {
+    "att", "den", "det", "de", "denna", "detta", "dessa", "sin", "sitt",
+    "sina", "alla", "varje", "vem", "vad", "vilka", "vilken", "vilket",
+}
+
+
+def scope_terms(text: str) -> list[str]:
+    """
+    Avgränsningsord i en fråga: innehållsorden efter för/inom/vid.
+
+    "studierektor för grundutbildningen vid IIT" ger
+    ["grundutbildningen", "iit"]. Uttaget är medvetet grovt — det ska
+    hitta KANDIDATER till avgränsning, och matchningen mot lagrade
+    scopes avgör sedan.
+    """
+    words = re.findall(r"[\wÅÄÖåäö-]+", text.lower())
+    out: list[str] = []
+    for i, w in enumerate(words[:-1]):
+        if w in SCOPE_MARKS:
+            nxt = words[i + 1]
+            if len(nxt) >= 3 and nxt not in SCOPE_MARKS and nxt not in _SCOPE_NONWORDS:
+                out.append(nxt)
+    return out
+
+
+def _scope_compatible(candidate: Candidate, wanted: list[str]) -> bool:
+    """
+    Är kandidatens avgränsning förenlig med den frågan efterfrågar?
+
+    TRE UTFALL, OCH DET MITTERSTA ÄR POÄNGEN:
+
+      matchar        studierektor FÖR grundutbildningen  -> ja
+      annan          studierektor FÖR forskarutbildning  -> NEJ
+      ingen alls     studierektor (texten anger ingen)   -> ja
+
+    Att en observation saknar scope betyder att TEXTEN inte angav
+    någon, inte att rollen är oavgränsad. Frånvaro av uppgift är inte
+    en motsägelse, och samma princip styr korpuskontrollen: systemet
+    jämför belägg det faktiskt har, och avstår från att sluta sig till
+    något ur en lucka.
+
+    Att en observation har en ANNAN avgränsning är däremot en verklig
+    oförenlighet. Elva programansvariga ansvarar för elva olika
+    program, och studierektor för grundutbildningen är inte
+    studierektor för forskarutbildningen.
+    """
+    if not wanted:
+        return True
+    if not candidate.scopes:
+        return True
+    for scope in candidate.scopes:
+        for word in re.findall(r"[\wÅÄÖåäö-]+", scope.lower()):
+            for w in wanted:
+                if word == w or is_inflection_of(word, w) or is_inflection_of(w, word):
+                    return True
+    return False
+
+
+def lookup_subject(
+    conn, term: str, kind: str = "identitet", scope: list[str] | None = None
+) -> list[Candidate]:
     """Vilka objekt binds till detta subjekt? ('Vad är X?')"""
     rows = _match(conn, "subject_key", term, kind)
-    return _rows_to_candidates(rows)
+    return _filter_scope(_rows_to_candidates(rows), scope)
 
 
-def lookup_object(conn, term: str, kind: str = "identitet") -> list[Candidate]:
-    """Vilka subjekt binds till detta objekt? ('Vem är X?')"""
+def lookup_object(
+    conn, term: str, kind: str = "identitet", scope: list[str] | None = None
+) -> list[Candidate]:
+    """
+    Vilka subjekt binds till detta objekt? ('Vem är X?')
+
+    scope avgränsar uppslaget: ["grundutbildningen"] utesluter
+    bindningar som texten uttryckligen knutit till något annat, men
+    behåller dem som saknar avgränsning. Se _scope_compatible.
+    """
     rows = _match(conn, "object_key", term, kind)
-    return _rows_to_candidates(rows)
+    return _filter_scope(_rows_to_candidates(rows), scope)
+
+
+def _scope_word_matches(candidate: Candidate, word: str) -> bool:
+    for scope in candidate.scopes:
+        for w in re.findall(r"[\wÅÄÖåäö-]+", scope.lower()):
+            if w == word or is_inflection_of(w, word) or is_inflection_of(word, w):
+                return True
+    return False
+
+
+def _filter_scope(
+    candidates: list[Candidate], wanted: list[str] | None
+) -> list[Candidate]:
+    """
+    EN SKILLNAD FILTRERAR BARA NÄR BESTÅNDET GÖR DEN.
+
+    Frågan "vem är proprefekt vid IIT" ger avgränsningsordet "iit",
+    men i ett bestånd från en enda institution är organisationen
+    konstant: ingen bindning skiljs från en annan av den, medan ordet
+    däremot kan utesluta varje bindning vars text råkar stava ut
+    institutionsnamnet i stället för förkortningen. Ett
+    avgränsningsord som inte motsvarar någon lagrad avgränsning bär
+    alltså ingen information och får inte fälla något.
+
+    Regeln är generell och kräver ingen lista över organisationer:
+    orden prövas mot kandidaternas faktiska scopes, och bara de som
+    träffar minst en får filtrera.
+    """
+    if not wanted:
+        return candidates
+    discriminating = [
+        w for w in wanted
+        if any(_scope_word_matches(c, w) for c in candidates)
+    ]
+    if not discriminating:
+        return candidates
+    return [c for c in candidates if _scope_compatible(c, discriminating)]
 
 
 def _matches_terms(value: str, key: str) -> bool:

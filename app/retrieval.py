@@ -1895,6 +1895,21 @@ class RagService:
             if len(w) >= 4 and w not in _QUESTION_STOPWORDS
         ]
 
+        # AVGRÄNSNINGEN HÖR TILL FRÅGAN. "Studierektor för
+        # grundutbildningen" är inte samma uppdrag som "studierektor
+        # för forskarutbildningen", och ett uppslag på bara rollordet
+        # blandar ihop dem. Uppmätt 2026-08-18: frågan om
+        # grundutbildningen besvarades med forskarutbildningens
+        # studierektorer.
+        #
+        # Avgränsningsorden är också kandidattermer i sig
+        # ("grundutbildningen" kan vara ett objekt någon annanstans),
+        # men de ska inte söka på egen hand här — då återinförs samma
+        # sammanblandning från andra hållet.
+        wanted_scope = attest.scope_terms(question)
+        terms = [t for t in terms if t not in wanted_scope]
+        debug["scope"] = wanted_scope
+
         # Sökväg -> kandidatens relevans. Den bäst belagda bindningen
         # vinner om samma dokument bär flera.
         # Uppslaget går åt BÅDA HÅLLEN.
@@ -1919,7 +1934,7 @@ class RagService:
 
         for term, lookup_fn in lookups:
             try:
-                cands = lookup_fn(conn, term)
+                cands = lookup_fn(conn, term, scope=wanted_scope)
             except Exception:
                 continue
             if not cands:
