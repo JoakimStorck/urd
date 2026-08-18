@@ -64,11 +64,94 @@ def _short_document_label(path: str) -> str:
     return decoded
 
 
+def probe_upstream(upstream: str, token: str | None) -> list[str]:
+    """
+    Pröva förbindelsen och rapportera vad som faktiskt gäller.
+
+    KLIENTEN SADE TIDIGARE BARA VILKEN ADRESS DEN TÄNKTE ANVÄNDA.
+    Om servern inte fanns, porten var fel eller tokenen saknades
+    upptäcktes det först när en fråga misslyckades i webbläsaren — och
+    då som "kunde inte nå servern", vilket inte skiljer en glömd port
+    från en avstängd server från en ogiltig token.
+
+    Tre fel med tre olika åtgärder, och den som kopplar upp sig ska få
+    veta vilket det är innan hen börjar arbeta. Sonderingen kostar en
+    förfrågan mot /health, som är öppen just för att kunna besvara
+    frågan "lever du, och kräver du token?" innan man har någon.
+
+    Sonderingen FÄLLER INTE starten. Servern kan vara nere tillfälligt,
+    och en klient som vägrar starta då är svårare att arbeta med än en
+    som säger vad den ser.
+    """
+    rader: list[str] = []
+    try:
+        resp = requests.get(f"{upstream}/health", timeout=5)
+    except requests.RequestException as e:
+        rader.append(f"Servern svarar inte på {upstream} ({type(e).__name__}).")
+        if ":" not in upstream.split("//", 1)[-1]:
+            # Vanligaste misstaget: porten glöms, och adressen blir
+            # port 80 utan att någon säger det.
+            rader.append(
+                "  Ingen port angiven — då används 80. URD lyssnar "
+                "normalt på 8000, alltså: --server VÄRD:8000"
+            )
+        rader.append(
+            "  Kontrollera också att servern startats med en bindning "
+            "som når nätverket: urd serve --host 0.0.0.0"
+        )
+        return rader
+
+    if not resp.ok:
+        rader.append(f"Servern på {upstream} svarade {resp.status_code}.")
+        return rader
+
+    try:
+        data = resp.json()
+    except ValueError:
+        rader.append(f"Servern på {upstream} svarade, men inte med JSON.")
+        return rader
+
+    krävs = bool(data.get("auth_required"))
+    rader.append(f"Servern svarar. Autentisering: {'krävs' if krävs else 'av'}.")
+
+    if not krävs:
+        if token:
+            rader.append("  Token angiven men behövs inte; den skickas ändå.")
+        return rader
+
+    if not token:
+        rader.append(
+            "  INGEN TOKEN ANGIVEN. Webbläsaren kommer att fråga efter en."
+        )
+        rader.append("  Ange --token för att slippa det.")
+        return rader
+
+    # Token finns — pröva att den duger, så att felet inte dyker upp
+    # först vid första frågan.
+    try:
+        r2 = requests.post(
+            f"{upstream}/chat",
+            json={"question": "urd connect kontrollerar förbindelsen"},
+            headers={"Authorization": f"Bearer {token}",
+                     "Content-Type": "application/json"},
+            timeout=10,
+        )
+        if r2.status_code == 401:
+            rader.append("  TOKEN AVVISAD av servern. Kontrollera värdet.")
+        else:
+            rader.append("  Token accepterad.")
+    except requests.RequestException:
+        rader.append("  Kunde inte pröva tokenen; servern svarade inte i tid.")
+    return rader
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     upstream = _get_upstream_base_url()
     logger.info("URD connect startad")
     logger.info("Upstream-server: %s", upstream)
+    for rad in probe_upstream(upstream, os.getenv("URD_UPSTREAM_TOKEN")):
+        logger.info("%s", rad)
 
 
 @app.get("/")

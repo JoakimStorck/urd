@@ -407,6 +407,12 @@ def connect(
       urd connect
     """
     upstream = (server or settings.server or "").strip()
+    # Porten glöms lätt, och utan den blir adressen port 80 — vilket
+    # ser ut som att servern är nere. URD lyssnar normalt på 8000, så
+    # en adress utan port får den porten i stället för att tyst bli
+    # fel. Uttryckligt ":80" respekteras.
+    if upstream and ":" not in upstream.rsplit("/", 1)[-1]:
+        upstream = f"{upstream}:8000"
     if not upstream:
         typer.echo(
             "Ingen server är angiven.\n"
