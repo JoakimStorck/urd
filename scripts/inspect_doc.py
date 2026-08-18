@@ -13,7 +13,7 @@ Körs från projektroten med URD-servern AVSTÄNGD (inbäddad Qdrant
 tillåter bara en process):
 
     python -m scripts.inspect_doc "reviderad rutin för beslut"
-    python -m scripts.inspect_doc "reviderad rutin" --full
+    python -m scripts.inspect_doc "reviderad rutin" --chunks
     python -m scripts.inspect_doc "reviderad rutin" --evidence
     python -m scripts.inspect_doc "anstallningsordning" --sections
     python -m scripts.inspect_doc "reviderad rutin" \
@@ -60,7 +60,13 @@ def main() -> None:
     )
     parser.add_argument("pattern", help="Substräng av filnamn eller sökväg (case-okänslig, NFC-normaliserad)")
     parser.add_argument("--question", help="Kör retrievaldiagnos mot denna fråga")
-    parser.add_argument("--full", action="store_true", help="Visa chunktexter i sin helhet (annars 300 tecken)")
+    # VOKABULÄREN ÄR GEMENSAM. Flaggan hette --full medan operationen
+    # tar parametern chunks — samma sak, två namn, i samma kodbas.
+    # Fyra ytor ska så småningom bära samma ord (skript, CLI, HTTP,
+    # interaktivt läge), och driften börjar alltid så här.
+    # --full behålls som odokumenterat alias.
+    parser.add_argument("--chunks", "--full", dest="chunks", action="store_true",
+                        help="Visa chunktexter i sin helhet (annars 300 tecken)")
     parser.add_argument("--evidence", action="store_true", help="Visa även evidensobjekt för dokumentet")
     parser.add_argument(
         "--attest",
@@ -109,11 +115,11 @@ def main() -> None:
         )
         if report is None:
             continue
-        if report.chunks and not args.full:
+        if report.chunks and not args.chunks:
             for ch in report.chunks:
                 if len(ch.text) > 300:
                     ch.text = ch.text[:300] + "..."
-        if report.evidence and not args.full:
+        if report.evidence and not args.chunks:
             for e in report.evidence:
                 if len(e.text) > 300:
                     e.text = e.text[:300] + "..."

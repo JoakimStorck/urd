@@ -6,7 +6,7 @@ Interaktivt läge för URD.
     ...
     urd> Berätta mer.
     ...
-    urd> .avsluta
+    urd> .quit
 
 Motsvarar `python` utan argument: en tolk snarare än ett kommando.
 Skillnaden mot `urd ask` är inte bekvämlighet utan att sessionen LEVER
@@ -30,6 +30,18 @@ dokumentbeståndet. Det gör gränssnittet förutsägbart: ingen fråga kan
 råka tolkas som ett kommando, oavsett hur den formuleras. Samma
 konvention som psql och sqlite3, och den lämnar utrymme för ett
 framtida urd-språk utan att kollidera med naturligt språk.
+
+ENGELSKT GRÄNSSNITT, SVENSKA SVAR. Kommandonamn, flaggor och
+utskrifter är engelska, av samma skäl som CLI:t och API:t är det: ett
+gränssnitt går inte att byta språk på i efterhand utan att bryta
+någons vana eller något skript. SVAREN följer källorna och är svenska
+— verktyget talar engelska, dokumenten talar svenska, och det är två
+olika saker.
+
+Koden och kommentarerna förblir svenska. De bär mätningar och
+motiveringar i domänens egna termer (proprefekt mot prefekt,
+bedömningsgrunder mot arbetsuppgifter), och översatta tappar de sin
+precision.
 """
 
 from __future__ import annotations
@@ -44,23 +56,42 @@ from app.schemas import ChatResponse
 PROMPT = "urd> "
 CONTINUATION = "...  "
 
-BANNER = """URD interaktivt läge. Skriv en fråga, eller .hjälp för kommandon.
-Sessionen lever tills du skriver .ny eller avslutar."""
+BANNER = """URD interactive mode. Type a question, or .help for commands.
+The session lives until you type .new or exit."""
 
-HELP = """Kommandon (allt annat tolkas som en fråga):
+HELP = """Commands (anything else is treated as a question):
 
-  .hjälp            visa detta
-  .status           backend, session, laddade modeller
-  .ny               starta ny session (glömmer samtalshistorik)
-  .källor på|av     visa eller dölj källor i svaren
-  .debug på|av      visa eller dölj teknisk info
-  .attest <term>    slå upp vad beståndet belägger om en roll
-                    (.attest "N.N." --person för uppslag på person)
-  .stopp            avsluta SERVERN (sessionen fortsätter lokalt)
-  .avsluta          avsluta läget (även Ctrl-D)
+  .help             show this
+  .status           backend, session, loaded models
+  .new              start a new session (forgets conversation history)
+  .sources on|off   show or hide sources in answers
+  .debug on|off     show or hide technical detail
+  .attest <term>    look up what the corpus attests about a role
+                    (.attest "N.N." --person to look up a person)
+  .stop             shut down the SERVER (the session continues locally)
+  .quit             leave interactive mode (Ctrl-D also works)
 
-Sessionen behålls mellan frågor: följdfrågor som "berätta mer" och
-"stämmer det?" fungerar som i webbgränssnittet."""
+The session is kept between questions: follow-ups such as "berätta mer"
+and "stämmer det?" work as they do in the web interface.
+
+Questions are answered in the language of the sources — the interface
+is English, the documents are Swedish."""
+
+# Svenska namn behålls som ODOKUMENTERADE alias. De kostar en
+# uppslagstabell och ingen dubblerad logik, och de skyddar
+# muskelminne och befintliga heredoc-skript från att brytas av
+# språkbytet. Att de inte står i HELP är avsiktligt: nya användare ska
+# lära sig ett namn per kommando, inte två.
+#
+# Tas de bort någon gång ska det vara ett beslut, inte en städning —
+# därför denna kommentar.
+_ALIASES = {
+    "hjälp": "help", "hjalp": "help", "h": "help", "?": "help",
+    "ny": "new",
+    "källor": "sources", "kallor": "sources",
+    "stopp": "stop",
+    "avsluta": "quit", "exit": "quit", "q": "quit",
+}
 
 
 class Repl:
@@ -91,8 +122,8 @@ class Repl:
             typer.echo(f"Backend: server ({self.server_url})")
         else:
             typer.echo(
-                "Backend: lokal. Laddar modeller — detta tar en stund och "
-                "sker bara en gång."
+                "Backend: local. Loading models — this takes a moment and "
+                "happens only once."
             )
 
     def _rag_service(self):
@@ -116,13 +147,13 @@ class Repl:
                 )
             except requests.ConnectionError:
                 typer.echo(
-                    f"Tappade kontakten med servern på {self.server_url}. "
-                    "Kör .status när den är uppe igen."
+                    f"Lost contact with the server at {self.server_url}. "
+                    "Run .status once it is back up."
                 )
                 self.use_server = None      # pröva om vid nästa fråga
                 return
             if not resp.ok:
-                typer.echo(f"Serverfel {resp.status_code}: {resp.text[:200]}")
+                typer.echo(f"Server error {resp.status_code}: {resp.text[:200]}")
                 return
             response = ChatResponse.model_validate(resp.json())
             if response.session_id:
@@ -153,8 +184,8 @@ class Repl:
         med servern igång.
         """
         if not args:
-            typer.echo("Ange en term:  .attest proprefekt")
-            typer.echo("Uppslag på person: .attest \"Anna Andersson\" --person")
+            typer.echo("Give a term:  .attest proprefekt")
+            typer.echo("Look up a person: .attest \"F. Lastname\" --person")
             return
 
         by_subject = any(a in ("--person", "--subjekt") for a in args)
@@ -164,24 +195,24 @@ class Repl:
             from app import attest
             conn = attest.connect()
         except Exception as e:
-            typer.echo(f"Attest otillgängligt: {e}")
+            typer.echo(f"Attest unavailable: {e}")
             return
 
         fn = attest.lookup_subject if by_subject else attest.lookup_object
         cands = fn(conn, term)
         if not cands:
-            typer.echo(f"Inga observationer för {term!r}.")
+            typer.echo(f"No observations for {term!r}.")
             return
 
         for c in cands:
-            flag = "  [ENDAST TVETYDIGA]" if c.ambiguous_only else ""
-            avser = f" för {', '.join(c.scopes)}" if c.scopes else ""
+            flag = "  [AMBIGUOUS ONLY]" if c.ambiguous_only else ""
+            avser = f" for {', '.join(c.scopes)}" if c.scopes else ""
             typer.echo(f"  {c.subject} — {c.object}{avser}{flag}")
             typer.echo(
-                f"      relevans {c.relevance:.2f}, {c.documents} dokument, "
+                f"      relevance {c.relevance:.2f}, {c.documents} documents, "
                 f"{c.first_date or '?'} – {c.last_date or '?'}"
             )
-        typer.echo("  (beläggning, inte sanning)")
+        typer.echo("  (attestation, not truth)")
 
     # -- kommandon ---------------------------------------------------
 
@@ -191,11 +222,12 @@ class Repl:
         if not parts:
             return True
         cmd, args = parts[0].lower(), parts[1:]
+        cmd = _ALIASES.get(cmd, cmd)
 
-        if cmd in ("avsluta", "quit", "exit", "q"):
+        if cmd == "quit":
             return False
 
-        if cmd in ("stopp", "stop"):
+        if cmd == "stop":
             # Avslutar SERVERN, inte sessionen. Namnet är avsiktligt
             # skilt från .avsluta för att skillnaden ska synas.
             import subprocess
@@ -203,35 +235,35 @@ class Repl:
             self.use_server = None
             return True
 
-        if cmd in ("hjälp", "hjalp", "help", "h", "?"):
+        if cmd == "help":
             typer.echo(HELP)
 
-        elif cmd in ("ny", "new"):
+        elif cmd == "new":
             self.session_id = None
             self.turns = 0
-            typer.echo("Ny session. Samtalshistoriken är glömd.")
+            typer.echo("New session. Conversation history forgotten.")
 
         elif cmd == "attest":
             self._attest(args)
 
         elif cmd == "status":
             backend = {
-                None: "ej avgjord (laddas vid första frågan)",
+                None: "undecided (resolved at first question)",
                 True: f"server ({self.server_url})",
-                False: "lokal",
+                False: "local",
             }[self.use_server]
             typer.echo(f"  backend:  {backend}")
-            typer.echo(f"  session:  {self.session_id or 'ingen ännu'}")
-            typer.echo(f"  turer:    {self.turns}")
-            typer.echo(f"  källor:   {'på' if self.show_sources else 'av'}")
-            typer.echo(f"  debug:    {'på' if self.show_debug else 'av'}")
+            typer.echo(f"  session:  {self.session_id or 'none yet'}")
+            typer.echo(f"  turns:    {self.turns}")
+            typer.echo(f"  sources:  {'on' if self.show_sources else 'off'}")
+            typer.echo(f"  debug:    {'on' if self.show_debug else 'off'}")
             typer.echo(
-                f"  modeller: {'laddade' if self._rag else 'ej laddade'}"
+                f"  models:   {'loaded' if self._rag else 'not loaded'}"
             )
 
-        elif cmd in ("källor", "kallor", "sources"):
+        elif cmd == "sources":
             self.show_sources = _on_off(args, self.show_sources)
-            typer.echo(f"Källor: {'på' if self.show_sources else 'av'}")
+            typer.echo(f"Sources: {'on' if self.show_sources else 'off'}")
 
         elif cmd == "debug":
             self.show_debug = _on_off(args, self.show_debug)
@@ -242,19 +274,24 @@ class Repl:
             for name in ("app.retrieval", "app.api", "app.grammar",
                          "app.predication", "app.attest"):
                 _logging.getLogger(name).setLevel(level)
-            typer.echo(f"Debug: {'på' if self.show_debug else 'av'}")
+            typer.echo(f"Debug: {'on' if self.show_debug else 'off'}")
 
         else:
-            typer.echo(f"Okänt kommando: .{cmd}   (.hjälp visar alla)")
+            typer.echo(f"Unknown command: .{cmd}   (.help lists them all)")
 
         return True
 
 
 def _on_off(args: list[str], current: bool) -> bool:
-    """Tolka 'på'/'av'; utan argument växlas värdet."""
+    """
+    Tolka on/off; utan argument växlas värdet.
+
+    Svenska former behålls av samma skäl som kommandoaliasen: de kostar
+    ingenting och skyddar muskelminne. De dokumenteras inte.
+    """
     if not args:
         return not current
-    return args[0].lower() in ("på", "pa", "on", "true", "ja", "1")
+    return args[0].lower() in ("on", "true", "yes", "1", "på", "pa", "ja")
 
 
 def run(server_url: str, show_sources: bool, show_debug: bool) -> None:
@@ -304,4 +341,4 @@ def run(server_url: str, show_sources: bool, show_debug: bool) -> None:
         except Exception as e:
             typer.echo(f"Fel: {e}")
 
-    typer.echo("Avslutar.")
+    typer.echo("Bye.")
