@@ -9,6 +9,7 @@ import logging
 import math
 import re
 import time
+from dataclasses import dataclass
 
 from app.quiet import quiet_libraries
 
