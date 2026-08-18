@@ -29,10 +29,23 @@ def _get_upstream_base_url() -> str:
     return raw.rstrip("/")
 
 
-def _proxy_headers() -> dict[str, str]:
-    return {
-        "Content-Type": "application/json",
-    }
+def _proxy_headers(req: "Request | None" = None) -> dict[str, str]:
+    """
+    Huvuden till uppströmsservern.
+
+    AUTHORIZATION VIDAREBEFORDRAS OFÖRÄNDRAT. Klientläget är en
+    transport, inte en åtkomstgrind: den som autentiserar sig är
+    användaren mot servern, och klienten ska varken tolka, lagra eller
+    ersätta hens token. Skulle klienten bära en egen hemlighet vore
+    varje användare av samma klientinstans samma principal, och
+    behörighetsmodellen förlorade sitt subjekt.
+    """
+    headers = {"Content-Type": "application/json"}
+    if req is not None:
+        värde = req.headers.get("authorization")
+        if värde:
+            headers["Authorization"] = värde
+    return headers
 
 
 def _short_document_label(path: str) -> str:
@@ -84,7 +97,7 @@ def chat(req: Request, req_body: dict) -> Response:
         resp = requests.post(
             f"{upstream}/chat",
             json=req_body,
-            headers=_proxy_headers(),
+            headers=_proxy_headers(req),
             timeout=300,
         )
     except requests.RequestException as e:
@@ -128,6 +141,7 @@ def get_document(
         resp = requests.get(
             f"{upstream}/document",
             params={"path": path},
+            headers=_proxy_headers(request),
             timeout=300,
             stream=True,
         )

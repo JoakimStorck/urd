@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -9,6 +9,7 @@ from app.config import settings
 from app.config_validation import validate_config_files, format_report_lines
 from app.schemas import ChatRequest, ChatResponse
 from app.retrieval import RagService
+from app import auth
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,60 @@ logger.info(
     settings.llm_num_ctx,
 )
 
+# AUTENTISERING.
+#
+# Användarna läses en gång vid uppstart. Ändringar kräver omstart, och
+# det är avsiktligt i första versionen: en fil som läses om vid varje
+# anrop är en fil som kan bli tom mitt i drift och tyst släppa in
+# alla, eller låsa ute alla. Omstart är en tydligare händelse.
+_users = auth.load_users(settings.users_path)
+for _fel in _users.errors:
+    logger.error("users: %s", _fel)
+
+if settings.auth_enabled:
+    logger.info(
+        "auth: PÅ | %d användare ur %s", _users.loaded, settings.users_path
+    )
+    if not _users.loaded:
+        logger.error(
+            "auth: PÅSLAGEN MEN INGA ANVÄNDARE — varje anrop kommer att "
+            "avvisas. Lägg upp någon med 'urd auth add <namn>'."
+        )
+else:
+    logger.warning(
+        "auth: AV — varje klient som når porten kan läsa hela "
+        "dokumentbeståndet. Ofarligt vid bindning till loopback."
+    )
+
+
+def require_principal(
+    authorization: str | None = Header(default=None),
+) -> auth.Principal:
+    """
+    Identifiera den som frågar.
+
+    Skyddar allt utom /health, som medvetet är öppen: klienten måste
+    kunna se om servern lever och vilket protokoll den talar innan den
+    har något att autentisera sig med. Svaret där innehåller ingen
+    uppgift ur dokumentbeståndet.
+
+    Med autentisering avstängd är principalen LOCAL, som är
+    oavgränsad. Det är rätt för en enanvändarmaskin bunden till
+    loopback, och servern vägrar starta i det läget med en bindning
+    som når nätverket.
+    """
+    if not settings.auth_enabled:
+        return auth.LOCAL
+
+    principal = _users.verify(auth.bearer_token(authorization))
+    if principal is None:
+        # Samma svar oavsett om token saknas eller är okänd: att skilja
+        # dem åt berättar för en angripare vilken av gissningarna som
+        # var nära.
+        raise HTTPException(status_code=401, detail="Ogiltig eller saknad token.")
+    return principal
+
+
 static_dir = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -88,6 +143,9 @@ def index():
 def health() -> dict:
     return {
         "status": "ok",
+        # Klienten behöver veta om den måste autentisera sig innan den
+        # försöker. Uppgiften avslöjar inget om beståndet.
+        "auth_required": settings.auth_enabled,
         "config_files": _config_report.as_dict(),
         # Klienten (och urd connect) ska kunna se vad servern faktiskt
         # kör utan att läsa serverloggen.
@@ -100,14 +158,33 @@ def health() -> dict:
 
 
 @app.post("/refresh")
-def refresh() -> dict[str, int]:
-    """Återbygg BM25-index efter ingest. Anropas av CLI."""
+def refresh(
+    principal: auth.Principal = Depends(require_principal),
+) -> dict:
+    """
+    Återbygg BM25-index efter ingest. Anropas av CLI.
+
+    RETURTYPEN VAR FEL och FastAPI validerar mot den: annoteringen sade
+    dict[str, int] medan svaret bär "status": "ok". Endpointen svarade
+    därför 500 i drift, och CLI:t skrev "Varning: kunde inte uppdatera
+    serverns sökindex" — ett meddelande som ser ut som ett
+    nätverksproblem. Följden var att serverns BM25-index behöll gamla
+    chunkar efter varje ingest tills servern startades om.
+
+    Upptäckt 2026-08-18 när endpointen för första gången anropades i
+    test. Den hade aldrig prövats med en körande server: felet syns
+    inte i importkontroll, inte i py_compile, och CLI:t sväljer det.
+    """
+    logger.info("refresh | principal=%s", principal.name)
     num_chunks = rag.refresh_index()
     return {"status": "ok", "num_chunks": num_chunks}
 
 
 @app.get("/document")
-def get_document(path: str = Query(..., description="Relativ sökväg under docs/")):
+def get_document(
+    path: str = Query(..., description="Relativ sökväg under docs/"),
+    principal: auth.Principal = Depends(require_principal),
+):
     """
     Servera ett originaldokument. Validerar att sökvägen pekar
     in i docs-katalogen för att förhindra path traversal.
@@ -120,11 +197,15 @@ def get_document(path: str = Query(..., description="Relativ sökväg under docs
     if not resolved.is_file():
         raise HTTPException(status_code=404, detail="Dokumentet hittades inte.")
 
+    logger.info("document | principal=%s | %s", principal.name, resolved.name)
     return FileResponse(resolved, filename=resolved.name)
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest) -> ChatResponse:
+def chat(
+    req: ChatRequest,
+    principal: auth.Principal = Depends(require_principal),
+) -> ChatResponse:
     """
     HTTP-lager över RagService.converse.
 
@@ -134,6 +215,16 @@ def chat(req: ChatRequest) -> ChatResponse:
     HTTP. Den här funktionen mappar request till anrop och undantag
     till statuskod; inget mer.
     """
+    # ANSLUTNINGSLOGG. Vem och när, inte vad. Frågeinnehållet kan
+    # avslöja vad en administratör utreder, och att logga det är en
+    # integritetsavvägning som ska beslutas tillsammans med
+    # verksamheten — inte uppstå som en bieffekt av felsökning.
+    logger.info(
+        "chat | principal=%s | session=%s | längd=%d",
+        principal.name,
+        (req.session_id or "ny")[:8],
+        len(req.question),
+    )
     try:
         return rag.converse(req.question, session_id=req.session_id)
     except Exception:
