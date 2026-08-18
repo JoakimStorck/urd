@@ -97,7 +97,16 @@ _ALIASES = {
 class Repl:
     """Tillståndet för en interaktiv session."""
 
-    def __init__(self, server_url: str, show_sources: bool, show_debug: bool):
+    def __init__(
+        self,
+        server_url: str,
+        show_sources: bool,
+        show_debug: bool,
+        note=None,
+    ):
+        # note() skriver statusrader dit de hör: stdout i terminal,
+        # stderr i skriptläge. Default håller äldre anropare fungerande.
+        self.note = note or typer.echo
         self.server_url = server_url.rstrip("/")
         self.show_sources = show_sources
         self.show_debug = show_debug
@@ -119,9 +128,9 @@ class Repl:
             self.use_server = False
 
         if self.use_server:
-            typer.echo(f"Backend: server ({self.server_url})")
+            self.note(f"Backend: server ({self.server_url})")
         else:
-            typer.echo(
+            self.note(
                 "Backend: local. Loading models — this takes a moment and "
                 "happens only once."
             )
@@ -294,8 +303,43 @@ def _on_off(args: list[str], current: bool) -> bool:
     return args[0].lower() in ("on", "true", "yes", "1", "på", "pa", "ja")
 
 
-def run(server_url: str, show_sources: bool, show_debug: bool) -> None:
-    """Kör slingan tills användaren avslutar."""
+def run(server_url: str, show_sources: bool, show_debug: bool) -> int:
+    """
+    Kör slingan tills användaren avslutar. Returnerar exitkod.
+
+    SKRIPTLÄGE NÄR STDIN INTE ÄR EN TERMINAL. Läget är då fortfarande
+    samma tolk, men uppträder som ett filter:
+
+        urd <<'EOF'
+        Vem är proprefekt vid IIT?
+        Berätta mer.
+        EOF
+
+    Skillnaden mot tjugo `urd ask` är att modellerna laddas EN gång och
+    att sessionen lever mellan frågorna — samma skäl som gör läget
+    värt att ha alls.
+
+    Fyra saker skiljer skriptläget från terminalläget:
+
+      - prompt, banner och avsked tystas; input() skriver annars
+        prompten till stdout mitt i utdata
+      - allt som inte är svar går till stderr, så att stdout kan
+        pipas vidare
+      - frågan ekas före svaret, annars blir tio svar omöjliga att
+        para ihop med sina frågor
+      - ett fel sätter exitkod 1
+
+    Maskinläsbar utdata hör INTE hit. Frestelsen är att lägga till ett
+    JSON-läge och köra regressionsfrågor i en heredoc, men då byggs
+    `urd test` om, sämre och utan assertions. Skriptlägets värde är
+    utforskande batcharbete i en varm session.
+    """
+    scripted = not sys.stdin.isatty()
+
+    def note(text: str) -> None:
+        """Statusrader: stderr i skriptläge, stdout i terminal."""
+        typer.echo(text, err=scripted)
+
     try:
         import readline  # noqa: F401  — ger radhistorik och redigering
     except ImportError:
@@ -310,22 +354,28 @@ def run(server_url: str, show_sources: bool, show_debug: bool) -> None:
                   "app.concepts", "app.question_operations"):
         _logging.getLogger(_name).setLevel(_logging.WARNING)
 
-    repl = Repl(server_url, show_sources, show_debug)
-    typer.echo(BANNER)
-    typer.echo("")
+    repl = Repl(server_url, show_sources, show_debug, note=note)
+    if not scripted:
+        typer.echo(BANNER)
+        typer.echo("")
+
+    failed = False
 
     while True:
         try:
-            line = input(PROMPT)
-        except EOFError:              # Ctrl-D
-            typer.echo("")
+            line = input("" if scripted else PROMPT)
+        except EOFError:              # Ctrl-D, eller slut på indata
+            if not scripted:
+                typer.echo("")
             break
         except KeyboardInterrupt:     # Ctrl-C avbryter raden, inte läget
             typer.echo("")
             continue
 
         line = line.strip()
-        if not line:
+        # Tomma rader och #-kommentarer hör till skript. I terminalen
+        # är de ofarliga.
+        if not line or line.startswith("#"):
             continue
 
         if line.startswith("."):
@@ -333,12 +383,20 @@ def run(server_url: str, show_sources: bool, show_debug: bool) -> None:
                 break
             continue
 
+        if scripted:
+            # Utan eko går tio svar inte att para ihop med sina frågor.
+            typer.echo(f"> {line}")
+
         try:
             repl.ask(line)
         except KeyboardInterrupt:
             # Avbrott mitt i en fråga ska inte fälla sessionen.
-            typer.echo("\n(avbruten)")
+            typer.echo("\n(interrupted)")
         except Exception as e:
-            typer.echo(f"Fel: {e}")
+            # I skriptläge är felet ett resultat: stderr och exitkod.
+            typer.echo(f"Error: {e}", err=scripted)
+            failed = True
 
-    typer.echo("Bye.")
+    if not scripted:
+        typer.echo("Bye.")
+    return 1 if failed else 0

@@ -83,7 +83,12 @@ def _root(
     if ctx.invoked_subcommand is not None:
         return
     from app.repl import run
-    run(server_url=server_url, show_sources=sources, show_debug=debug)
+    # Exitkoden bär utfallet i skriptläge (heredoc): 0 om alla frågor
+    # gick igenom, 1 om någon fällde ett fel. I terminalläge är den
+    # alltid 0.
+    code = run(server_url=server_url, show_sources=sources, show_debug=debug)
+    if code:
+        raise typer.Exit(code=code)
 
 
 def _ask_via_server(question: str, base_url: str) -> dict:
