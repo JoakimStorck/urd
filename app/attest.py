@@ -617,6 +617,23 @@ def _rows_to_candidates(rows) -> list[Candidate]:
 # samma sätt, annars matchar de aldrig varandra.
 SCOPE_MARKS = {"för", "inom", "vid"}
 
+# Markörer som räknas som avgränsning I EN FRÅGA. Snävare än
+# SCOPE_MARKS, och revideringen är gjord på mätning:
+#
+# "vid IIT" namnger organisationen, inte uppdragets avgränsning. I ett
+# bestånd från en enda institution skiljer den ingen bindning från en
+# annan, medan ordet kan utesluta varje bindning vars text stavar ut
+# institutionsnamnet i stället för förkortningen. Modellen har
+# dessutom redan en egen relation för organisationstillhörighet
+# (tillhorighet), så att låta "vid" styra rollavgränsning blandar två
+# saker som lagras åtskilt.
+#
+# Uttaget ur KÄLLTEXTEN behåller alla tre markörerna (se
+# grammar._SCOPE_MARKS). Asymmetrin är avsiktlig: en källa som skriver
+# "studierektor vid IIT" har angett något, medan en fråga som skriver
+# "vid IIT" bara säger var vi är.
+_QUESTION_SCOPE_MARKS = {"för", "inom"}
+
 # Sluten klass av ord som aldrig är en avgränsning trots att de följer
 # en markör. "ansvarar FÖR ATT budget upprättas" är en bisats, inte en
 # rollavgränsning.
@@ -638,7 +655,7 @@ def scope_terms(text: str) -> list[str]:
     words = re.findall(r"[\wÅÄÖåäö-]+", text.lower())
     out: list[str] = []
     for i, w in enumerate(words[:-1]):
-        if w in SCOPE_MARKS:
+        if w in _QUESTION_SCOPE_MARKS:
             nxt = words[i + 1]
             if len(nxt) >= 3 and nxt not in SCOPE_MARKS and nxt not in _SCOPE_NONWORDS:
                 out.append(nxt)
@@ -712,29 +729,33 @@ def _filter_scope(
     candidates: list[Candidate], wanted: list[str] | None
 ) -> list[Candidate]:
     """
-    EN SKILLNAD FILTRERAR BARA NÄR BESTÅNDET GÖR DEN.
+    EN SKILLNAD FILTRERAR BARA NÄR BESTÅNDET GÖR DEN — men "gör den"
+    betyder att beståndet avgränsar rollen alls, inte att just den
+    efterfrågade avgränsningen finns.
 
-    Frågan "vem är proprefekt vid IIT" ger avgränsningsordet "iit",
-    men i ett bestånd från en enda institution är organisationen
-    konstant: ingen bindning skiljs från en annan av den, medan ordet
-    däremot kan utesluta varje bindning vars text råkar stava ut
-    institutionsnamnet i stället för förkortningen. Ett
-    avgränsningsord som inte motsvarar någon lagrad avgränsning bär
-    alltså ingen information och får inte fälla något.
+    Skillnaden mättes 2026-08-18. Uppslaget "studierektor" ger två
+    kandidater, båda med UTSKRIVEN avgränsning
+    (forskarutbildningsområdet respektive ett ämne). Frågan gällde
+    grundutbildningen. En tidigare version krävde att
+    avgränsningsordet matchade minst en kandidat för att få filtrera,
+    och lät därför båda passera — vilket besvarade en fråga om
+    grundutbildningen med forskarutbildningens studierektorer.
 
-    Regeln är generell och kräver ingen lista över organisationer:
-    orden prövas mot kandidaternas faktiska scopes, och bara de som
-    träffar minst en får filtrera.
+    Att ingen kandidat matchar är inte brist på information. Det är
+    beskedet att beståndet inte binder den avgränsning frågan gäller,
+    och rätt svar är då inget svar. Villkoret är därför omvänt: bara
+    när INGEN kandidat har någon avgränsning alls avstår filtret.
     """
     if not wanted:
         return candidates
-    discriminating = [
-        w for w in wanted
-        if any(_scope_word_matches(c, w) for c in candidates)
-    ]
-    if not discriminating:
+
+    # Gör beståndet någon avgränsningsskillnad alls för den här rollen?
+    # Har ingen kandidat någon scope kan ordet inte diskriminera, och
+    # då vore uteslutning ren gissning.
+    if not any(c.scopes for c in candidates):
         return candidates
-    return [c for c in candidates if _scope_compatible(c, discriminating)]
+
+    return [c for c in candidates if _scope_compatible(c, wanted)]
 
 
 def _matches_terms(value: str, key: str) -> bool:
