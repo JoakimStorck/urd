@@ -761,6 +761,18 @@ def stats(
         typer.echo(f"Observationer:           {totals['observations']}")
         typer.echo(f"Dokument med belägg:     {cov['documents_with_observations']}")
         typer.echo(f"Dokument utan belägg:    {cov['documents_without_observations']}")
+        dups = attest.duplicates(conn)
+        if dups:
+            # Samma innehåll under flera sökvägar dubblerade beläggning
+            # och reservationer innan räkningen blev innehållsbaserad.
+            # Rapporten pekar ut kopiorna så att beståndet kan städas.
+            typer.echo(
+                f"Dubblettinnehåll:        {len(dups)}"
+                "  (samma fil under flera sökvägar)"
+            )
+            for d in dups:
+                for p in d["paths"]:
+                    typer.echo(f"    {p}")
         if cov["stale_documents"]:
             typer.echo(
                 f"Stale i attest.db:       {len(cov['stale_documents'])}"

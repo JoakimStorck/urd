@@ -408,6 +408,25 @@ def _same_person(a: str, b: str) -> bool:
     return all(any(ends_match(m, x) for x in it) for m in shorter)
 
 
+def _doc_key(row) -> str:
+    """
+    Distinktnyckel för dokumenträkning: innehållet, inte sökvägen.
+
+    Samma fil i två mappar bär samma fingerprint men två source_path,
+    och räknad per sökväg blir den ett belägg som ser ut som två.
+    Uppmätt 2026-08-18: ett översättningspar (parentes:identitet)
+    nådde relevans 0,312 — över reservationsgolvet 0,25 — enbart för
+    att en policyfil låg i två mappar, och fick därmed reservera samma
+    passage två gånger. Ett dokument är sitt innehåll; sökvägen är
+    var det ligger.
+
+    Fallback till source_path när fingerprint saknas: hellre den
+    gamla överräkningen för en enskild rad än att klumpa ihop alla
+    fingerprintlösa rader till ett enda dokument.
+    """
+    return row.get("fingerprint") or row["source_path"]
+
+
 def _locations(rows) -> list[tuple[str, int]]:
     """
     Var bindningen står, starkast belägg först.
@@ -419,6 +438,11 @@ def _locations(rows) -> list[tuple[str, int]]:
     Att ett FÖRSLAG rankas efter en bekräftad tillsättning är samma
     skäl som ger det halv vikt i relevansmodellen: förslaget kan ha
     bifallits utan att namnet upprepades, eller ha fallit.
+
+    Dedupliceringen går på innehåll (_doc_key), inte sökväg: samma fil
+    i två mappar är samma passage, och att reservera båda ger syntesen
+    samma text två gånger. Utåt bärs source_path — _chunks_at slår upp
+    i indexet på sökväg.
     """
     # Stabil sortering, svagaste nyckel först: datum, sedan status,
     # sist tvetydighet — så att tvetydighet väger tyngst.
@@ -426,9 +450,16 @@ def _locations(rows) -> list[tuple[str, int]]:
     ordered.sort(key=lambda r: (1 if r["ambiguous"] else 0,
                                 1 if r["status"] == "föreslagen" else 0))
     out: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
     for r in ordered:
+        if r["chunk_index"] is None:
+            continue
+        key = (_doc_key(r), r["chunk_index"])
+        if key in seen:
+            continue
+        seen.add(key)
         loc = (r["source_path"], r["chunk_index"])
-        if r["chunk_index"] is not None and loc not in out:
+        if loc not in out:
             out.append(loc)
     return out
 
@@ -565,13 +596,18 @@ def _rows_to_candidates(rows) -> list[Candidate]:
     out: list[Candidate] = []
     for (_, _), rs in groups.items():
         dates = sorted(x["document_date"] for x in rs if x["document_date"])
-        docs = {x["source_path"] for x in rs}
+        # Dokument räknas per INNEHÅLL (_doc_key), inte per sökväg —
+        # annars dubblerar en fil i två mappar beläggningen. De råa
+        # antalen observations/sentences lämnas medvetet odedupli-
+        # cerade: de redovisar tabellens faktiska rader; styrkan gör
+        # det inte.
+        docs = {_doc_key(x) for x in rs}
         # Visa den VANLIGASTE skrivformen, inte den första raden i
         # gruppen. Nyckeln samlar "HR-specialist" och "hR-specialist"
         # under samma post, och vilken av dem som visas ska inte bero
         # på sorteringsordningen i databasen.
         unambiguous_docs = {
-            x["source_path"] for x in rs if not x["ambiguous"]
+            _doc_key(x) for x in rs if not x["ambiguous"]
         }
         # Ett FÖRSLAG är inte en tillsättning. Dokument vars enda
         # bidrag är ett förslag räknas separat: förslaget kan ha
@@ -581,7 +617,7 @@ def _rows_to_candidates(rows) -> list[Candidate]:
         statuses = sorted({x["status"] for x in rs if x["status"]})
         scopes = sorted({x["scope"] for x in rs if x["scope"]})
         confirmed_docs = {
-            x["source_path"] for x in rs
+            _doc_key(x) for x in rs
             if not x["ambiguous"] and x["status"] != "föreslagen"
         }
         out.append(Candidate(
@@ -909,11 +945,42 @@ def coverage(conn, source_paths: list[str]) -> dict:
 
 def stats(conn) -> dict:
     conn.row_factory = sqlite3.Row
+    # Dokument räknas per innehåll, samma nyckel som _doc_key: en fil
+    # i två mappar är ett dokument. Skiljer sig siffran från
+    # coverage() — som räknar indexposter per sökväg — är differensen
+    # exakt antalet dubblettkopior, och duplicates() pekar ut dem.
     row = conn.execute(
-        "SELECT COUNT(*) n, COUNT(DISTINCT source_path) d FROM observations"
+        "SELECT COUNT(*) n,"
+        " COUNT(DISTINCT COALESCE(fingerprint, source_path)) d"
+        " FROM observations"
     ).fetchone()
     kinds = {
         r["kind"]: r["c"]
         for r in conn.execute("SELECT kind, COUNT(*) c FROM observations GROUP BY kind")
     }
     return {"observations": row["n"], "documents": row["d"], "per_kind": kinds}
+
+
+def duplicates(conn) -> list[dict]:
+    """
+    Samma innehåll under flera sökvägar: fingerprint med mer än en
+    source_path i dokumentregistret.
+
+    Läses ur documents-tabellen, inte observationstabellen, så att
+    även dubbletter utan observationer syns — rapporten finns för
+    dokumenthygienen i beståndet, inte bara för styrkeräkningen.
+    Vilken kopia som ska bort är ett beslut om docs/, inte om Attest;
+    rapporten gör bara dubbleringen synlig.
+    """
+    conn.row_factory = sqlite3.Row
+    by_fp: dict[str, set[str]] = {}
+    for r in conn.execute(
+        "SELECT fingerprint, source_path FROM documents"
+        " WHERE fingerprint IS NOT NULL"
+    ):
+        by_fp.setdefault(r["fingerprint"], set()).add(r["source_path"])
+    return [
+        {"fingerprint": fp, "paths": sorted(paths)}
+        for fp, paths in sorted(by_fp.items())
+        if len(paths) > 1
+    ]
