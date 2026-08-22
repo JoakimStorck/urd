@@ -103,17 +103,26 @@ class Repl:
         show_sources: bool,
         show_debug: bool,
         note=None,
+        token: str | None = None,
     ):
         # note() skriver statusrader dit de hör: stdout i terminal,
         # stderr i skriptläge. Default håller äldre anropare fungerande.
         self.note = note or typer.echo
         self.server_url = server_url.rstrip("/")
+        # Token mot servern. Interaktivt läge saknade tidigare varje
+        # sätt att ange den, vilket gjorde hela läget oanvändbart så
+        # snart auth_enabled slogs på — bara 'urd connect' kunde
+        # autentisera. None när servern inte kräver bevis.
+        self.token = token
         self.show_sources = show_sources
         self.show_debug = show_debug
         self.session_id: str | None = None
         self.use_server: bool | None = None   # avgörs vid första frågan
         self._rag = None                      # laddas lat
         self.turns = 0
+
+    def _headers(self) -> dict:
+        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
 
     # -- backend -----------------------------------------------------
 
@@ -152,7 +161,8 @@ class Repl:
                 payload["session_id"] = self.session_id
             try:
                 resp = requests.post(
-                    self.server_url + "/chat", json=payload, timeout=300
+                    self.server_url + "/chat", json=payload,
+                    headers=self._headers(), timeout=300,
                 )
             except requests.ConnectionError:
                 typer.echo(
@@ -162,7 +172,15 @@ class Repl:
                 self.use_server = None      # pröva om vid nästa fråga
                 return
             if not resp.ok:
-                typer.echo(f"Server error {resp.status_code}: {resp.text[:200]}")
+                if resp.status_code in (401, 403):
+                    typer.echo(
+                        f"The server rejected the request ({resp.status_code}). "
+                        "Start with --token, or set URD_TOKEN."
+                    )
+                else:
+                    typer.echo(
+                        f"Server error {resp.status_code}: {resp.text[:200]}"
+                    )
                 return
             response = ChatResponse.model_validate(resp.json())
             if response.session_id:
@@ -303,7 +321,12 @@ def _on_off(args: list[str], current: bool) -> bool:
     return args[0].lower() in ("on", "true", "yes", "1", "på", "pa", "ja")
 
 
-def run(server_url: str, show_sources: bool, show_debug: bool) -> int:
+def run(
+    server_url: str,
+    show_sources: bool,
+    show_debug: bool,
+    token: str | None = None,
+) -> int:
     """
     Kör slingan tills användaren avslutar. Returnerar exitkod.
 
@@ -354,7 +377,7 @@ def run(server_url: str, show_sources: bool, show_debug: bool) -> int:
                   "app.concepts", "app.question_operations"):
         _logging.getLogger(_name).setLevel(_logging.WARNING)
 
-    repl = Repl(server_url, show_sources, show_debug, note=note)
+    repl = Repl(server_url, show_sources, show_debug, note=note, token=token)
     if not scripted:
         typer.echo(BANNER)
         typer.echo("")

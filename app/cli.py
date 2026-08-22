@@ -74,6 +74,10 @@ def _root(
         False, "--debug",
         help="Visa teknisk info i interaktivt läge.",
     ),
+    token: str = typer.Option(
+        None, "--token",
+        help="Token mot servern. Kan även sättas med URD_TOKEN.",
+    ),
 ) -> None:
     """
     Utan underkommando startas interaktivt läge.
@@ -89,22 +93,68 @@ def _root(
     # Exitkoden bär utfallet i skriptläge (heredoc): 0 om alla frågor
     # gick igenom, 1 om någon fällde ett fel. I terminalläge är den
     # alltid 0.
-    code = run(server_url=server_url, show_sources=sources, show_debug=debug)
+    code = run(
+        server_url=server_url, show_sources=sources, show_debug=debug,
+        token=_client_token(token),
+    )
     if code:
         raise typer.Exit(code=code)
 
 
-def _ask_via_server(question: str, base_url: str) -> dict:
-    url = base_url.rstrip("/") + "/chat"
-    resp = requests.post(url, json={"question": question}, timeout=300)
-    if not resp.ok:
-        try:
-            detail = resp.text
-        except Exception:
-            detail = "<ingen svarstext>"
-        raise RuntimeError(
-            f"Serverfel {resp.status_code} från {url}\n--- svarstext ---\n{detail}"
+def _client_token(explicit: str | None = None) -> str | None:
+    """
+    Token för anrop MOT en urd-server, i fallande ordning.
+
+    1. --token på kommandoraden
+    2. URD_TOKEN i miljön
+
+    Miljövariabeln är den rekommenderade vägen. En token på
+    kommandoraden syns i 'ps' för alla användare på maskinen och
+    hamnar i skalets historik; flaggan finns för att den är bekväm vid
+    engångsanrop, inte för att den är den säkra vägen.
+
+    Token kan inte hämtas ur users.yaml — den filen bär bara hashar.
+    Den som tappat sin token får en ny med 'urd auth add'.
+    """
+    return explicit or os.getenv("URD_TOKEN") or None
+
+
+def _auth_headers(token: str | None) -> dict:
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def _server_error(resp, url: str) -> str:
+    """
+    Läsbart besked för ett misslyckat serveranrop.
+
+    401 och 403 särskiljs, eftersom rå svarstext från en avvisad token
+    ser ut som ett haveri i stället för det den är: ett saknat eller
+    ogiltigt bevis.
+    """
+    if resp.status_code in (401, 403):
+        return (
+            f"Servern på {url} avvisade anropet ({resp.status_code}).\n"
+            "Ange token med --token eller sätt URD_TOKEN i miljön.\n"
+            "Ny token skapas med 'urd auth add <namn>'."
         )
+    try:
+        detail = resp.text
+    except Exception:
+        detail = "<ingen svarstext>"
+    return (
+        f"Serverfel {resp.status_code} från {url}\n"
+        f"--- svarstext ---\n{detail}"
+    )
+
+
+def _ask_via_server(question: str, base_url: str, token: str | None = None) -> dict:
+    url = base_url.rstrip("/") + "/chat"
+    resp = requests.post(
+        url, json={"question": question},
+        headers=_auth_headers(token), timeout=300,
+    )
+    if not resp.ok:
+        raise RuntimeError(_server_error(resp, url))
     return resp.json()
 
 
@@ -458,8 +508,14 @@ def connect(
     # någon. Den är en bekvämlighet för enanvändarfallet — proxyn
     # vidarebefordrar alltid webbläsarens Authorization när det finns,
     # så att principalen förblir användaren och inte klienten.
-    if token:
-        os.environ["URD_UPSTREAM_TOKEN"] = token
+    #
+    # Samma källa som övriga kommandon: flaggan först, därefter
+    # URD_TOKEN. Att connect var ensam om att kunna autentisera, och
+    # bara via flagga, var hela orsaken till att interaktivt läge inte
+    # gick att använda med auth påslagen.
+    klienttoken = _client_token(token)
+    if klienttoken:
+        os.environ["URD_UPSTREAM_TOKEN"] = klienttoken
 
     typer.echo(f"Ansluter till URD-server: {upstream}")
     typer.echo(f"Lokal klient startas på: http://{host}:{port}")
@@ -1363,6 +1419,11 @@ def ask(
         "--new-session",
         help="Starta en ny session (glöm samtalshistorik).",
     ),
+    token: str = typer.Option(
+        None,
+        "--token",
+        help="Token mot servern. Kan även sättas med URD_TOKEN.",
+    ),
 ) -> None:
     """
     Ställ en fråga till dokumentchatten.
@@ -1388,6 +1449,7 @@ def ask(
             resp = requests.post(
                 server_url.rstrip("/") + "/chat",
                 json=request_payload,
+                headers=_auth_headers(_client_token(token)),
                 timeout=300,
             )
         except requests.ConnectionError:
@@ -1398,7 +1460,10 @@ def ask(
             raise typer.Exit(code=1)
 
         if not resp.ok:
-            raise RuntimeError(f"Serverfel {resp.status_code}: {resp.text}")
+            typer.echo(
+                _server_error(resp, server_url.rstrip("/") + "/chat"), err=True
+            )
+            raise typer.Exit(code=1)
 
         data = resp.json()
         response = ChatResponse.model_validate(data)
@@ -1466,6 +1531,11 @@ def test(
         help="Skriv fullständigt diagnostikspår som JSONL (en rad per tur, "
              "inkl. hela debug-blocket med rerank_top). Jämför två körningar "
              "med scripts/compare_test_runs.py.",
+    ),
+    token: str = typer.Option(
+        None,
+        "--token",
+        help="Token mot servern. Kan även sättas med URD_TOKEN.",
     ),
 ) -> None:
     """
@@ -1671,6 +1741,7 @@ def test(
                 resp = requests.post(
                     server_url.rstrip("/") + "/chat",
                     json=payload,
+                    headers=_auth_headers(_client_token(token)),
                     timeout=300,
                 )
             except requests.ConnectionError:
@@ -1708,6 +1779,17 @@ def test(
                 continue
 
             if not resp.ok:
+                if resp.status_code in (401, 403):
+                    # En avvisad token gör varje återstående tur
+                    # meningslös. Att köra vidare skulle producera 32
+                    # identiska HTTP-fel och en resultatfil som ser ut
+                    # som en totalregression.
+                    typer.echo("")
+                    typer.echo(
+                        _server_error(resp, server_url.rstrip("/") + "/chat"),
+                        err=True,
+                    )
+                    raise typer.Exit(code=2)
                 typer.echo(f"    Serverfel {resp.status_code}")
                 failed_turns.append({
                     "sequence": seq_name,
