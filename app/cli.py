@@ -317,6 +317,35 @@ def serve(
             pass
 
 
+def _running_server() -> str | None:
+    """
+    Adressen till en levande urd-server enligt PID-filen, annars None.
+
+    Livskontrollen är densamma som i 'urd stop': en kvarlämnad PID-fil
+    efter en krasch ska inte få ett kommando att påstå att en server
+    kör. Signal 0 skickar ingenting — den frågar bara om processen
+    finns.
+
+    PID-återanvändning kan i teorin ge falskt positivt. Konsekvensen
+    här är enbart hur ett besked formuleras, inte någon åtgärd, så
+    kontrollen får vara så enkel.
+    """
+    pid_file = Path(".urd") / "server.pid"
+    if not pid_file.exists():
+        return None
+    try:
+        lines = pid_file.read_text(encoding="utf-8").splitlines()
+        pid = int(lines[0].strip())
+    except (OSError, IndexError, ValueError):
+        return None
+    address = lines[1].strip() if len(lines) > 1 else "okänd adress"
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return None
+    return address
+
+
 @app.command(
     "stop",
     help="Avsluta en lokalt körande urd-server.",
@@ -1084,6 +1113,14 @@ def auth_cmd(
     import yaml as _yaml
 
     path = settings.users_path
+    # ABSOLUT SÖKVÄG I ALLA BESKED. users_path är relativ mot processens
+    # arbetskatalog, så 'urd auth add' körd från fel katalog skapar en
+    # ny, tom instanskatalog, lyckas, skriver ut en token — och servern
+    # ser aldrig filen. Administratören får "Ogiltig eller saknad token"
+    # utan ledtråd, och med fail-closed uppstår inget högljutt fel på
+    # serversidan heller. Skrivs den upplösta sökvägen ut både här och i
+    # serverns startlogg räcker det att jämföra två rader.
+    visad = path.resolve()
     store = A.load_users(path)
     for fel in store.errors:
         typer.echo(f"Varning: {fel}", err=True)
@@ -1117,12 +1154,27 @@ def auth_cmd(
             pass
         os.replace(tmp, path)
 
+    def _genomslag() -> str:
+        """
+        När ändringen får verkan, sagt utifrån vad som faktiskt kör.
+
+        Beskedet förutsatte tidigare att en server fanns. Ändringar
+        görs lika ofta med servern nere, och då är "åtkomsten upphör
+        vid nästa anrop" sant men intetsägande. Adressen tas med, så
+        att det syns om beskedet gäller den server administratören
+        tänker på.
+        """
+        adress = _running_server()
+        if adress:
+            return f"Servern på {adress} läser om filen vid nästa anrop."
+        return "Ingen server kör; ändringen gäller när den startas."
+
     if action == "list":
         users = _läs_rå()
         if not users:
-            typer.echo(f"Inga användare i {path}.")
+            typer.echo(f"Inga användare i {visad}.")
             raise typer.Exit(code=1)
-        typer.echo(f"{len(users)} användare i {path}:")
+        typer.echo(f"{len(users)} användare i {visad}:")
         for u in users:
             grupper = ", ".join(u.get("groups") or []) or "(inga grupper)"
             skapad = u.get("created") or "okänt datum"
@@ -1141,7 +1193,8 @@ def auth_cmd(
             typer.echo(f"Ingen användare {name!r}.", err=True)
             raise typer.Exit(code=1)
         _skriv(kvar)
-        typer.echo(f"Tog bort {name!r}. Åtkomsten upphör vid nästa anrop.")
+        typer.echo(f"Tog bort {name!r} ur {visad}.")
+        typer.echo(_genomslag())
         return
 
     if action != "add":
@@ -1175,6 +1228,8 @@ def auth_cmd(
 
     typer.echo("")
     typer.echo(f"Användare {name!r} skapad, grupper: {', '.join(grupper)}")
+    typer.echo(f"Skriven till {visad}")
+    typer.echo(_genomslag())
     typer.echo("")
     typer.echo("  TOKEN (visas bara denna gång):")
     typer.echo(f"      {token}")

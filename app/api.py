@@ -91,7 +91,9 @@ for _fel in _users.errors:
 
 if settings.auth_enabled:
     logger.info(
-        "auth: PÅ | %d användare ur %s", _users.loaded, settings.users_path
+        "auth: PÅ | %d användare ur %s",
+        _users.loaded,
+        settings.users_path.resolve(),
     )
     if not _users.loaded:
         logger.error(
@@ -122,7 +124,9 @@ def _current_users() -> auth.UserStore:
             for _fel in store.errors:
                 logger.error("users: %s", _fel)
             logger.info(
-                "auth: läste om %s — %d användare", store.path, store.loaded
+                "auth: läste om %s — %d användare",
+                store.path.resolve() if store.path else "(ingen fil)",
+                store.loaded,
             )
             if not store.loaded:
                 logger.error(
