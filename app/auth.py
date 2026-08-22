@@ -251,6 +251,164 @@ class Throttle:
         self._state.pop(key, None)
 
 
+class SessionStore:
+    """
+    Sessioner som skapats genom inloggning med lösenord.
+
+    EN SESSION ÄR INTE ETT KONTO. Sessionstoken bär samma principal som
+    kontot, men den är kortlivad, kan återkallas ensam och lämnar
+    aldrig serverns minne i annan form än strängen användaren fick. Att
+    den försvinner vid omstart är avsiktligt: en glömd session ska inte
+    överleva att maskinen startas om.
+
+    TVÅ UTGÅNGAR. Den absoluta säger hur länge en inloggning får gälla
+    över huvud taget; den overksamma säger hur länge den får ligga
+    orörd. Bara den ena räcker inte — en absolut gräns ensam låter en
+    övergiven session leva timmen ut, och en overksamhetsgräns ensam
+    låter en session som används dagligen leva för alltid.
+
+    Tokens lagras som hash, av samma skäl som kontotokens: den som får
+    läsa serverns minne ska inte få en användbar nyckel på köpet.
+    Uppslaget sker på hashen och inte genom jämförelse post för post —
+    en slumpad 256-bitarssträng ger ingen tidskanal värd namnet, och
+    sessionstabellen kan bli stor.
+    """
+
+    def __init__(self, ttl_seconds: float, idle_seconds: float):
+        self.ttl = float(ttl_seconds)
+        self.idle = float(idle_seconds)
+        self._sessions: dict[str, dict] = {}
+
+    def create(self, principal: Principal) -> tuple[str, float]:
+        """Ny session. Returnerar (token, sekunder till absolut utgång)."""
+        token = secrets.token_urlsafe(TOKEN_BYTES)
+        nu = time.monotonic()
+        self._sessions[hash_token(token)] = {
+            "principal": principal,
+            "expires_at": nu + self.ttl,
+            "last_used": nu,
+        }
+        return token, self.ttl
+
+    def verify(self, token: str | None) -> Principal | None:
+        if not token:
+            return None
+        post = self._sessions.get(hash_token(token))
+        if post is None:
+            return None
+        nu = time.monotonic()
+        if nu > post["expires_at"] or nu - post["last_used"] > self.idle:
+            self._sessions.pop(hash_token(token), None)
+            return None
+        post["last_used"] = nu
+        return post["principal"]
+
+    def revoke(self, token: str | None) -> bool:
+        if not token:
+            return False
+        return self._sessions.pop(hash_token(token), None) is not None
+
+    def revoke_for_name(self, name: str) -> int:
+        """
+        Avsluta alla sessioner för en användare.
+
+        Anropas när lösenordet ändras. Ett byte av lösenord ska inte
+        lämna kvar sessioner som skapades med det gamla — det är hela
+        skälet att man byter.
+        """
+        nyckel = name.strip().lower()
+        döm = [
+            h for h, p in self._sessions.items()
+            if p["principal"].name.strip().lower() == nyckel
+        ]
+        for h in döm:
+            self._sessions.pop(h, None)
+        return len(döm)
+
+    def prune(self) -> int:
+        nu = time.monotonic()
+        döm = [
+            h for h, p in self._sessions.items()
+            if nu > p["expires_at"] or nu - p["last_used"] > self.idle
+        ]
+        for h in döm:
+            self._sessions.pop(h, None)
+        return len(döm)
+
+    @property
+    def active(self) -> int:
+        return len(self._sessions)
+
+
+def write_users(path: Path, users: list[dict]) -> None:
+    """
+    Skriv användarfilen atomärt med rättigheten 0600.
+
+    Servern läser om filen så snart den ändrats, och en skrivning som
+    först tomkör och sedan fyller ger ett fönster där en läsare ser
+    halva innehållet — vilket med fail-closed betyder avslag för alla
+    under någon millisekund. Skriv till granne och byt in med
+    os.replace, som är atomärt inom samma filsystem.
+
+    Rättigheten sätts på temporärfilen FÖRE inbytet, så att den
+    färdiga filen aldrig existerar med vidare rättigheter.
+
+    Bor här och inte i cli.py därför att både administratörens
+    kommandon och inloggningsvägen skriver samma fil, och två
+    implementationer av samma skrivning är en garanti för att den ena
+    blir fel.
+    """
+    import os
+    import yaml as _yaml
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".ny")
+    tmp.write_text(
+        _yaml.safe_dump({"users": users}, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    try:
+        tmp.chmod(0o600)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+
+
+def read_users_raw(path: Path) -> list[dict]:
+    """Posterna som de står i filen, utan tolkning."""
+    if not path.exists():
+        return []
+    import yaml as _yaml
+    data = _yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return list(data.get("users") or [])
+
+
+def set_password(path: Path, name: str, password: str,
+                 consume_enrollment: bool = False) -> bool:
+    """
+    Sätt lösenord för en användare i filen. False när namnet saknas.
+
+    consume_enrollment tar samtidigt bort token_sha256 och
+    enrollment-flaggan: en inbjudan som växlats in ska inte kunna
+    växlas in igen. Att ta bort token är hela förbrukningen — posten
+    har därefter bara ett lösenord, och det är precis vad som avses.
+    """
+    users = read_users_raw(path)
+    nyckel = name.strip().lower()
+    hittad = False
+    for post in users:
+        if str(post.get("name") or "").strip().lower() != nyckel:
+            continue
+        hittad = True
+        post["password_scrypt"] = hash_password(password)
+        if consume_enrollment:
+            post.pop("token_sha256", None)
+            post.pop("enrollment", None)
+    if hittad:
+        write_users(path, users)
+    return hittad
+
+
 @dataclass(frozen=True)
 class Principal:
     """

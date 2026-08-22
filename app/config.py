@@ -31,6 +31,20 @@ DEFAULTS = {
     "users_path": ".urd/users.yaml",
     "default_access_group": "institution",
     "access_filter_enabled": False,
+    # Sessioner skapade genom inloggning med lösenord. Två utgångar:
+    # den absoluta säger hur länge en inloggning får gälla över huvud
+    # taget, den overksamma hur länge den får ligga orörd. Bara den ena
+    # räcker inte — en absolut gräns ensam låter en övergiven session
+    # leva timmen ut, en overksamhetsgräns ensam låter en session som
+    # används dagligen leva för alltid.
+    "session_ttl_seconds": 43200,      # 12 timmar
+    "session_idle_seconds": 3600,      # 1 timme
+    # Sant när TLS avslutas i en betrodd proxy framför servern.
+    # Lösenordsvägen vägrar annars över okrypterad förbindelse som inte
+    # är loopback. Ett uttryckligt påstående från den som satt upp
+    # driften, och inte X-Forwarded-Proto: ett huvud från en okänd
+    # mellanhand är inget bevis för att förbindelsen var krypterad.
+    "tls_terminated_upstream": False,
     "chunk_size": 1200,
     "chunk_overlap": 150,
     "server": "",
@@ -74,6 +88,9 @@ _ENV_KEYS = {
     "users_path": "USERS_PATH",
     "default_access_group": "DEFAULT_ACCESS_GROUP",
     "access_filter_enabled": "ACCESS_FILTER_ENABLED",
+    "session_ttl_seconds": "SESSION_TTL_SECONDS",
+    "session_idle_seconds": "SESSION_IDLE_SECONDS",
+    "tls_terminated_upstream": "TLS_TERMINATED_UPSTREAM",
     "chunk_size": "CHUNK_SIZE",
     "chunk_overlap": "CHUNK_OVERLAP",
     "server": "URD_SERVER",
@@ -206,6 +223,9 @@ def _build_settings() -> "Settings":
         users_path=Path(s("users_path")),
         default_access_group=s("default_access_group"),
         access_filter_enabled=b("access_filter_enabled"),
+        session_ttl_seconds=i("session_ttl_seconds"),
+        session_idle_seconds=i("session_idle_seconds"),
+        tls_terminated_upstream=b("tls_terminated_upstream"),
         chunk_size=i("chunk_size"),
         chunk_overlap=i("chunk_overlap"),
         server=server,
@@ -319,6 +339,9 @@ class Settings(BaseModel):
     # bättre värde i ett befintligt fält kräver bara en ny synk.
     default_access_group: str = "institution"
     access_filter_enabled: bool = False
+    session_ttl_seconds: int = 43200
+    session_idle_seconds: int = 3600
+    tls_terminated_upstream: bool = False
 
     chunk_size: int = 1200
     chunk_overlap: int = 150

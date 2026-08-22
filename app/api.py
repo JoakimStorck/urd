@@ -2,7 +2,7 @@ import logging
 import threading
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -89,6 +89,18 @@ _users_lock = threading.Lock()
 for _fel in _users.errors:
     logger.error("users: %s", _fel)
 
+# Sessioner från inloggning med lösenord, och strypningen som skyddar
+# den vägen. Båda lever i minnet och försvinner vid omstart. För
+# sessioner är det avsiktligt — en glömd inloggning ska inte överleva
+# att maskinen startas om. För strypningen är det en känd svaghet, men
+# en omstart kräver åtkomst till maskinen, och då är spärren inte det
+# som skyddar.
+_sessions = auth.SessionStore(
+    ttl_seconds=settings.session_ttl_seconds,
+    idle_seconds=settings.session_idle_seconds,
+)
+_throttle = auth.Throttle()
+
 if settings.auth_enabled:
     logger.info(
         "auth: PÅ | %d användare ur %s",
@@ -155,7 +167,13 @@ def require_principal(
     if not settings.auth_enabled:
         return auth.LOCAL
 
-    principal = _current_users().verify(auth.bearer_token(authorization))
+    token = auth.bearer_token(authorization)
+    # Kontotoken först, sessionstoken därefter. Båda bärs i samma
+    # Authorization-huvud, vilket är avsiktligt: protokollet ändras
+    # inte av att det finns två sätt att skaffa ett bevis. Maskiner
+    # (urd test, skript) har långlivade kontotokens; människor får en
+    # kortlivad session genom /login.
+    principal = _current_users().verify(token) or _sessions.verify(token)
     if principal is None:
         # Samma svar oavsett om token saknas eller är okänd: att skilja
         # dem åt berättar för en angripare vilken av gissningarna som
@@ -192,6 +210,133 @@ def health() -> dict:
             "think": settings.llm_think,
             "num_ctx": settings.llm_num_ctx,
         },
+    }
+
+
+def _require_confidential(request) -> None:
+    """
+    Vägra lösenord över en förbindelse som kan avlyssnas.
+
+    Samma mönster som 'urd serve' redan använder när den vägrar binda
+    utanför loopback utan autentisering: villkoret upprätthålls av
+    koden, inte av att någon minns det på driftsättningsdagen.
+
+    Skälet att vara strängare här än för tokens är att lösenord
+    återanvänds. En läckt token drabbar URD; ett läckt lösenord följer
+    ofta användaren till andra system.
+
+    Tre vägar är godtagbara: förbindelsen är https, den kommer från
+    loopback (klienten och servern är samma maskin, ingen tråd att
+    avlyssna), eller så säger driften uttryckligen att TLS avslutas
+    uppströms. X-Forwarded-Proto godtas INTE — ett huvud från en okänd
+    mellanhand är inget bevis för att förbindelsen var krypterad.
+    """
+    if settings.tls_terminated_upstream:
+        return
+    if request.url.scheme == "https":
+        return
+    värd = request.client.host if request.client else ""
+    if auth.is_loopback(värd):
+        return
+    raise HTTPException(
+        status_code=421,
+        detail=(
+            "Lösenordsinloggning kräver TLS. Anslut över https, eller sätt "
+            "tls_terminated_upstream när TLS avslutas i en betrodd proxy."
+        ),
+    )
+
+
+@app.post("/login")
+def login(payload: dict, request: Request) -> dict:
+    """
+    Byt namn och lösenord mot en kortlivad sessionstoken.
+
+    Samma svar oavsett om namnet är okänt eller lösenordet fel, och
+    verify_password kostar lika mycket i båda fallen — annars avslöjar
+    svaret vilka konton som finns, och en lista över anställda med
+    konton i systemet är i sig en uppgift värd att skydda.
+    """
+    if not settings.auth_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="Autentisering är avstängd på den här servern.",
+        )
+    _require_confidential(request)
+
+    name = str(payload.get("name") or "").strip()
+    password = str(payload.get("password") or "")
+    if not name or not password:
+        raise HTTPException(status_code=400, detail="Namn och lösenord krävs.")
+
+    # Nyckeln bär både namn och avsändare, så att en angripare varken
+    # kan låsa ute en enskild användare genom att gissa i hens namn
+    # eller kringgå spärren genom att byta namn.
+    värd = request.client.host if request.client else "okänd"
+    nyckel = f"{name.lower()}|{värd}"
+    kvar = _throttle.locked_for(nyckel)
+    if kvar > 0:
+        logger.warning("auth: inloggning spärrad för %s (%.0f s kvar)", värd, kvar)
+        raise HTTPException(
+            status_code=429,
+            detail=f"För många misslyckade försök. Försök igen om {int(kvar) + 1} s.",
+        )
+
+    principal = _current_users().verify_password(
+        name, password, throttle=_throttle, key=nyckel
+    )
+    if principal is None:
+        logger.warning("auth: misslyckad inloggning från %s", värd)
+        raise HTTPException(status_code=401, detail="Fel namn eller lösenord.")
+
+    token, ttl = _sessions.create(principal)
+    _sessions.prune()
+    logger.info(
+        "auth: %s loggade in från %s (%d aktiva sessioner)",
+        principal.name, värd, _sessions.active,
+    )
+    return {
+        "token": token,
+        "expires_in": int(ttl),
+        "principal": {"name": principal.name, "groups": list(principal.groups)},
+    }
+
+
+@app.post("/logout")
+def logout(
+    authorization: str | None = Header(default=None),
+    principal: auth.Principal = Depends(require_principal),
+) -> dict:
+    """
+    Avsluta den session anropet bärs av.
+
+    En kontotoken kan inte avslutas här — den är ett konto och inte en
+    session, och tas bort med 'urd auth remove'. Svaret säger vilket
+    som hände så att klienten inte tror sig ha loggat ut när den inte
+    har det.
+    """
+    borttagen = _sessions.revoke(auth.bearer_token(authorization))
+    if borttagen:
+        logger.info("auth: %s loggade ut", principal.name)
+    return {"logged_out": borttagen, "principal": principal.name}
+
+
+@app.get("/whoami")
+def whoami(
+    principal: auth.Principal = Depends(require_principal),
+) -> dict:
+    """
+    Vem servern anser att anroparen är.
+
+    Billig, utan sidoeffekter, och tre saker på en gång: klienten kan
+    pröva en uppgift innan den sparas, användaren kan se sitt namn i
+    gränssnittet, och när behörighetsfiltret införs blir den svaret på
+    "vad får jag se" — grupperna avgör det.
+    """
+    return {
+        "name": principal.name,
+        "groups": list(principal.groups),
+        "unrestricted": principal.unrestricted,
     }
 
 

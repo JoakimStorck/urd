@@ -1156,10 +1156,10 @@ def attest_sample(
 
 @app.command(
     "auth",
-    help="Hantera användare och tokens (add, list, remove).",
+    help="Hantera användare, tokens och lösenord (add, list, remove, passwd).",
 )
 def auth_cmd(
-    action: str = typer.Argument(..., help="add | list | remove"),
+    action: str = typer.Argument(..., help="add | list | remove | passwd"),
     name: str = typer.Argument(None, help="Användarnamn"),
     group: list[str] = typer.Option(
         None, "--group", "-g", help="Grupptillhörighet (kan upprepas)."
@@ -1194,27 +1194,11 @@ def auth_cmd(
         return list(data.get("users") or [])
 
     def _skriv(users: list[dict]) -> None:
-        # ATOMÄR SKRIVNING. Servern läser om filen så snart den ändrats,
-        # och en write_text som först tomkör filen och sedan fyller den
-        # ger ett fönster där en läsare ser halva innehållet — vilket
-        # med fail-closed betyder avslag för alla under någon
-        # millisekund. Skriv till granne och byt in med os.replace, som
-        # är atomärt inom samma filsystem.
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".ny")
-        tmp.write_text(
-            _yaml.safe_dump({"users": users}, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
-        # Filen bär hashade tokens, men den avslöjar vilka användare
-        # som finns och vilka grupper de har. Läsbar bara för ägaren —
-        # rättigheten sätts på temporärfilen FÖRE inbytet, så att den
-        # färdiga filen aldrig existerar med vidare rättigheter.
-        try:
-            tmp.chmod(0o600)
-        except OSError:
-            pass
-        os.replace(tmp, path)
+        # Atomär skrivning med 0600, delad med inloggningsvägen —
+        # servern skriver samma fil vid inväxling av en inbjudan, och
+        # två implementationer av samma skrivning är en garanti för att
+        # den ena blir fel.
+        A.write_users(path, users)
 
     def _genomslag() -> str:
         """
@@ -1256,6 +1240,37 @@ def auth_cmd(
             raise typer.Exit(code=1)
         _skriv(kvar)
         typer.echo(f"Tog bort {name!r} ur {visad}.")
+        typer.echo(_genomslag())
+        return
+
+    if action == "passwd":
+        if not any(u.get("name") == name for u in users):
+            typer.echo(f"Ingen användare {name!r}.", err=True)
+            raise typer.Exit(code=1)
+        lösen = typer.prompt("Nytt lösenord", hide_input=True)
+        igen = typer.prompt("Upprepa", hide_input=True)
+        if lösen != igen:
+            typer.echo("Lösenorden stämmer inte överens.", err=True)
+            raise typer.Exit(code=2)
+        problem = A.password_problems(lösen, name=name)
+        if problem:
+            for p in problem:
+                typer.echo(f"  {p}", err=True)
+            raise typer.Exit(code=2)
+        # Härledningen tar en kvarts sekund. Att säga det före pausen
+        # gör att ingen tror att kommandot hängt sig.
+        typer.echo("Härleder lösenordet...")
+        if not A.set_password(path, name, lösen):
+            typer.echo(f"Ingen användare {name!r}.", err=True)
+            raise typer.Exit(code=1)
+        typer.echo(f"Lösenord satt för {name!r} i {visad}.")
+        # Sessioner skapade med det gamla lösenordet lever i serverns
+        # minne och kan inte nås härifrån. Att säga det är ärligare än
+        # att låta användaren tro att bytet avslutade dem.
+        typer.echo(
+            "Redan påbörjade sessioner lever tills de går ut. "
+            "Starta om servern för att avsluta dem omedelbart."
+        )
         typer.echo(_genomslag())
         return
 
