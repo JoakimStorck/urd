@@ -1,4 +1,5 @@
 import logging
+import threading
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -74,11 +75,17 @@ logger.info(
 
 # AUTENTISERING.
 #
-# Användarna läses en gång vid uppstart. Ändringar kräver omstart, och
-# det är avsiktligt i första versionen: en fil som läses om vid varje
-# anrop är en fil som kan bli tom mitt i drift och tyst släppa in
-# alla, eller låsa ute alla. Omstart är en tydligare händelse.
+# Användarna läses vid uppstart och OM när filen ändrats. Ett stat-
+# anrop per skyddad förfrågan avgör saken; innehållet läses bara när
+# ändringstid eller storlek skiljer sig.
+#
+# Skälet är inte bekvämlighet utan återkallelse. En användare som
+# tagits bort med 'urd auth remove' ska förlora åtkomsten då, inte vid
+# nästa omstart — allt annat gör kommandots besked osant. En trasig
+# eller borttagen fil ger tom uppsättning och därmed avslag för alla,
+# aldrig en fortsättning på den gamla; se auth.reload_if_changed.
 _users = auth.load_users(settings.users_path)
+_users_lock = threading.Lock()
 for _fel in _users.errors:
     logger.error("users: %s", _fel)
 
@@ -96,6 +103,33 @@ else:
         "auth: AV — varje klient som når porten kan läsa hela "
         "dokumentbeståndet. Ofarligt vid bindning till loopback."
     )
+
+
+def _current_users() -> auth.UserStore:
+    """
+    Användaruppsättningen, omläst om filen ändrats sedan sist.
+
+    Låset hindrar att flera samtidiga förfrågningar läser om samma
+    ändring; tilldelningen i sig är atomär i CPython, så en läsare
+    utan låset ser antingen den gamla eller den nya uppsättningen,
+    aldrig något halvfärdigt.
+    """
+    global _users
+    with _users_lock:
+        store, ändrad = auth.reload_if_changed(_users)
+        if ändrad:
+            _users = store
+            for _fel in store.errors:
+                logger.error("users: %s", _fel)
+            logger.info(
+                "auth: läste om %s — %d användare", store.path, store.loaded
+            )
+            if not store.loaded:
+                logger.error(
+                    "auth: användarfilen ger INGA användare — varje anrop "
+                    "avvisas tills den är rättad."
+                )
+    return _users
 
 
 def require_principal(
@@ -117,7 +151,7 @@ def require_principal(
     if not settings.auth_enabled:
         return auth.LOCAL
 
-    principal = _users.verify(auth.bearer_token(authorization))
+    principal = _current_users().verify(auth.bearer_token(authorization))
     if principal is None:
         # Samma svar oavsett om token saknas eller är okänd: att skilja
         # dem åt berättar för en angripare vilken av gissningarna som

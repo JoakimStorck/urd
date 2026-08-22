@@ -1095,17 +1095,27 @@ def auth_cmd(
         return list(data.get("users") or [])
 
     def _skriv(users: list[dict]) -> None:
+        # ATOMÄR SKRIVNING. Servern läser om filen så snart den ändrats,
+        # och en write_text som först tomkör filen och sedan fyller den
+        # ger ett fönster där en läsare ser halva innehållet — vilket
+        # med fail-closed betyder avslag för alla under någon
+        # millisekund. Skriv till granne och byt in med os.replace, som
+        # är atomärt inom samma filsystem.
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        tmp = path.with_name(path.name + ".ny")
+        tmp.write_text(
             _yaml.safe_dump({"users": users}, allow_unicode=True, sort_keys=False),
             encoding="utf-8",
         )
         # Filen bär hashade tokens, men den avslöjar vilka användare
-        # som finns och vilka grupper de har. Läsbar bara för ägaren.
+        # som finns och vilka grupper de har. Läsbar bara för ägaren —
+        # rättigheten sätts på temporärfilen FÖRE inbytet, så att den
+        # färdiga filen aldrig existerar med vidare rättigheter.
         try:
-            path.chmod(0o600)
+            tmp.chmod(0o600)
         except OSError:
             pass
+        os.replace(tmp, path)
 
     if action == "list":
         users = _läs_rå()
@@ -1131,7 +1141,7 @@ def auth_cmd(
             typer.echo(f"Ingen användare {name!r}.", err=True)
             raise typer.Exit(code=1)
         _skriv(kvar)
-        typer.echo(f"Tog bort {name!r}. Servern måste startas om.")
+        typer.echo(f"Tog bort {name!r}. Åtkomsten upphör vid nästa anrop.")
         return
 
     if action != "add":

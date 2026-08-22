@@ -92,6 +92,10 @@ class UserStore:
     by_token_hash: dict[str, Principal] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
     path: Path | None = None
+    # Filens tillstånd när den lästes: (mtime_ns, storlek). None när
+    # filen saknades. Används bara för att upptäcka ändring — aldrig
+    # för att avgöra om innehållet duger.
+    stamp: tuple[int, int] | None = None
 
     @property
     def loaded(self) -> int:
@@ -157,6 +161,10 @@ def load_users(path: Path) -> UserStore:
             groups: [institution]
     """
     store = UserStore(path=path)
+    # Stämpeln tas FÖRE läsningen. Skrivs filen mitt under inläsningen
+    # ser nästa kontroll en nyare stämpel och läser om — hellre en
+    # överflödig omläsning än en ändring som aldrig upptäcks.
+    store.stamp = _stamp(path)
     if not path.exists():
         return store
 
@@ -201,7 +209,62 @@ def load_users(path: Path) -> UserStore:
     return store
 
 
+def _stamp(path: Path) -> tuple[int, int] | None:
+    """Filens ändringstid och storlek, eller None om den inte finns."""
+    try:
+        st = path.stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def reload_if_changed(store: UserStore) -> tuple[UserStore, bool]:
+    """
+    Läs om användarfilen när den ändrats. Returnerar (store, ändrad).
+
+    ÅTERKALLELSE MÅSTE SLÅ IGENOM UTAN OMSTART. En borttagen användare
+    vars token fortsätter fungera tills någon startar om servern är
+    inte en olägenhet utan ett säkerhetsfel: `urd auth remove` säger
+    att åtkomsten upphört, och det ska vara sant.
+
+    Kontrollen är ett stat-anrop per förfrågan — mikrosekunder mot en
+    tur på flera sekunder. Innehållet läses bara när stämpeln skiljer
+    sig.
+
+    FELAKTIG FIL STÄNGER. Går filen inte att tolka blir resultatet en
+    tom uppsättning, alltså avslag för alla, inte en fortsättning på
+    den gamla. Det är samma asymmetri som gäller behörighet i övrigt:
+    en frånvarande eller obegriplig uppgift betyder stängt, eftersom
+    kostnaden för fel är exponering. Ett avslag är högljutt och
+    åtgärdas på sekunder; en kvarlevande återkallad token upptäcks av
+    ingen. Skrivningen från `urd auth` är atomär, så en halvskriven
+    fil ska aldrig kunna orsaka detta.
+    """
+    if store.path is None:
+        return store, False
+    if _stamp(store.path) == store.stamp:
+        return store, False
+    return load_users(store.path), True
+
+
 def bearer_token(header_value: str | None) -> str | None:
+    """
+    Plocka ut token ur ett Authorization-huvud.
+
+    Både "Bearer <token>" och ett naket värde accepteras. Det senare
+    för att curl-anrop och enkla skript inte ska falla på formatet —
+    huvudet är ändå bara läsbart för den som redan har det.
+    """
+    if not header_value:
+        return None
+    value = header_value.strip()
+    # Prefixet plockas bort FÖRE tomhetskontrollen. "Bearer " med tomt
+    # värde ska ge None, inte strängen "Bearer" — annars avvisas ett
+    # tomt huvud som en okänd token, vilket är rätt utfall av fel skäl
+    # och ger vilseledande loggar.
+    if value.lower() == "bearer" or value.lower().startswith("bearer "):
+        return value[6:].strip() or None
+    return value or None
     """
     Plocka ut token ur ett Authorization-huvud.
 
