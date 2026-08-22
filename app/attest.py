@@ -93,6 +93,13 @@ CREATE TABLE IF NOT EXISTS observations (
     category     TEXT,
     document_date TEXT,
     fingerprint  TEXT,
+    -- Dokumentets INNEHÅLL, som sha256 över dess chunktexter. Skilt
+    -- från fingerprint, som är en ändringsstämpel över sökväg,
+    -- storlek och mtime och därför skiljer två identiska kopior åt.
+    -- Uppmätt 2026-08-22: 23 dokument i beståndet ligger under flera
+    -- sökvägar, fyra av dem under tre. Utan innehållsidentitet räknas
+    -- de som skilda belägg.
+    content_hash TEXT,
     chunk_index  INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_subject ON observations(subject_key);
@@ -105,6 +112,7 @@ CREATE INDEX IF NOT EXISTS ix_source  ON observations(source_path);
 CREATE TABLE IF NOT EXISTS documents (
     source_path  TEXT PRIMARY KEY,
     fingerprint  TEXT,
+    content_hash TEXT,
     document_date TEXT,
     category     TEXT,
     num_obs      INTEGER,
@@ -163,13 +171,21 @@ def _migrate(conn: sqlite3.Connection) -> None:
     NULL tills indexet byggs om.
     """
     have = {r[1] for r in conn.execute("PRAGMA table_info(observations)")}
-    for column, ddl in (("status", "TEXT"), ("scope", "TEXT")):
+    for column, ddl in (
+        ("status", "TEXT"), ("scope", "TEXT"), ("content_hash", "TEXT"),
+    ):
         if column not in have:
             conn.execute(f"ALTER TABLE observations ADD COLUMN {column} {ddl}")
             logger.info(
                 "attest: la till kolumn %r — bygg om med 'urd attest-build' "
                 "för att fylla den.", column
             )
+    # content_hash fylls i efterhand av build(), utan omtolkning av
+    # dokumenten: hashen räknas ur chunktexterna som redan finns i
+    # indexet. En befintlig databas behöver alltså inte parsas om.
+    have_doc = {r[1] for r in conn.execute("PRAGMA table_info(documents)")}
+    if "content_hash" not in have_doc:
+        conn.execute("ALTER TABLE documents ADD COLUMN content_hash TEXT")
     conn.commit()
 
 
@@ -255,6 +271,32 @@ def build(chunks, conn: sqlite3.Connection, only_changed: bool = False,
     if limit:
         paths = paths[:limit]
 
+    # INNEHÅLLSHASH FÖR ALLA DOKUMENT, även de som hoppas över nedan.
+    # Hashen räknas ur chunktexterna som redan ligger i indexet, inte ur
+    # filen på disk: den fångar därmed också två kopior som exporterats
+    # om och skiljer sig på bytenivå men bär samma text. Kontextprefixet
+    # i chunktexten består av dokumenttitel och rubrikkedja, som är
+    # sökvägsoberoende — annars vore hashen lika värdelös som
+    # fingerprintet.
+    #
+    # Backfillen är skild från byggslingan därför att only_changed
+    # hoppar över oförändrade dokument. Utan den skulle en befintlig
+    # databas aldrig få sina hashar, och kolumnen förbli NULL i
+    # tysthet.
+    hashes = {p: _content_hash(by_doc[p]) for p in paths}
+    for path, h in hashes.items():
+        conn.execute(
+            "UPDATE observations SET content_hash = ?"
+            " WHERE source_path = ? AND (content_hash IS NULL OR content_hash <> ?)",
+            (h, path, h),
+        )
+        conn.execute(
+            "UPDATE documents SET content_hash = ?"
+            " WHERE source_path = ? AND (content_hash IS NULL OR content_hash <> ?)",
+            (h, path, h),
+        )
+    conn.commit()
+
     t0 = time.perf_counter()
     stats = {"documents": 0, "skipped": 0, "observations": 0, "removed": 0}
 
@@ -271,23 +313,26 @@ def build(chunks, conn: sqlite3.Connection, only_changed: bool = False,
         rows: list[dict] = []
         for c in doc_chunks:
             rows.extend(_observations_from_chunk(c))
+        for r in rows:
+            r["content_hash"] = hashes[path]
 
         if rows:
             conn.executemany(
                 "INSERT INTO observations (subject, subject_key, relation, object,"
                 " object_key, kind, construction, ambiguous, status, scope, strength, sentence,"
                 " source_path, file_name, category, document_date, fingerprint,"
-                " chunk_index) VALUES (:subject, :subject_key, :relation, :object,"
-                " :object_key, :kind, :construction, :ambiguous, :status, :scope, :strength,"
-                " :sentence, :source_path, :file_name, :category, :document_date,"
-                " :fingerprint, :chunk_index)",
+                " content_hash, chunk_index) VALUES (:subject, :subject_key, :relation,"
+                " :object, :object_key, :kind, :construction, :ambiguous, :status, :scope,"
+                " :strength, :sentence, :source_path, :file_name, :category, :document_date,"
+                " :fingerprint, :content_hash, :chunk_index)",
                 rows,
             )
         md = doc_chunks[0].metadata
         conn.execute(
             "INSERT OR REPLACE INTO documents (source_path, fingerprint,"
-            " document_date, category, num_obs, built_at) VALUES (?,?,?,?,?,?)",
-            (path, fp, md.document_date, md.category, len(rows),
+            " content_hash, document_date, category, num_obs, built_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (path, fp, hashes[path], md.document_date, md.category, len(rows),
              time.strftime("%Y-%m-%dT%H:%M:%S")),
         )
         conn.commit()
@@ -408,23 +453,58 @@ def _same_person(a: str, b: str) -> bool:
     return all(any(ends_match(m, x) for x in it) for m in shorter)
 
 
+def _content_hash(doc_chunks) -> str:
+    """
+    Dokumentets innehåll som sha256 över dess chunktexter.
+
+    Räknas ur indexet, inte ur filen på disk: två kopior som
+    exporterats om och skiljer sig på bytenivå men bär samma text får
+    då samma hash, och backfillen behöver ingen filåtkomst. Chunkarna
+    sorteras på chunk_index så att hashen inte beror på hämtordningen.
+
+    Kontextprefixet i chunktexten består av dokumenttitel och
+    rubrikkedja. Båda är sökvägsoberoende — vore de det inte skulle
+    hashen dela fingerprintets fel.
+    """
+    import hashlib
+
+    ordnade = sorted(doc_chunks, key=lambda c: c.metadata.chunk_index)
+    h = hashlib.sha256()
+    for c in ordnade:
+        h.update(c.text.encode("utf-8"))
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
 def _doc_key(row) -> str:
     """
     Distinktnyckel för dokumenträkning: innehållet, inte sökvägen.
 
-    Samma fil i två mappar bär samma fingerprint men två source_path,
-    och räknad per sökväg blir den ett belägg som ser ut som två.
-    Uppmätt 2026-08-18: ett översättningspar (parentes:identitet)
-    nådde relevans 0,312 — över reservationsgolvet 0,25 — enbart för
-    att en policyfil låg i två mappar, och fick därmed reservera samma
-    passage två gånger. Ett dokument är sitt innehåll; sökvägen är
-    var det ligger.
+    Samma dokument arkiverat i flera mappar ska räknas som ETT belägg.
+    Uppmätt 2026-08-22: 23 dokument i beståndet ligger under flera
+    sökvägar, fyra av dem under tre — högskolans regelträd arkiverar
+    samma normdokument under flera ämnesmappar. Räknade per sökväg blir
+    ett belägg två eller tre, och ett översättningspar
+    (parentes:identitet) nådde på det viset relevans 0,312, över
+    reservationsgolvet 0,25, och fick reservera samma passage två
+    gånger.
 
-    Fallback till source_path när fingerprint saknas: hellre den
-    gamla överräkningen för en enskild rad än att klumpa ihop alla
-    fingerprintlösa rader till ett enda dokument.
+    NYCKELN ÄR content_hash, INTE fingerprint. source_fingerprint är en
+    ändringsstämpel över sökväg, storlek och mtime — sökvägen ingår i
+    hashen, så två kopior kan per konstruktion aldrig dela fingerprint.
+    En tidigare version av den här funktionen byggde på motsatsen och
+    var därför verkningslös.
+
+    Fallback i två steg för rader från en databas som ännu inte fyllt
+    kolumnen: fingerprint, därefter sökväg. Båda ger den gamla
+    överräkningen, vilket är rätt utfall att falla tillbaka på — hellre
+    känt beteende än att klumpa ihop rader vars innehåll är okänt.
     """
-    return row.get("fingerprint") or row["source_path"]
+    return (
+        row.get("content_hash")
+        or row.get("fingerprint")
+        or row["source_path"]
+    )
 
 
 def _locations(rows) -> list[tuple[str, int]]:
@@ -945,13 +1025,13 @@ def coverage(conn, source_paths: list[str]) -> dict:
 
 def stats(conn) -> dict:
     conn.row_factory = sqlite3.Row
-    # Dokument räknas per innehåll, samma nyckel som _doc_key: en fil
-    # i två mappar är ett dokument. Skiljer sig siffran från
+    # Dokument räknas per innehåll, samma nyckel som _doc_key: samma
+    # dokument i flera mappar är ett dokument. Skiljer sig siffran från
     # coverage() — som räknar indexposter per sökväg — är differensen
     # exakt antalet dubblettkopior, och duplicates() pekar ut dem.
     row = conn.execute(
         "SELECT COUNT(*) n,"
-        " COUNT(DISTINCT COALESCE(fingerprint, source_path)) d"
+        " COUNT(DISTINCT COALESCE(content_hash, fingerprint, source_path)) d"
         " FROM observations"
     ).fetchone()
     kinds = {
@@ -963,24 +1043,27 @@ def stats(conn) -> dict:
 
 def duplicates(conn) -> list[dict]:
     """
-    Samma innehåll under flera sökvägar: fingerprint med mer än en
-    source_path i dokumentregistret.
+    Samma innehåll under flera sökvägar.
 
-    Läses ur documents-tabellen, inte observationstabellen, så att
-    även dubbletter utan observationer syns — rapporten finns för
+    Läses ur dokumentregistret, inte observationstabellen, så att även
+    dubbletter utan observationer syns — rapporten finns för
     dokumenthygienen i beståndet, inte bara för styrkeräkningen.
-    Vilken kopia som ska bort är ett beslut om docs/, inte om Attest;
-    rapporten gör bara dubbleringen synlig.
+
+    Vilken kopia som ska bort är ett beslut om docs/, inte om Attest,
+    och det är inte självklart att någon ska bort: sökvägen bestämmer
+    dokumenttyp och normativ tyngd, så två kopior kan bära olika vikt.
+    Rapporten gör dubbleringen synlig och räkningen korrekt; den städar
+    inte.
     """
     conn.row_factory = sqlite3.Row
-    by_fp: dict[str, set[str]] = {}
+    by_hash: dict[str, set[str]] = {}
     for r in conn.execute(
-        "SELECT fingerprint, source_path FROM documents"
-        " WHERE fingerprint IS NOT NULL"
+        "SELECT content_hash, source_path FROM documents"
+        " WHERE content_hash IS NOT NULL"
     ):
-        by_fp.setdefault(r["fingerprint"], set()).add(r["source_path"])
+        by_hash.setdefault(r["content_hash"], set()).add(r["source_path"])
     return [
-        {"fingerprint": fp, "paths": sorted(paths)}
-        for fp, paths in sorted(by_fp.items())
+        {"content_hash": h, "paths": sorted(paths)}
+        for h, paths in sorted(by_hash.items())
         if len(paths) > 1
     ]

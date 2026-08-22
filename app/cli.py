@@ -792,16 +792,22 @@ def stats(
         typer.echo(f"Dokument utan belägg:    {cov['documents_without_observations']}")
         dups = attest.duplicates(conn)
         if dups:
-            # Samma innehåll under flera sökvägar dubblerade beläggning
-            # och reservationer innan räkningen blev innehållsbaserad.
-            # Rapporten pekar ut kopiorna så att beståndet kan städas.
+            # Samma innehåll under flera sökvägar dubblerar beläggning
+            # och reservationer om det räknas per sökväg. Rapporten
+            # pekar ut kopiorna så att beståndet kan städas — eller
+            # medvetet behållas, eftersom sökvägen bär dokumenttyp och
+            # normativ tyngd.
+            extra = sum(len(d["paths"]) - 1 for d in dups)
             typer.echo(
-                f"Dubblettinnehåll:        {len(dups)}"
-                "  (samma fil under flera sökvägar)"
+                f"Dubblettinnehåll:        {len(dups)} dokument"
+                f" i {extra + len(dups)} kopior"
             )
-            for d in dups:
+            for d in dups[:5]:
+                typer.echo(f"    {Path(d['paths'][0]).name}")
                 for p in d["paths"]:
-                    typer.echo(f"    {p}")
+                    typer.echo(f"        {p}")
+            if len(dups) > 5:
+                typer.echo(f"    ... och {len(dups) - 5} till")
         if cov["stale_documents"]:
             typer.echo(
                 f"Stale i attest.db:       {len(cov['stale_documents'])}"
