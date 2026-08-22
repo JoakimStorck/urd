@@ -27,6 +27,10 @@ DEFAULTS = {
     "attest_selection": False,
     "attest_boost": 0.15,
     "attest_required_min_relevance": 0.25,
+    "auth_enabled": False,
+    "users_path": ".urd/users.yaml",
+    "default_access_group": "institution",
+    "access_filter_enabled": False,
     "chunk_size": 1200,
     "chunk_overlap": 150,
     "server": "",
@@ -66,6 +70,10 @@ _ENV_KEYS = {
     "attest_selection": "ATTEST_SELECTION",
     "attest_boost": "ATTEST_BOOST",
     "attest_required_min_relevance": "ATTEST_REQUIRED_MIN_RELEVANCE",
+    "auth_enabled": "AUTH_ENABLED",
+    "users_path": "USERS_PATH",
+    "default_access_group": "DEFAULT_ACCESS_GROUP",
+    "access_filter_enabled": "ACCESS_FILTER_ENABLED",
     "chunk_size": "CHUNK_SIZE",
     "chunk_overlap": "CHUNK_OVERLAP",
     "server": "URD_SERVER",
@@ -194,6 +202,10 @@ def _build_settings() -> "Settings":
         attest_selection=b("attest_selection"),
         attest_boost=f("attest_boost"),
         attest_required_min_relevance=f("attest_required_min_relevance"),
+        auth_enabled=b("auth_enabled"),
+        users_path=Path(s("users_path")),
+        default_access_group=s("default_access_group"),
+        access_filter_enabled=b("access_filter_enabled"),
         chunk_size=i("chunk_size"),
         chunk_overlap=i("chunk_overlap"),
         server=server,
@@ -289,6 +301,24 @@ class Settings(BaseModel):
     # beståndet har — och alternativet i det uppmätta fallet var
     # abstain. Provisoriskt värde; kalibreras mot batteriet.
     attest_required_min_relevance: float = 0.25
+
+    # SÄKERHET.
+    #
+    # auth_enabled styr om token krävs. Default av, eftersom
+    # utgångsläget är en enanvändarmaskin där servern binder loopback
+    # och ingen åtkomstmodell är meningsfull. Servern VÄGRAR däremot
+    # starta med en bindning som inte är loopback utan autentisering —
+    # se serve i cli.py. Den enda realistiska katastrofen är att
+    # beståndet exponeras av misstag, och den stängs där.
+    auth_enabled: bool = False
+    users_path: Path = Path(".urd/users.yaml")
+
+    # BEHÖRIGHET. Strukturen finns från början även när filtret är
+    # avstängt och alla dokument får samma grupp. Att införa fältet i
+    # efterhand kräver omindexering av hela beståndet; att sätta ett
+    # bättre värde i ett befintligt fält kräver bara en ny synk.
+    default_access_group: str = "institution"
+    access_filter_enabled: bool = False
 
     chunk_size: int = 1200
     chunk_overlap: int = 150
