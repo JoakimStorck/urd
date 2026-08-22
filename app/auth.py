@@ -26,14 +26,31 @@ autentisering, alltså en enanvändarmaskin där ingen åtkomstmodell är
 meningsfull. Den ska aldrig kunna tilldelas en användare i filen — se
 _validate_groups. Skillnaden mot en tom grupplista är avsiktlig: tom
 lista betyder "får se ingenting", inte "får se allt".
+
+LÖSENORD LAGRAS INTE SOM TOKENS. En sha256-summa är rätt för en
+slumpad 256-bitarssträng — det finns ingenting att gissa. För ett
+människovalt lösenord är samma konstruktion fel i kategori: den är
+snabb, och snabbhet är precis vad den som fått tag i filen behöver.
+Lösenord härleds därför med scrypt, som är minneshårt och därmed dyrt
+även för den som har grafikkort. Parametrarna lagras i posten så att
+de kan höjas utan att befintliga lösenord blir oläsbara.
+
+TOKEN KAN VARA EN INBJUDAN. En post med enrollment: true får inte
+autentisera vanliga anrop — den kan bara växlas in mot ett lösenord,
+en gång, varefter token tas bort ur posten. Det gör den långa strängen
+till något som bara behöver överleva överlämningen. Maskinkonton
+(urd test, skript) saknar flaggan och fungerar oförändrat: lösenord
+för människor, tokens för program.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import logging
 import secrets
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -43,6 +60,195 @@ logger = logging.getLogger(__name__)
 UNRESTRICTED = "*"
 
 TOKEN_BYTES = 32
+
+# scrypt-parametrar. n=2**15, r=8, p=3 kostar 34 MB och ~0,27 s per
+# härledning på utvecklingsmaskinen — inom OWASP:s rekommenderade band,
+# och en kostnad som bara betalas vid inloggning, inte per anrop. p och
+# inte högre n därför att p multiplicerar arbetet utan att multiplicera
+# minnet; en server som loggar in flera samtidigt ska inte behöva
+# hundratals megabyte.
+#
+# Kostnaden är också strypningens grund: varje felaktigt försök tar en
+# kvarts sekund av angriparens tid, oavsett vad räknaren nedan gör.
+#
+# Parametrarna skrivs i posten och läses därifrån vid verifiering, så
+# att de kan höjas här utan att äldre lösenord slutar fungera. Ett
+# lösenord härlett med gamla parametrar verifieras med gamla; nästa
+# gång det sätts används de nya.
+SCRYPT_N = 2 ** 15
+SCRYPT_R = 8
+SCRYPT_P = 3
+SCRYPT_DKLEN = 32
+SALT_BYTES = 16
+
+# Kortare än så är inte ett lösenord utan en gissningsövning. Längd
+# framför teckenklasser är avsiktligt: sammansättningsregler driver
+# fram förutsägbara mönster utan att öka entropin nämnvärt, vilket
+# NIST SP 800-63B slog fast redan 2017. Av samma skäl finns ingen
+# tvingad förnyelse.
+PASSWORD_MIN_LENGTH = 12
+# Ett tak finns bara för att en härledning av ett megabyte långt
+# lösenord är en billig väg att belasta servern.
+PASSWORD_MAX_LENGTH = 128
+
+
+def hash_password(password: str) -> str:
+    """
+    Härled ett lösenord till en post som kan lagras.
+
+    Formatet bär sina egna parametrar:
+
+        scrypt$n=32768,r=8,p=3$<salt>$<hash>
+
+    Salt är slumpat per lösenord, så att två användare med samma
+    lösenord får skilda poster och en förberäknad tabell inte kan
+    återanvändas.
+    """
+    salt = secrets.token_bytes(SALT_BYTES)
+    dk = _scrypt(password, salt, SCRYPT_N, SCRYPT_R, SCRYPT_P)
+    return "$".join((
+        "scrypt",
+        f"n={SCRYPT_N},r={SCRYPT_R},p={SCRYPT_P}",
+        base64.b64encode(salt).decode("ascii"),
+        base64.b64encode(dk).decode("ascii"),
+    ))
+
+
+def verify_password(password: str, record: str) -> bool:
+    """
+    Pröva ett lösenord mot en lagrad post.
+
+    Jämförelsen görs med konstant tid. En oläsbar post ger False och
+    inte ett undantag: den som kan skriva sönder posten ska inte kunna
+    välja mellan att låsa ute och att släppa in.
+    """
+    parsed = _parse_password_record(record)
+    if parsed is None:
+        return False
+    n, r, p, salt, expected = parsed
+    try:
+        dk = _scrypt(password, salt, n, r, p, dklen=len(expected))
+    except (ValueError, MemoryError):
+        # Parametrar som posten begär men maskinen inte klarar. Att
+        # svara False är rätt: ett lösenord som inte KAN prövas är
+        # inte ett lösenord som stämmer.
+        return False
+    return hmac.compare_digest(dk, expected)
+
+
+def _scrypt(password: str, salt: bytes, n: int, r: int, p: int,
+            dklen: int = SCRYPT_DKLEN) -> bytes:
+    # maxmem måste anges uttryckligen — OpenSSL:s standardtak ligger
+    # under vad de här parametrarna behöver, och utan detta faller
+    # anropet på ett fel som ser ut som ett felaktigt lösenord.
+    behov = 128 * n * r * p
+    return hashlib.scrypt(
+        password.encode("utf-8"), salt=salt, n=n, r=r, p=p,
+        dklen=dklen, maxmem=behov * 2 + 1024 * 1024,
+    )
+
+
+def _parse_password_record(record: str):
+    """(n, r, p, salt, hash) ur en lagrad post, eller None."""
+    if not isinstance(record, str):
+        return None
+    delar = record.split("$")
+    if len(delar) != 4 or delar[0] != "scrypt":
+        return None
+    try:
+        params = dict(
+            bit.split("=", 1) for bit in delar[1].split(",")
+        )
+        n, r, p = int(params["n"]), int(params["r"]), int(params["p"])
+        salt = base64.b64decode(delar[2], validate=True)
+        expected = base64.b64decode(delar[3], validate=True)
+    except Exception:
+        return None
+    if n < 2 or r < 1 or p < 1 or not salt or not expected:
+        return None
+    return n, r, p, salt, expected
+
+
+# En post att pröva mot när användaren inte finns, så att ett okänt
+# namn kostar lika mycket tid som ett känt. Utan den skulle svarstiden
+# avslöja vilka konton som existerar — och en lista över anställda med
+# konton i systemet är i sig en uppgift värd att skydda.
+_DUMMY_RECORD = hash_password(secrets.token_urlsafe(32))
+
+
+def password_problems(password: str, name: str = "") -> list[str]:
+    """
+    Vad som är fel med ett föreslaget lösenord. Tom lista = dugligt.
+
+    Reglerna är avsiktligt få. Det som mäts är längd och att lösenordet
+    inte är namnet, eftersom det är de två fel som faktiskt förekommer.
+    Sammansättningsregler är medvetet uteslutna.
+    """
+    problem: list[str] = []
+    if len(password) < PASSWORD_MIN_LENGTH:
+        problem.append(
+            f"lösenordet måste vara minst {PASSWORD_MIN_LENGTH} tecken"
+        )
+    if len(password) > PASSWORD_MAX_LENGTH:
+        problem.append(
+            f"lösenordet får vara högst {PASSWORD_MAX_LENGTH} tecken"
+        )
+    if password != password.strip():
+        problem.append("lösenordet får inte börja eller sluta med blanksteg")
+    if name and name.lower() in password.lower():
+        problem.append("lösenordet får inte innehålla användarnamnet")
+    if len(set(password)) < 5:
+        problem.append("lösenordet är för enformigt")
+    return problem
+
+
+class Throttle:
+    """
+    Strypning av upprepade misslyckanden.
+
+    Lösenord kan gissas på ett sätt en slumpad token inte kan, så
+    inloggningsvägen behöver en spärr. Räknaren är per nyckel — api.py
+    avgör vad nyckeln är, lämpligen namn och avsändaradress
+    tillsammans, så att en angripare varken kan låsa ut en enskild
+    användare genom att gissa i hens namn eller kringgå spärren genom
+    att byta namn.
+
+    Spärren växer: efter FAILURES_BEFORE_LOCK misslyckanden gäller
+    BASE_LOCK sekunder, därefter dubbelt så länge för varje ytterligare
+    misslyckande upp till MAX_LOCK. En lyckad inloggning nollställer.
+
+    Tillståndet ligger i minnet och försvinner vid omstart. Det är en
+    känd svaghet — den som kan starta om servern kan nollställa spärren
+    — men en omstart kräver åtkomst till maskinen, och då är spärren
+    inte det som skyddar.
+    """
+
+    FAILURES_BEFORE_LOCK = 5
+    BASE_LOCK = 30.0
+    MAX_LOCK = 900.0
+
+    def __init__(self):
+        self._state: dict[str, tuple[int, float]] = {}
+
+    def locked_for(self, key: str) -> float:
+        """Sekunder kvar av spärren, 0 om nyckeln är öppen."""
+        misslyckanden, spärrad_till = self._state.get(key, (0, 0.0))
+        kvar = spärrad_till - time.monotonic()
+        return kvar if kvar > 0 else 0.0
+
+    def record_failure(self, key: str) -> float:
+        misslyckanden, _ = self._state.get(key, (0, 0.0))
+        misslyckanden += 1
+        if misslyckanden < self.FAILURES_BEFORE_LOCK:
+            self._state[key] = (misslyckanden, 0.0)
+            return 0.0
+        över = misslyckanden - self.FAILURES_BEFORE_LOCK
+        längd = min(self.BASE_LOCK * (2 ** över), self.MAX_LOCK)
+        self._state[key] = (misslyckanden, time.monotonic() + längd)
+        return längd
+
+    def record_success(self, key: str) -> None:
+        self._state.pop(key, None)
 
 
 @dataclass(frozen=True)
@@ -87,19 +293,39 @@ LOCAL = Principal(name="local", groups=(UNRESTRICTED,))
 
 
 @dataclass
+class UserRecord:
+    """
+    En post i användarfilen, som den lästes.
+
+    token_digest kan saknas (användaren har växlat in sin inbjudan),
+    password kan saknas (maskinkonto eller ännu inte inväxlad
+    inbjudan). Att båda saknas är ett fel och posten släpps — se
+    load_users.
+    """
+    principal: Principal
+    token_digest: str | None = None
+    password: str | None = None
+    # Sant när token bara får användas för att växlas in mot ett
+    # lösenord, aldrig för att autentisera vanliga anrop.
+    enrollment: bool = False
+
+
 class UserStore:
     """Användare inlästa ur instansens tillstånd."""
-    by_token_hash: dict[str, Principal] = field(default_factory=dict)
-    errors: list[str] = field(default_factory=list)
-    path: Path | None = None
-    # Filens tillstånd när den lästes: (mtime_ns, storlek). None när
-    # filen saknades. Används bara för att upptäcka ändring — aldrig
-    # för att avgöra om innehållet duger.
-    stamp: tuple[int, int] | None = None
+
+    def __init__(self):
+        self.by_token_hash: dict[str, Principal] = {}
+        self.by_name: dict[str, UserRecord] = {}
+        self.errors: list[str] = []
+        self.path: Path | None = None
+        # Filens tillstånd när den lästes: (mtime_ns, storlek). None när
+        # filen saknades. Används bara för att upptäcka ändring — aldrig
+        # för att avgöra om innehållet duger.
+        self.stamp: tuple[int, int] | None = None
 
     @property
     def loaded(self) -> int:
-        return len(self.by_token_hash)
+        return len(self.by_name)
 
     def verify(self, token: str | None) -> Principal | None:
         """
@@ -107,6 +333,10 @@ class UserStore:
 
         Jämförelsen görs mot alla poster med konstant tid, så att
         varken träff eller antal försök går att läsa ur svarstiden.
+
+        Inbjudningstokens ingår INTE här. En stulen inbjudan ska kunna
+        växlas in — vilket är högljutt, eftersom den rätta ägaren då
+        inte kan växla in sin — men aldrig läsa dokument.
         """
         if not token:
             return None
@@ -116,6 +346,50 @@ class UserStore:
             if hmac.compare_digest(stored, digest):
                 träff = principal
         return träff
+
+    def enrollment_for(self, token: str | None) -> UserRecord | None:
+        """Posten vars inbjudan denna token är, om någon."""
+        if not token:
+            return None
+        digest = hash_token(token)
+        träff: UserRecord | None = None
+        for record in self.by_name.values():
+            if not record.enrollment or not record.token_digest:
+                continue
+            if hmac.compare_digest(record.token_digest, digest):
+                träff = record
+        return träff
+
+    def verify_password(
+        self, name: str, password: str, throttle: "Throttle | None" = None,
+        key: str | None = None,
+    ) -> Principal | None:
+        """
+        Pröva namn och lösenord. None när något inte stämmer.
+
+        OKÄNT NAMN KOSTAR LIKA MYCKET SOM KÄNT. Prövningen görs mot en
+        attrappost när namnet inte finns, så att svarstiden inte
+        avslöjar vilka konton som existerar. Anroparen får samma svar i
+        båda fallen och ska ge samma besked utåt.
+
+        Strypningen är anroparens ansvar att kontrollera FÖRE anropet
+        (locked_for); här registreras bara utfallet, så att räknaren
+        följer verkligheten även om anroparen glömmer sin kontroll.
+        """
+        nyckel = key or name.strip().lower()
+        record = self.by_name.get(name.strip().lower())
+        lagrad = record.password if record and record.password else _DUMMY_RECORD
+        ok = verify_password(password, lagrad)
+        # Ett konto utan lösenord kan aldrig logga in, hur väl
+        # attrappen än skulle råka stämma.
+        if record is None or not record.password:
+            ok = False
+        if throttle is not None:
+            if ok:
+                throttle.record_success(nyckel)
+            else:
+                throttle.record_failure(nyckel)
+        return record.principal if ok and record else None
 
 
 def hash_token(token: str) -> str:
@@ -157,10 +431,18 @@ def load_users(path: Path) -> UserStore:
 
         users:
           - name: someone
-            token_sha256: "..."
+            token_sha256: "..."          # valfri: inbjudan eller maskintoken
+            enrollment: true             # token får BARA växlas in
+            password_scrypt: "scrypt$..." # valfri: sätts vid inväxling
             groups: [institution]
+
+    En post måste bära minst ett av token_sha256 och password_scrypt.
+    Bär den ingetdera kan den aldrig autentisera, och att låta den
+    ligga kvar tyst vore att visa en användare i 'urd auth list' som
+    inte kan logga in.
     """
-    store = UserStore(path=path)
+    store = UserStore()
+    store.path = path
     # Stämpeln tas FÖRE läsningen. Skrivs filen mitt under inläsningen
     # ser nästa kontroll en nyare stämpel och läser om — hellre en
     # överflödig omläsning än en ändring som aldrig upptäcks.
@@ -189,22 +471,60 @@ def load_users(path: Path) -> UserStore:
             continue
         name = str(entry.get("name") or "").strip()
         digest = str(entry.get("token_sha256") or "").strip().lower()
+        lösenord = entry.get("password_scrypt")
+        enrollment = bool(entry.get("enrollment"))
         if not name:
             store.errors.append(f"{path}: post {i} saknar name")
             continue
-        if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        if digest and (
+            len(digest) != 64
+            or any(c not in "0123456789abcdef" for c in digest)
+        ):
             store.errors.append(
-                f"{path}: användare {name!r} saknar giltig token_sha256"
+                f"{path}: användare {name!r} har ogiltig token_sha256"
+            )
+            continue
+        if lösenord is not None and _parse_password_record(lösenord) is None:
+            # Fail closed: en oläsbar lösenordspost gör hela användaren
+            # ogiltig i stället för att tyst falla tillbaka på token.
+            store.errors.append(
+                f"{path}: användare {name!r} har oläsbar password_scrypt"
+            )
+            continue
+        if not digest and not lösenord:
+            store.errors.append(
+                f"{path}: användare {name!r} saknar både token_sha256 och "
+                "password_scrypt och kan aldrig logga in"
+            )
+            continue
+        if enrollment and not digest:
+            store.errors.append(
+                f"{path}: användare {name!r} är märkt enrollment men "
+                "saknar token att växla in"
             )
             continue
         groups, fel = _validate_groups(name, entry.get("groups"))
         store.errors.extend(fel)
-        if digest in store.by_token_hash:
+        nyckel = name.lower()
+        if nyckel in store.by_name:
+            store.errors.append(f"{path}: namnet {name!r} förekommer flera gånger")
+            continue
+        if digest and digest in store.by_token_hash:
             store.errors.append(
                 f"{path}: samma token_sha256 används av flera användare"
             )
             continue
-        store.by_token_hash[digest] = Principal(name=name, groups=tuple(groups))
+        principal = Principal(name=name, groups=tuple(groups))
+        store.by_name[nyckel] = UserRecord(
+            principal=principal,
+            token_digest=digest or None,
+            password=lösenord,
+            enrollment=enrollment,
+        )
+        # Inbjudningstokens ingår inte i tokenuppslaget: de får växlas
+        # in, inte användas.
+        if digest and not enrollment:
+            store.by_token_hash[digest] = principal
 
     return store
 
