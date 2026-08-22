@@ -1274,6 +1274,12 @@ def auth_cmd(
     group: list[str] = typer.Option(
         None, "--group", "-g", help="Grupptillhörighet (kan upprepas)."
     ),
+    machine: bool = typer.Option(
+        False,
+        "--machine",
+        help="Skapa ett MASKINKONTO med långlivad token i stället för en "
+             "inbjudan. För urd test, skript och tjänster.",
+    ),
 ) -> None:
     """
     Lägg upp, visa och ta bort användare.
@@ -1334,7 +1340,23 @@ def auth_cmd(
         for u in users:
             grupper = ", ".join(u.get("groups") or []) or "(inga grupper)"
             skapad = u.get("created") or "okänt datum"
-            typer.echo(f"  {u.get('name'):<20} [{grupper}]  skapad {skapad}")
+            # TILLSTÅNDET SYNS. En fil med blandade poster — någon har
+            # växlat in, någon har en inbjudan som väntar, någon är en
+            # maskin — går annars inte att överblicka, och det är just
+            # den överblicken som avgör om ett konto ska tas bort.
+            if u.get("password_scrypt"):
+                läge = "lösenord"
+                if u.get("token_sha256") and not u.get("enrollment"):
+                    läge = "lösenord + maskintoken"
+            elif u.get("enrollment"):
+                läge = "inbjudan väntar"
+            elif u.get("token_sha256"):
+                läge = "maskinkonto"
+            else:
+                läge = "KAN INTE LOGGA IN"
+            typer.echo(
+                f"  {u.get('name'):<20} [{grupper}]  {läge}  skapad {skapad}"
+            )
         return
 
     if not name:
@@ -1402,7 +1424,7 @@ def auth_cmd(
         raise typer.Exit(code=2)
 
     token = A.generate_token()
-    users.append({
+    post = {
         "name": name,
         "token_sha256": A.hash_token(token),
         "groups": grupper,
@@ -1410,7 +1432,19 @@ def auth_cmd(
         # administration sker genom filredigering: utan det går det
         # inte att se om någon lagts till som inte borde vara där.
         "created": _dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
-    })
+    }
+    if not machine:
+        # INBJUDAN ÄR STANDARD. En token som skapas åt en människa ska
+        # bara kunna växlas in mot ett lösenord, aldrig läsa dokument:
+        # en inbjudan som kommer på avvägar ska inte ge åtkomst, och
+        # att växla in en stulen inbjudan är högljutt eftersom den
+        # rätta ägaren då inte kan växla in sin.
+        #
+        # Utan flaggan blev posten ett maskinkonto och 'urd enroll'
+        # svarade "Ogiltig inbjudan" — begreppet fanns i auth.py och i
+        # endpointen men inte i kommandot som skapar token.
+        post["enrollment"] = True
+    users.append(post)
     _skriv(users)
 
     typer.echo("")
@@ -1418,11 +1452,30 @@ def auth_cmd(
     typer.echo(f"Skriven till {visad}")
     typer.echo(_genomslag())
     typer.echo("")
-    typer.echo("  TOKEN (visas bara denna gång):")
-    typer.echo(f"      {token}")
-    typer.echo("")
-    typer.echo("  Klienten använder den så här:")
-    typer.echo(f"      urd connect --server <värd>:8000 --token {token}")
+    if machine:
+        typer.echo("  MASKINTOKEN (visas bara denna gång):")
+        typer.echo(f"      {token}")
+        typer.echo("")
+        typer.echo("  Långlivad och avsedd för skript och mätning. Används så här:")
+        typer.echo(f"      export URD_TOKEN={token}")
+        typer.echo("      urd test")
+        typer.echo("")
+        typer.echo("  Den går inte att växla in mot ett lösenord och löper "
+                   "aldrig ut —")
+        typer.echo("  ta bort kontot med 'urd auth remove' när det inte "
+                   "behövs längre.")
+    else:
+        typer.echo("  INBJUDAN (visas bara denna gång):")
+        typer.echo(f"      {token}")
+        typer.echo("")
+        typer.echo("  Lämna över den till användaren, som växlar in den mot "
+                   "ett eget lösenord:")
+        typer.echo(f"      urd enroll --token {token}")
+        typer.echo("")
+        typer.echo("  Inbjudan ger INGEN åtkomst till dokument och gäller en "
+                   "gång.")
+        typer.echo("  Efter inväxlingen loggar användaren in med namn och "
+                   "lösenord.")
     typer.echo("")
     if not settings.auth_enabled:
         typer.echo("  Autentisering är ännu AVSTÄNGD. Slå på med:", err=True)
