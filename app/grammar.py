@@ -1108,6 +1108,35 @@ _ORG_MARKERS = (
     "myndighet", "kommun", "region", "ab", "hb", "kb",
 )
 
+# Engelska huvudord i författnings-, organisations- och rollnamn:
+# "Archives Act", "Public Procurement Act", "Swedish Research Council",
+# "Data Protection Officer", "Personal Data Regulation".
+#
+# Sluten klass i HUVUDORDSPOSITION, alltså sist i frasen — samma slags
+# sats om form som _ORG_MARKERS, men på engelska. Uppmätt 2026-08-22:
+# hälften av restposten i identitetslistan var sådana namn. De är
+# ortografiskt oskiljbara från personnamn (versalinledda led i obruten
+# följd) och just därför passerar de looks_like_person_name; huvudordet
+# är det som skiljer dem.
+_EN_TITLE_HEADS = {
+    "act", "regulation", "ordinance", "council", "authority", "agency",
+    "board", "committee", "office", "officer", "commission", "court",
+    "university", "college", "school", "department", "institute",
+}
+
+
+def has_english_title_head(phrase: str) -> bool:
+    """Slutar frasen på ett engelskt författnings- eller organisationshuvud?"""
+    delar = phrase.strip().rstrip(".,:;").split()
+    if len(delar) < 2:
+        return False
+    sista = delar[-1].lower().strip("().,:;")
+    # "Protection Authority 2" — en efterföljande siffra är en
+    # hänvisningsmarkör, inte huvudordet.
+    if sista.isdigit() and len(delar) > 2:
+        sista = delar[-2].lower().strip("().,:;")
+    return sista in _EN_TITLE_HEADS
+
 
 # Sluten klass av svenska funktionsord. Att stryka dem framför en
 # parentes är en sats om syntax (prepositioner och konjunktioner kan
@@ -1193,8 +1222,22 @@ def _strip_leading_function_words(phrase: str) -> str:
     # legitimt par — "utses Rektors ställföreträdare (prorektor)" — och
     # en FÖRLORAD term syns aldrig i mätningen, medan ett kvarvarande
     # brusigt par syns. Asymmetrin avgör riktningen.
+    # ENDAST GEMENA LED STRIPPAS SOM VERB. Uppmätt 2026-08-22: regeln
+    # ovan stympade personnamn — förnamnet försvann och efternamnet
+    # stod kvar ensamt, i två av beståndets bindningar. Svenska förnamn
+    # slutar på precis de ändelser _FINITE_ENDINGS listar ("Charlotte
+    # Berg" blev "Berg", "Peter Ek" blev "Ek"), och listan är
+    # morfologisk och inte lexikal: den kan inte skilja verbform från
+    # namnform.
+    #
+    # Ett finit verb mitt i en mening är gement. Ett versalinlett ord är
+    # antingen ett namn eller en meningsstart, och eftersom fönstret är
+    # tre ord kostar det nästan ingenting att behålla det. Skadan åt
+    # andra hållet är däremot allvarlig: ett stympat namn ser ut som ett
+    # efternamn och syns inte som fel.
     while parts and (
-        parts[0].lower() in _FUNCTION_WORDS or _looks_predicative(parts[0])
+        parts[0].lower() in _FUNCTION_WORDS
+        or (parts[0][:1].islower() and _looks_predicative(parts[0]))
     ):
         parts.pop(0)
     return " ".join(parts).strip()
@@ -1224,7 +1267,14 @@ def looks_like_person_name(phrase: str) -> bool:
     ett namn och passerar. Att skilja dem kräver vokabulär, inte form.
     Predikatet är därför användbart för att UTESLUTA namn, inte för att
     fastställa dem, och ska användas därefter.
+
+    Ett undantag från gränsen är mekaniskt: fraser som slutar på ett
+    engelskt författnings- eller organisationshuvud ("Archives Act",
+    "Swedish Research Council") avvisas, eftersom huvudordet — till
+    skillnad från versalerna — skiljer dem från namn.
     """
+    if has_english_title_head(phrase):
+        return False
     tokens = phrase.split()
     if not tokens:
         return False
@@ -1305,6 +1355,14 @@ def _parenthetical_identity(text: str) -> list[Feature]:
         if a.split()[0].lower().rstrip(".") in _REFERENCE_MARKERS:
             continue
         if b.split()[0].lower() in _QUANTIFIER_MARKERS:
+            continue
+        # Samma två former förekommer i VÄNSTERLEDET: "Max 400 kr
+        # (blomsteruppvaktning)", "210 högskolepoäng (grundnivå)",
+        # "46 program (HDa 70st)". Kontrollen prövade bara ena sidan.
+        # En apposition benämner något; en mängdangivelse mäter det.
+        if a.split()[0].lower() in _QUANTIFIER_MARKERS:
+            continue
+        if a.split()[0].rstrip(".,:").isdigit():
             continue
         if b.split()[0].lower().rstrip(".") in _CONDITION_MARKERS:
             continue
