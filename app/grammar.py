@@ -1148,7 +1148,56 @@ def _looks_predicative(phrase: str) -> bool:
     return False
 
 
-def _parenthesis_kind(b: str) -> str:
+def looks_like_person_name(phrase: str) -> bool:
+    """
+    Ser frasen ut som ett personnamn?
+
+    ORTOGRAFISKT, INTE SEMANTISKT. Predikatet finns för konstruktioner
+    som utvinns ur RÅTEXT före parsning — parentetiska appositioner
+    sitter i tabellceller och rubriker som aldrig når dependensparsern,
+    så det formella kriteriet i titelkonstruktionen (PROPN med
+    flat:name-barn) är inte tillgängligt där.
+
+    Ett personnamn i svensk förvaltningstext skrivs med minst två led i
+    obruten följd, vart och ett med inledande versal:
+
+        "Anna Andersson"    -> True
+        "A Lind"            -> True   (initial räknas som led)
+        "prefekt"           -> False  (gement, alltså appellativ)
+        "Head of School"    -> False  (gement funktionsord bryter följden)
+        "HDA"               -> False  (versalord är förkortning, inte namn)
+
+    KÄND GRÄNS, DEKLARERAD: en främmandespråkig titel utan funktionsord
+    — "Vice Chancellor", "Deputy Head" — är ortografiskt oskiljbar från
+    ett namn och passerar. Att skilja dem kräver vokabulär, inte form.
+    Predikatet är därför användbart för att UTESLUTA namn, inte för att
+    fastställa dem, och ska användas därefter.
+    """
+    tokens = phrase.split()
+    if not tokens:
+        return False
+    följd = 0
+    for tok in tokens:
+        ren = tok.strip(".,;:()").strip()
+        if not ren:
+            följd = 0
+            continue
+        bokstäver = [c for c in ren if c.isalpha()]
+        if not bokstäver:
+            följd = 0
+            continue
+        # Ett versalord är en förkortning, inte ett namnled.
+        if len(ren) > 1 and all(c.isupper() for c in bokstäver):
+            följd = 0
+            continue
+        if ren[0].isupper():
+            följd += 1
+            if följd >= 2:
+                return True
+            continue
+        # Gement led bryter följden: "Head of School", "chef för IIT".
+        följd = 0
+    return False
     """Vilken relation bär parentesen?"""
     stripped = b.strip()
     letters = [c for c in stripped if c.isalpha()]
