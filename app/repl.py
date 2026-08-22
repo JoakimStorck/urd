@@ -68,6 +68,9 @@ HELP = """Commands (anything else is treated as a question):
   .debug on|off     show or hide technical detail
   .attest <term>    look up what the corpus attests about a role
                     (.attest "N.N." --person to look up a person)
+  .whoami           who the server thinks you are
+  .login            sign in with your user name and password
+  .logout           end the session on the server
   .stop             shut down the SERVER (the session continues locally)
   .quit             leave interactive mode (Ctrl-D also works)
 
@@ -91,6 +94,8 @@ _ALIASES = {
     "källor": "sources", "kallor": "sources",
     "stopp": "stop",
     "avsluta": "quit", "exit": "quit", "q": "quit",
+    "vemärjag": "whoami", "vemarjag": "whoami",
+    "loggain": "login", "loggaut": "logout",
 }
 
 
@@ -104,6 +109,7 @@ class Repl:
         show_debug: bool,
         note=None,
         token: str | None = None,
+        scripted: bool = False,
     ):
         # note() skriver statusrader dit de hör: stdout i terminal,
         # stderr i skriptläge. Default håller äldre anropare fungerande.
@@ -114,6 +120,17 @@ class Repl:
         # snart auth_enabled slogs på — bara 'urd connect' kunde
         # autentisera. None när servern inte kräver bevis.
         self.token = token
+        # Skriptläge frågar ALDRIG efter lösenord. getpass läser från
+        # stdin när det inte finns någon terminal, och skulle då äta
+        # nästa fråga ur heredocen och skicka den som lösenord.
+        self.scripted = scripted
+        # Namnet servern gav oss, för prompten. None tills vi frågat.
+        self.principal: str | None = None
+        # Sant bara när sessionen skapades HÄR. En token som kom via
+        # --token eller URD_TOKEN tillhör användaren och ska inte
+        # loggas ut när läget avslutas — det vore att förstöra något
+        # vi lånat.
+        self._own_session = False
         self.show_sources = show_sources
         self.show_debug = show_debug
         self.session_id: str | None = None
@@ -123,6 +140,123 @@ class Repl:
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}
+
+    # -- identitet ---------------------------------------------------
+
+    def prompt(self) -> str:
+        """Prompten, med namnet när servern gett oss ett."""
+        return f"{self.principal}@urd> " if self.principal else PROMPT
+
+    def whoami(self, quiet: bool = False) -> str | None:
+        """Fråga servern vem vi är. Uppdaterar prompten."""
+        if not self.token:
+            if not quiet:
+                typer.echo("Not signed in.")
+            return None
+        try:
+            resp = requests.get(
+                self.server_url + "/whoami", headers=self._headers(), timeout=10
+            )
+        except requests.RequestException as e:
+            if not quiet:
+                typer.echo(f"Could not reach the server: {e}")
+            return None
+        if resp.status_code in (401, 403):
+            self.principal = None
+            if not quiet:
+                typer.echo("The server does not accept this token.")
+            return None
+        if not resp.ok:
+            if not quiet:
+                typer.echo(f"Server error {resp.status_code}.")
+            return None
+        data = resp.json()
+        self.principal = data.get("name")
+        if not quiet:
+            grupper = ", ".join(data.get("groups") or []) or "no groups"
+            typer.echo(f"  {self.principal}  [{grupper}]")
+        return self.principal
+
+    def login(self) -> bool:
+        """
+        Fråga efter namn och lösenord och byt dem mot en session.
+
+        Anropas både av .login och automatiskt när ett anrop avvisas.
+        Returnerar True när vi har ett bevis efteråt.
+        """
+        if self.scripted:
+            typer.echo(
+                "The server requires authentication. Set URD_TOKEN or pass "
+                "--token; scripted mode cannot prompt for a password.",
+                err=True,
+            )
+            return False
+
+        import getpass
+        try:
+            namn = input("user: ").strip()
+            if not namn:
+                return False
+            lösen = getpass.getpass("password: ")
+        except (EOFError, KeyboardInterrupt):
+            typer.echo("")
+            return False
+        if not lösen:
+            return False
+
+        try:
+            resp = requests.post(
+                self.server_url + "/login",
+                json={"name": namn, "password": lösen},
+                timeout=60,
+            )
+        except requests.RequestException as e:
+            typer.echo(f"Could not reach the server: {e}")
+            return False
+
+        if resp.status_code == 429:
+            typer.echo(resp.json().get("detail", "Too many attempts."))
+            return False
+        if resp.status_code == 421:
+            # TLS-spärren. Beskedet från servern förklarar varför.
+            typer.echo(resp.json().get("detail", "Password login requires TLS."))
+            return False
+        if not resp.ok:
+            typer.echo("Wrong user name or password.")
+            return False
+
+        data = resp.json()
+        self.token = data["token"]
+        self._own_session = True
+        self.principal = (data.get("principal") or {}).get("name")
+        typer.echo(f"Welcome {self.principal}!")
+        return True
+
+    def logout(self, quiet: bool = False) -> None:
+        """
+        Avsluta sessionen på servern.
+
+        Bara vår EGEN session avslutas. En token som kom med --token
+        eller URD_TOKEN tillhör användaren och rörs inte — den kan
+        dessutom vara ett maskinkonto, som inte går att logga ut.
+        """
+        if not self.token or not self._own_session:
+            if not quiet:
+                typer.echo("No session of my own to end.")
+            return
+        try:
+            requests.post(
+                self.server_url + "/logout", headers=self._headers(), timeout=10
+            )
+        except requests.RequestException:
+            # Servern kan vara nere. Sessionen går ändå ut av sig
+            # själv, och att gnälla vid avslut hjälper ingen.
+            pass
+        self.token = None
+        self._own_session = False
+        självnamn, self.principal = self.principal, None
+        if not quiet:
+            typer.echo(f"Signed out{f' ({självnamn})' if självnamn else ''}.")
 
     # -- backend -----------------------------------------------------
 
@@ -173,14 +307,19 @@ class Repl:
                 return
             if not resp.ok:
                 if resp.status_code in (401, 403):
-                    typer.echo(
-                        f"The server rejected the request ({resp.status_code}). "
-                        "Start with --token, or set URD_TOKEN."
-                    )
-                else:
-                    typer.echo(
-                        f"Server error {resp.status_code}: {resp.text[:200]}"
-                    )
+                    # LAT INLOGGNING. Användaren behöver inte känna
+                    # till något inloggningskommando: frågan hålls,
+                    # beviset hämtas, frågan skickas om. Ett enda
+                    # försök — lyckas inte inloggningen är det inte
+                    # rätt läge att fråga igen automatiskt.
+                    typer.echo("The request requires authentication.")
+                    if not self.login():
+                        return
+                    self.ask(question)
+                    return
+                typer.echo(
+                    f"Server error {resp.status_code}: {resp.text[:200]}"
+                )
                 return
             response = ChatResponse.model_validate(resp.json())
             if response.session_id:
@@ -273,6 +412,18 @@ class Repl:
         elif cmd == "attest":
             self._attest(args)
 
+        elif cmd == "whoami":
+            self.whoami()
+
+        elif cmd == "login":
+            if self.token and self.principal:
+                typer.echo(f"Already signed in as {self.principal}.")
+            else:
+                self.login()
+
+        elif cmd == "logout":
+            self.logout()
+
         elif cmd == "status":
             backend = {
                 None: "undecided (resolved at first question)",
@@ -280,6 +431,7 @@ class Repl:
                 False: "local",
             }[self.use_server]
             typer.echo(f"  backend:  {backend}")
+            typer.echo(f"  identity: {self.principal or 'not signed in'}")
             typer.echo(f"  session:  {self.session_id or 'none yet'}")
             typer.echo(f"  turns:    {self.turns}")
             typer.echo(f"  sources:  {'on' if self.show_sources else 'off'}")
@@ -377,7 +529,14 @@ def run(
                   "app.concepts", "app.question_operations"):
         _logging.getLogger(_name).setLevel(_logging.WARNING)
 
-    repl = Repl(server_url, show_sources, show_debug, note=note, token=token)
+    repl = Repl(server_url, show_sources, show_debug, note=note, token=token,
+                scripted=scripted)
+    # Har vi redan ett bevis, fråga en gång vem det tillhör — då kan
+    # prompten bära namnet från första raden. Tyst: saknas eller duger
+    # inte token märks det ändå vid första frågan, och ett felmeddelande
+    # före bannern vore brus.
+    if token:
+        repl.whoami(quiet=True)
     if not scripted:
         typer.echo(BANNER)
         typer.echo("")
@@ -386,7 +545,7 @@ def run(
 
     while True:
         try:
-            line = input("" if scripted else PROMPT)
+            line = input("" if scripted else repl.prompt())
         except EOFError:              # Ctrl-D, eller slut på indata
             if not scripted:
                 typer.echo("")
@@ -419,6 +578,12 @@ def run(
             # I skriptläge är felet ett resultat: stderr och exitkod.
             typer.echo(f"Error: {e}", err=scripted)
             failed = True
+
+    # AUTOMATISK UTLOGGNING. En session som skapades här ska inte
+    # överleva läget — då blir en glömd utloggning omöjlig snarare än
+    # osannolik. Bara vår egen session avslutas; en token som kom med
+    # --token eller URD_TOKEN tillhör användaren och rörs inte.
+    repl.logout(quiet=True)
 
     if not scripted:
         typer.echo("Bye.")

@@ -340,6 +340,71 @@ def whoami(
     }
 
 
+@app.post("/enroll")
+def enroll(payload: dict, request: Request) -> dict:
+    """
+    Växla in en inbjudan mot ett lösenord.
+
+    Token identifierar posten — den ÄR identiteten, och något namn
+    behöver därför inte anges. Efter inväxlingen tas token bort ur
+    posten: en inbjudan gäller en gång.
+
+    Samma strypning och samma TLS-krav som /login. Strypningen är här
+    ännu viktigare, eftersom en gissad inbjudan ger rätten att SÄTTA
+    ett lösenord och inte bara att pröva ett.
+    """
+    if not settings.auth_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="Autentisering är avstängd på den här servern.",
+        )
+    _require_confidential(request)
+
+    token = str(payload.get("token") or "").strip()
+    password = str(payload.get("password") or "")
+    if not token or not password:
+        raise HTTPException(status_code=400, detail="Token och lösenord krävs.")
+
+    värd = request.client.host if request.client else "okänd"
+    nyckel = f"enroll|{värd}"
+    kvar = _throttle.locked_for(nyckel)
+    if kvar > 0:
+        raise HTTPException(
+            status_code=429,
+            detail=f"För många misslyckade försök. Försök igen om {int(kvar) + 1} s.",
+        )
+
+    record = _current_users().enrollment_for(token)
+    if record is None:
+        _throttle.record_failure(nyckel)
+        logger.warning("auth: ogiltig inbjudan från %s", värd)
+        raise HTTPException(status_code=401, detail="Ogiltig inbjudan.")
+
+    name = record.principal.name
+    problem = auth.password_problems(password, name=name)
+    if problem:
+        # INTE ett misslyckat försök: token var giltig, lösenordet dög
+        # inte. Att räkna det som gissning skulle låta en användare med
+        # svagt lösenordsval spärra sig själv.
+        raise HTTPException(status_code=400, detail=" · ".join(problem))
+
+    if not auth.set_password(
+        settings.users_path, name, password, consume_enrollment=True
+    ):
+        raise HTTPException(status_code=409, detail="Användaren finns inte längre.")
+
+    _throttle.record_success(nyckel)
+    logger.info("auth: %s växlade in sin inbjudan från %s", name, värd)
+
+    principal = record.principal
+    token_ny, ttl = _sessions.create(principal)
+    return {
+        "token": token_ny,
+        "expires_in": int(ttl),
+        "principal": {"name": principal.name, "groups": list(principal.groups)},
+    }
+
+
 @app.post("/refresh")
 def refresh(
     principal: auth.Principal = Depends(require_principal),

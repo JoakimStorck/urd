@@ -332,6 +332,17 @@ def serve(
     Starta den lokala backend-servern för API och webbgränssnitt.
     """
     _check_bind_safety(host, insecure, bool(ssl_certfile))
+    # DUBBELSTART SÄGS RENT UT. Utan detta går uvicorns
+    # "Address already in use" igenom, vilket inte säger vad som
+    # upptar porten eller vad man ska göra åt det.
+    körande = _running_server()
+    if körande:
+        typer.echo(
+            f"En server kör redan på {körande}.\n"
+            "Avsluta den med 'urd stop', eller starta på en annan port "
+            "med --port."
+        )
+        raise typer.Exit(code=1)
     # PID-fil så att 'urd stop' kan avsluta servern kontrollerat.
     #
     # PID-fil hellre än en shutdown-endpoint: en HTTP-väg som dödar
@@ -420,7 +431,11 @@ def stop(
         typer.echo(
             "Ingen server.pid i .urd/. Antingen kör ingen server, eller så "
             "startades den utan 'urd serve'.\n"
-            "Hitta processen med:  lsof data/qdrant/.lock"
+            "Med autoreload kör uvicorn två processer, och en arbetare kan "
+            "bli kvar när reloadern dött — porten är då upptagen utan att "
+            "pid-filen finns.\n"
+            "Hitta processen med:  lsof -i :8000\n"
+            "Eller, om den öppnat vektorlagret:  lsof data/qdrant/.lock"
         )
         raise typer.Exit(code=1)
 
@@ -1152,6 +1167,101 @@ def attest_sample(
         "räkna precision per konstruktion. Under 90 % bör konstruktionen\n"
         "strykas ur uttaget — bedömning på stickprov, inte på intryck."
     )
+
+
+@app.command(
+    "whoami",
+    help="Visa vilken identitet servern anser att din token bär.",
+)
+def whoami_cmd(
+    server_url: str = typer.Option(
+        "http://127.0.0.1:8000", "--server-url", help="URL till urd-servern."
+    ),
+    token: str = typer.Option(
+        None, "--token", help="Token mot servern. Kan även sättas med URD_TOKEN."
+    ),
+) -> None:
+    """
+    Vem är jag mot DEN HÄR servern?
+
+    Skild från 'urd auth list', som läser användarfilen lokalt och
+    visar vilka konton som finns. När klient och server är olika
+    maskiner är det den här frågan som är den intressanta.
+    """
+    url = server_url.rstrip("/") + "/whoami"
+    try:
+        resp = requests.get(url, headers=_auth_headers(_client_token(token)),
+                            timeout=10)
+    except requests.ConnectionError:
+        typer.echo(f"Kunde inte ansluta till servern på {server_url}.", err=True)
+        raise typer.Exit(code=1)
+    if not resp.ok:
+        typer.echo(_server_error(resp, url), err=True)
+        raise typer.Exit(code=1)
+    data = resp.json()
+    grupper = ", ".join(data.get("groups") or []) or "inga grupper"
+    typer.echo(f"{data.get('name')}  [{grupper}]")
+    if data.get("unrestricted"):
+        typer.echo("  oavgränsad (lokal drift utan autentisering)")
+
+
+@app.command(
+    "enroll",
+    help="Växla in en inbjudan mot ett eget lösenord.",
+)
+def enroll_cmd(
+    server_url: str = typer.Option(
+        "http://127.0.0.1:8000", "--server-url", help="URL till urd-servern."
+    ),
+    token: str = typer.Option(
+        None, "--token", help="Inbjudan från administratören."
+    ),
+) -> None:
+    """
+    Första inloggningen: inbjudan in, lösenord ut.
+
+    Inbjudan gäller en gång. Efter inväxlingen kan den inte användas
+    igen — kontot har därefter bara ett lösenord, vilket är hela
+    poängen med att den långa strängen bara behöver överleva
+    överlämningen.
+    """
+    inbjudan = token or os.getenv("URD_TOKEN") or typer.prompt(
+        "Inbjudan från administratören", hide_input=True
+    )
+    lösen = typer.prompt("Välj ett lösenord", hide_input=True)
+    igen = typer.prompt("Upprepa", hide_input=True)
+    if lösen != igen:
+        typer.echo("Lösenorden stämmer inte överens.", err=True)
+        raise typer.Exit(code=2)
+    # Policyn prövas också på servern; att göra det här också sparar
+    # användaren en rundtur och en misslyckad inväxling.
+    from app import auth as A
+    problem = A.password_problems(lösen)
+    if problem:
+        for p in problem:
+            typer.echo(f"  {p}", err=True)
+        raise typer.Exit(code=2)
+
+    url = server_url.rstrip("/") + "/enroll"
+    try:
+        resp = requests.post(
+            url, json={"token": inbjudan.strip(), "password": lösen}, timeout=60
+        )
+    except requests.ConnectionError:
+        typer.echo(f"Kunde inte ansluta till servern på {server_url}.", err=True)
+        raise typer.Exit(code=1)
+    if not resp.ok:
+        try:
+            detalj = resp.json().get("detail", resp.text)
+        except Exception:
+            detalj = resp.text
+        typer.echo(f"Inväxlingen misslyckades: {detalj}", err=True)
+        raise typer.Exit(code=1)
+
+    data = resp.json()
+    namn = (data.get("principal") or {}).get("name")
+    typer.echo(f"Klart. Du är upplagd som {namn!r} och kan logga in med lösenord.")
+    typer.echo("Inbjudan är förbrukad och går inte att använda igen.")
 
 
 @app.command(
