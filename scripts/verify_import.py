@@ -29,6 +29,11 @@ Tre kontroller, alla billiga och alla deterministiska:
    definierar? Fångar den andra halvan av auth-fallet: nycklar som
    levde i den lokala .urd/config.json men aldrig i koden.
 
+4. NAMN      — används något namn som aldrig binds i filen? Fångar en
+   funktion som raderats medan anropet står kvar. Namnet slås upp
+   först när koden KÖRS, så varken py_compile eller importkontrollen
+   ser det.
+
 Vad skriptet INTE gör: det kör ingenting. Verkningslösa flaggor,
 oåtkomlig kod och felaktiga returtyper kräver funktionella prov, och
 de skrivs per patch. Det här är golvet, inte taket.
@@ -44,6 +49,7 @@ Exitkod 0 om allt är rent, annars 1.
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib
 import pkgutil
 import re
@@ -230,6 +236,89 @@ def kontrollera_konfig() -> list[str]:
     return fel
 
 
+# --------------------------------------------------------------------
+# 4. Obundna namn
+# --------------------------------------------------------------------
+
+_BUILTINS = set(dir(__builtins__)) | {
+    "__name__", "__file__", "__doc__", "__package__", "__builtins__",
+    "self", "cls",
+}
+
+
+def _bundna_namn(träd) -> set[str]:
+    """
+    Varje namn som binds någonstans i filen.
+
+    Medvetet GROVT: bindningar samlas utan hänsyn till räckvidd, vilket
+    överskattar mängden och därmed ger färre falsklarm. Kontrollen ska
+    hitta namn som inte finns NÅGONSTANS — det var den felklassen som
+    slank igenom.
+    """
+    bundna: set[str] = set()
+    for nod in ast.walk(träd):
+        if isinstance(nod, (ast.FunctionDef, ast.AsyncFunctionDef,
+                            ast.ClassDef, ast.Lambda)):
+            # Lambda saknar namn men BINDER sina parametrar. Utan den
+            # raden larmade kontrollen på "x" i varje sorteringsnyckel.
+            if not isinstance(nod, ast.Lambda):
+                bundna.add(nod.name)
+            args = getattr(nod, "args", None)
+            if args is not None:
+                for a in (args.posonlyargs + args.args + args.kwonlyargs):
+                    bundna.add(a.arg)
+                for a in (args.vararg, args.kwarg):
+                    if a is not None:
+                        bundna.add(a.arg)
+        elif isinstance(nod, ast.Name) and isinstance(nod.ctx, (ast.Store, ast.Del)):
+            bundna.add(nod.id)
+        elif isinstance(nod, (ast.Import, ast.ImportFrom)):
+            for alias in nod.names:
+                bundna.add((alias.asname or alias.name).split(".")[0])
+        elif isinstance(nod, ast.ExceptHandler) and nod.name:
+            bundna.add(nod.name)
+        elif isinstance(nod, (ast.Global, ast.Nonlocal)):
+            bundna.update(nod.names)
+    return bundna
+
+
+def kontrollera_obundna_namn() -> list[str]:
+    """
+    Namn som används men aldrig binds i filen.
+
+    Fångar den felklass som varken py_compile eller importkontrollen
+    ser: en funktion som raderas medan anropet står kvar. Namnet slås
+    upp först när koden KÖRS, så modulen importeras utan invändning och
+    felet visar sig i drift.
+
+    Uppmätt 2026-08-22: patch 0038 raderade _parenthesis_kind genom en
+    slarvig textersättning. py_compile godtog filen, importkontrollen
+    godtog modulen, och urd attest-build skulle ha fallit på NameError
+    vid nästa körning.
+    """
+    fel = []
+    for kat in ("app", "scripts"):
+        for p in sorted((ROOT / kat).rglob("*.py")):
+            if "__pycache__" in p.parts:
+                continue
+            try:
+                träd = ast.parse(p.read_text(encoding="utf-8"))
+            except SyntaxError as e:
+                fel.append(f"{p.relative_to(ROOT)}: kunde inte tolkas: {e}")
+                continue
+            bundna = _bundna_namn(träd) | _BUILTINS
+            saknade = {
+                n.id for n in ast.walk(träd)
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                and n.id not in bundna
+            }
+            for namn in sorted(saknade):
+                fel.append(
+                    f"{p.relative_to(ROOT)}: {namn!r} används men binds aldrig"
+                )
+    return fel
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--quiet", action="store_true", help="bara utfall och fel")
@@ -252,6 +341,10 @@ def main() -> int:
     if not args.quiet:
         print("Konfignycklar")
     alla.append(("konfig", kontrollera_konfig()))
+
+    if not args.quiet:
+        print("Obundna namn")
+    alla.append(("namn", kontrollera_obundna_namn()))
 
     antal = sum(len(f) for _, f in alla)
     print("")

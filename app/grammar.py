@@ -1116,19 +1116,48 @@ _FUNCTION_WORDS = {
     "av", "för", "till", "i", "på", "med", "hos", "om", "som", "och",
     "efter", "vid", "från", "genom", "att", "den", "det", "en", "ett",
     "är", "fattas", "beslutas",
+    # Engelska. Beståndet är tvåspråkigt, och regelverket var det inte:
+    # uppmätt 2026-08-22 började ett tjugotal utvunna vänsterled med
+    # engelsk preposition eller konjunktion ("by school administrator",
+    # "and microdata analysis", "of department duties"), alltså fraser
+    # klippta mitt ur en mening.
+    "vi", "man", "denna", "detta", "dessa", "sin", "sina",
+    "the", "a", "an", "by", "with", "and", "of", "in", "on", "at",
+    "to", "as", "from", "for", "is", "that", "s",
 }
 
 _REFERENCE_MARKERS = {
     "se", "jfr", "dvs", "exempelvis", "bilaga", "not", "enligt",
     "eller", "resp", "respektive",
+    # Uppmätt 2026-08-22: hänvisningar till punkter och figurer utvanns
+    # som appositioner ("Arbetslunch (punkt 3)", "bilaga 2 (...)").
+    "punkt", "punkt11", "pkt", "figur", "fig", "tabell", "avsnitt",
 }
 
+# Svenska böjningssuffix. Listan är MORFOLOGISK och inte lexikal: den
+# säger något om ordform, inte om vilka ord som finns. "prefekt(er)",
+# "kurs(er)", "avdelning(ar)" är en ordform i två varianter, inte två
+# namn på samma sak. Att pröva mot suffixmängden i stället för mot
+# "kort och gement" bevarar förkortningar av samma längd —
+# "helårsprestationer (hpr)" är ett legitimt par och hpr är inget
+# böjningssuffix.
+_INFLECTION_SUFFIXES = {
+    "er", "ar", "or", "en", "et", "na", "ne", "n", "r", "t", "s", "ers",
+}
 
-def _strip_leading_function_words(phrase: str) -> str:
-    parts = phrase.split()
-    while parts and parts[0].lower() in _FUNCTION_WORDS:
-        parts.pop(0)
-    return " ".join(parts).strip()
+# Kvantifierare inleder en MÄNGDANGIVELSE, inte ett andra namn:
+# "(max 4 sidor)", "(minst tre st)", "(ca 20 min)", "(högst tre år)".
+# Sluten funktionsordsklass, inte en lista över förekommande fall.
+_QUANTIFIER_MARKERS = {
+    "max", "maximalt", "minst", "minimum", "högst", "ca", "cirka",
+    "ungefär", "åtminstone", "upp", "under", "över", "flera", "endast",
+}
+
+# Villkor och förbehåll är inte heller appositioner: "(if needed)",
+# "(when needed)", "(om möjligt)", "(currently)".
+_CONDITION_MARKERS = {
+    "if", "when", "unless", "currently", "preliminärt", "eventuellt",
+}
 
 
 # Verbändelser som markerar finit form i svenska. Listan är
@@ -1146,6 +1175,29 @@ def _looks_predicative(phrase: str) -> bool:
         if tok.endswith(_FINITE_ENDINGS):
             return True
     return False
+
+
+def _strip_leading_function_words(phrase: str) -> str:
+    # Listmarkörer och tankstreck först: beståndet har punktlistor där
+    # varje rad inleds med "- ", och regexet tar med strecket i
+    # vänsterledet ("- Accessible", "- -vicerektor", "- ordförande").
+    parts = phrase.lstrip("-–—•*· ").split()
+    # LEDANDE VERB STRIPPAS, PARET KASTAS INTE. Regexet tar upp till tre
+    # ord före parentesen oavsett vad de är och klipper därmed ut
+    # satsfragment ur löpande text: "integreras i verksamhetsplan",
+    # "sker vid kvalitetsdialog". Huvudordet i en nominalfras står
+    # intill parentesen, så allt före det är avskalbart.
+    #
+    # Att i stället kasta hela paret vore farligare: en mening som
+    # råkar ha ett verb tre ord före parentesen skulle då tysta ett
+    # legitimt par — "utses Rektors ställföreträdare (prorektor)" — och
+    # en FÖRLORAD term syns aldrig i mätningen, medan ett kvarvarande
+    # brusigt par syns. Asymmetrin avgör riktningen.
+    while parts and (
+        parts[0].lower() in _FUNCTION_WORDS or _looks_predicative(parts[0])
+    ):
+        parts.pop(0)
+    return " ".join(parts).strip()
 
 
 def looks_like_person_name(phrase: str) -> bool:
@@ -1198,6 +1250,9 @@ def looks_like_person_name(phrase: str) -> bool:
         # Gement led bryter följden: "Head of School", "chef för IIT".
         följd = 0
     return False
+
+
+def _parenthesis_kind(b: str) -> str:
     """Vilken relation bär parentesen?"""
     stripped = b.strip()
     letters = [c for c in stripped if c.isalpha()]
@@ -1224,16 +1279,34 @@ def _parenthetical_identity(text: str) -> list[Feature]:
     """
     out: list[Feature] = []
     for m in re.finditer(
-        r"((?:[\wÅÄÖåäö\-]+[ ]){0,2}[\wÅÄÖåäö\-]+)[ ]*\(([A-ZÅÄÖa-zåäö][\w\- ]{1,40}?)\)",
+        r"((?:[\wÅÄÖåäö\-]+[ ]){0,2}[\wÅÄÖåäö\-]+)([ ]*)\(([A-ZÅÄÖa-zåäö][\w\- ]{1,40}?)\)",
         text,
     ):
-        a = _strip_leading_function_words(m.group(1))
-        b = m.group(2).strip()
+        rå_a = m.group(1)
+        fogen = m.group(2)
+        a = _strip_leading_function_words(rå_a)
+        b = m.group(3).strip()
         if not a or a.lower() == b.lower():
+            continue
+        # BÖJNINGSPARENTES. "prefekt(er)", "kurs(er)", "avdelning(ar)"
+        # är svensk pluralkonvention — en ordform, inte ett andra namn.
+        # Kännetecknet är att parentesen sitter DIREKT på ordet och
+        # innehåller ett kort gement suffix. Uppmätt 2026-08-22: ett
+        # femtontal par och ett fyrtiotal förekomster, alla med "(er)"
+        # eller "(ar)".
+        if b.lower() in _INFLECTION_SUFFIXES:
             continue
         # "(se ovan)", "(jfr bilaga 2)" är hänvisningar, inte
         # appositioner. En apposition har ett nominalt huvudord.
         if b.split()[0].lower() in _REFERENCE_MARKERS | _FUNCTION_WORDS:
+            continue
+        # Hänvisningen kan lika gärna stå i VÄNSTERLEDET: "bilaga 2
+        # (examensordningen)". Kontrollen fanns bara på ena sidan.
+        if a.split()[0].lower().rstrip(".") in _REFERENCE_MARKERS:
+            continue
+        if b.split()[0].lower() in _QUANTIFIER_MARKERS:
+            continue
+        if b.split()[0].lower().rstrip(".") in _CONDITION_MARKERS:
             continue
         if b.split()[0].lower().rstrip(".") in _DISJUNCTION_MARKERS:
             continue
