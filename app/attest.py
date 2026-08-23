@@ -211,6 +211,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
 _STORED_KINDS = {
     "identitet", "agens", "patiens", "modalitet",
     "forkortning", "tillhorighet",
+    # Termekvivalens: två namn på samma sak, inte en person i en roll.
+    # Skild från identitet så att ett uppslag på "vem är X" aldrig kan
+    # returnera beståndets tvåspråkiga ordlista som personkandidat.
+    # Ordlistan är i sig värdefull — white paperns tredje synonymväg —
+    # men den hör till termhanteringen, inte till personfrågor.
+    "oversattning",
 }
 
 

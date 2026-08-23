@@ -1302,6 +1302,63 @@ def looks_like_person_name(phrase: str) -> bool:
     return False
 
 
+# Svenska författningssuffix. En fras som slutar så BENÄMNER EN LAG,
+# och en lag är inte en person. Signalen fångar paret från det svenska
+# hållet när det engelska ledet saknar igenkännbart huvudord:
+# "Personal Data (Personuppgiftslagen)" — "Data" står inte i
+# _EN_TITLE_HEADS, men "-lagen" avgör saken ändå.
+_STATUTE_SUFFIXES = ("lagen", "lagstiftningen", "förordningen",
+                     "ordningen", "balken", "stadgan")
+
+# Uttrycklig översättningsmarkör. När texten SJÄLV säger att parentesen
+# är en översättning behövs ingen ortografi: "Dataanalys och AI (Data
+# Science and Analytics på engelska)", "(new translation from ...)".
+_TRANSLATION_MARKERS = (
+    "på engelska", "på svenska", "in english", "in swedish",
+    "new translation", "engelsk översättning", "svensk översättning",
+)
+
+
+def _names_a_statute(phrase: str) -> bool:
+    delar = phrase.strip().rstrip(".,:;").split()
+    return bool(delar) and delar[-1].lower().endswith(_STATUTE_SUFFIXES)
+
+
+def _has_translation_marker(phrase: str) -> bool:
+    låg = phrase.lower()
+    return any(m in låg for m in _TRANSLATION_MARKERS)
+
+
+def is_term_equivalence(a: str, b: str) -> bool:
+    """
+    Är paret två NAMN PÅ SAMMA SAK snarare än en person i en roll?
+
+    Uppmätt 2026-08-22: av 162 par klassade som parentes:identitet var
+    omkring 140 termekvivalenser — beståndets egen tvåspråkiga
+    ordlista — och ett drygt tiotal verkliga personbindningar. Klassen
+    var alltså felnamngiven, och konsekvensen var att ordlistan
+    kandiderade på "vem är"-frågor.
+
+    Fyra signaler, i tur och ordning från starkast till svagast:
+
+    1. texten säger det själv ("... på engelska")
+    2. ena ledet benämner en författning ("-lagen", "-förordningen")
+    3. ena ledet benämner en organisation (_ORG_MARKERS)
+    4. inget led ser ut som ett personnamn
+
+    Den fjärde bär huvuddelen; de tre första finns för att
+    looks_like_person_name är ortografiskt och släpper igenom
+    främmandespråkiga titlar som är versalinledda i obruten följd.
+    """
+    if _has_translation_marker(a) or _has_translation_marker(b):
+        return True
+    if _names_a_statute(a) or _names_a_statute(b):
+        return True
+    if any(m in a.lower() for m in _ORG_MARKERS):
+        return True
+    return not (looks_like_person_name(a) or looks_like_person_name(b))
+
+
 def _parenthesis_kind(b: str) -> str:
     """Vilken relation bär parentesen?"""
     stripped = b.strip()
@@ -1383,9 +1440,19 @@ def _parenthetical_identity(text: str) -> list[Feature]:
         # apposition inte påstår något, den benämner.
         if _looks_predicative(b):
             continue
+        slag = _parenthesis_kind(b)
+        # OMKLASSNING. Konstruktionen blandade två slag av par: en
+        # person i en roll och två namn på samma roll. Bara det första
+        # får kandidera på "vem är"-frågor; det andra är beståndets egen
+        # tvåspråkiga ordlista och hör till synonymvägen.
+        #
+        # Bara "identitet" prövas om. Förkortning och tillhörighet är
+        # redan avgjorda på annan grund och rörs inte.
+        if slag == "identitet" and is_term_equivalence(a, b):
+            slag = "oversattning"
         out.append(Feature(
-            kind=_parenthesis_kind(b), a=a, b=b,
-            relation="parentes:" + _parenthesis_kind(b).split(":")[-1],
+            kind=slag, a=a, b=b,
+            relation="parentes:" + slag.split(":")[-1],
             sentence=m.group(0), strength=PRESUPPOSED,
         ))
     return out

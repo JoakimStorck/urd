@@ -58,8 +58,11 @@ def klassa(subjekt: str, objekt: str) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--show", type=int, default=20,
-                    help="Antal exempel per klass (0 = inga).")
+    # NOLL SOM STANDARD. Utdata bär personnamn ur beståndet, och en
+    # sammanställning av namn, roller och datum är känsligare än sina
+    # delar. Exempel visas bara när de uttryckligen efterfrågas.
+    ap.add_argument("--show", type=int, default=0,
+                    help="Antal exempel per klass. Utdata bär PERSONNAMN.")
     ap.add_argument("--term", default=None,
                     help="Begränsa till par där något led matchar termen.")
     ap.add_argument("--counts", action="store_true",
