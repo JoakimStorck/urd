@@ -30,6 +30,7 @@ from app.concepts import load_concepts
 from app.question_operations import load_question_operations
 from app.source_guard import check_answer as run_source_guard, format_warning
 from app import deliberation
+from app import answer_claims
 from app.corpus_guard import (
     check_answer as run_corpus_guard,
     format_addition as format_corpus_addition,
@@ -1606,6 +1607,11 @@ class RagService:
         # Bygg debug-info för syntesen
         synthesis_debug = {
             "used_fallback": synthesis_result.used_fallback,
+            # Deliberationens prövningssteg, tyst: vad påstår svaret,
+            # och är påståendena kontrollerbara? Avgör ingenting ännu.
+            "answer_claims": answer_claims.summarize(
+                answer_claims.extract_bindings(synthesis_result.answer)
+            ),
         }
         if synthesis_result.fallback_reason:
             synthesis_debug["fallback_reason"] = synthesis_result.fallback_reason
@@ -1789,6 +1795,11 @@ class RagService:
         synthesis_debug = {
             "used_fallback": synthesis_result.used_fallback,
             "mode": mode,
+            # Även rework-vägen: elaboration och verification
+            # producerar bindningspåståenden på samma sätt.
+            "answer_claims": answer_claims.summarize(
+                answer_claims.extract_bindings(synthesis_result.answer)
+            ),
         }
         if synthesis_result.fallback_reason:
             synthesis_debug["fallback_reason"] = synthesis_result.fallback_reason
