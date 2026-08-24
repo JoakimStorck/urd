@@ -29,6 +29,7 @@ from app.synonyms import load_synonyms
 from app.concepts import load_concepts
 from app.question_operations import load_question_operations
 from app.source_guard import check_answer as run_source_guard, format_warning
+from app import deliberation
 from app.corpus_guard import (
     check_answer as run_corpus_guard,
     format_addition as format_corpus_addition,
@@ -2206,6 +2207,14 @@ class RagService:
                     used_fallback=False,
                 )
 
+        # Deliberation, tyst: turens åtagande byggs och loggas men
+        # påverkar ingenting. Ligger EFTER driftkontrollen så att en
+        # omtolkad tur får sin slutliga rolls arvsregel.
+        commitment = deliberation.compose(
+            question, classification.intent,
+            classification.question_operation, state,
+        )
+
         matched_concept_ids = self.concepts.find_matching_concept_ids(question)
         matched_concept_labels = self.concepts.labels_for_concept_ids(matched_concept_ids)
 
@@ -2232,6 +2241,7 @@ class RagService:
                 "num_active_hits": len(state.active_hits),
                 "num_consumed_hits": len(state.consumed_hit_ids),
             },
+            "commitment": commitment.as_debug(),
         }
 
         if drift is not None:

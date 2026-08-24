@@ -43,6 +43,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import grammar  # noqa: E402
+from app.deliberation import extract_constraints  # noqa: E402
 
 # Årtal och intervall: "2024", "2023/2024", "2023-2025".
 _YEAR = re.compile(r"\b(?:19|20)\d{2}(?:\s*[/–-]\s*(?:19|20)?\d{2})?\b")
@@ -91,46 +92,6 @@ def _questions_from_jsonl(path: Path):
             yield str(namn), int(tur) if str(tur).isdigit() else 0, q
 
 
-def _parse_constraints(q: str) -> list[tuple[str, str]]:
-    """
-    (huvudmarkör, fras) för varje grammatisk inskränkning i frågan.
-
-    Prepositionsfraser hämtas som obl/nmod med case-barn; markören är
-    prepositionens lemma. Adverbial som advmod med ADV. Formen avgör —
-    ingen lista över vilka slag som "räknas".
-    """
-    pipeline = grammar._get_pipeline()
-    if pipeline is None:
-        return []
-    ut: list[tuple[str, str]] = []
-    try:
-        doc = pipeline(q)
-    except Exception:
-        return []
-    for mening in doc.sentences:
-        ord_efter_id = {w.id: w for w in mening.words}
-        barn: dict[int, list] = {}
-        for w in mening.words:
-            barn.setdefault(w.head, []).append(w)
-        for w in mening.words:
-            if w.deprel in ("obl", "obl:tmod", "nmod"):
-                case = [b for b in barn.get(w.id, [])
-                        if b.deprel == "case"]
-                if not case:
-                    continue
-                markör = case[0].lemma.lower()
-                # Frasen: markören + huvudordet + dess platta barn.
-                led = [case[0].text, w.text] + [
-                    b.text for b in barn.get(w.id, [])
-                    if b.deprel in ("flat", "flat:name", "compound", "amod")
-                ]
-                ut.append((markör, " ".join(led)))
-            elif w.deprel == "advmod" and w.upos == "ADV":
-                if w.lemma.lower() not in ("inte", "också", "bara", "ju"):
-                    ut.append(("adverbial", w.text))
-    return ut
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--battery", default="test/questions.json",
@@ -164,9 +125,12 @@ def main() -> int:
     deiktisk_lista: list[tuple[str, int, str]] = []
 
     for namn, tur, q in frågor:
-        inskr = _parse_constraints(q) if har_parse else []
-        år = _YEAR.findall(q)
-        deikt = _DEICTIC.findall(q)
+        alla = extract_constraints(q)
+        # Skriptet särredovisar det modulen bär som status/markör.
+        inskr = [(i.markor, i.fras) for i in alla
+                 if i.markor not in ('artal', 'deiktisk')]
+        år = [i for i in alla if i.markor == 'artal']
+        deikt = [i for i in alla if i.markor == 'deiktisk']
         innehåll = [
             w for w in re.findall(r"[\wåäöÅÄÖ-]+", q.lower())
             if w not in _NONCONTENT and len(w) > 2 and not w.isdigit()

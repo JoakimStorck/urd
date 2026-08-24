@@ -75,6 +75,11 @@ class ConversationState:
     # från den yttring som senast klassificerades som new_main_question.
     # None om ingen huvudfråga ännu etablerats.
     current_qud_text: str | None = None
+    # QUD-turens åtagande (deliberation.Atagande) — ramen som
+    # relaterade turer ärver. Otypat här för att inte binda
+    # tillståndslagret till deliberationsmodulen; fältet ägs och
+    # skrivs av deliberation.compose.
+    qud_commitment: object | None = None
     # Vid vilken tur-position (index i turns) QUD:n sattes. Används för
     # att räkna "ålder" på QUD:n, synlig i debug.
     current_qud_turn_index: int | None = None
