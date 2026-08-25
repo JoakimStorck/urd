@@ -60,7 +60,21 @@ SUBJEKT_FORMELL = "formell"     # utfyllnad — binder ingenting
 #           äkta overifierbara kategorin, 2 av 17
 #
 # Slutna ordklasser, inte domänlistor.
-_FORMAL_SUBJECTS = {"det", "detta", "dessa", "denna"}
+#
+# "den" står med av två skäl. Stanzas svenska lemmatisering ger
+# det -> "den", så ett lemma-uppslag utan den släppte igenom just
+# "det" — uppmätt 2026-08-24: detta och dessa försvann (lemma "denna")
+# medan det gick igenom fyra gånger. Och prövningen görs mot BÅDE
+# ytform och lemma, så att klassningen inte beror på vilken
+# lemmatisering en framtida parser råkar ha.
+#
+# DEKLARERAD GRÄNS: den/det kan också vara anaforiska ("den är
+# gällande", om rutinen). De klassas ändå som diskurssubjekt: den
+# bevakade klassen är personbindningar, och ett neutrum binder aldrig
+# en person till en roll. Skulle anaforiska den-påståenden behöva
+# prövas är det korrelatupplösning över meningsgräns som krävs — en
+# annan mekanism, inte en annan lista.
+_FORMAL_SUBJECTS = {"det", "detta", "dessa", "denna", "den"}
 _REFERENTIAL_PRONOUNS = {
     "han", "hon", "hen", "denne", "de", "dem", "du", "ni", "jag", "vi",
 }
@@ -95,6 +109,10 @@ class Bindning:
             "subjekt_art": self.subjekt_art,
             "konstruktion": self.konstruktion,
             "verifierbar": self.verifierbar,
+            # Spåret bär redan hela svaret, så meningen är ingen ny
+            # exponering — men den gör en avvikelse diagnosbar utan
+            # gissningslek.
+            "mening": self.mening,
         }
 
 
@@ -131,8 +149,8 @@ def _phrase(word, barn: dict) -> str:
 
 def _subject_kind(word) -> str:
     if word.upos == "PRON":
-        lemma = (word.lemma or word.text).lower()
-        if lemma in _FORMAL_SUBJECTS:
+        former = {(word.lemma or "").lower(), word.text.lower()}
+        if former & _FORMAL_SUBJECTS:
             return SUBJEKT_FORMELL
         return SUBJEKT_PRONOMEN
     if word.upos == "PROPN":
