@@ -50,13 +50,47 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import grammar  # noqa: E402
 
-# Abstain-mallens kännetecken. Hämtas hellre ur konfig den dag mallen
-# blir konfigurerbar; tills dess speglar strängen synthesis-mallen.
+# Reservväg för äldre spår utan abstained-fält. Spåret bär sedan länge
+# "abstained" som loggat FAKTUM, och det är det som läses först —
+# första versionen av detta skript matchade strängar mot mallen och
+# missade den ("inget TYDLIGT stöd"), med noll uppmätta avståenden
+# över ett spår som bevisligen innehöll dem. Att gissa ur texten när
+# sanningen ligger loggad bredvid är samma fel som strängassertionerna
+# i batteriet.
 _ABSTAIN_MARKERS = (
+    "hittar inget tydligt stöd",
     "hittar inget stöd",
     "hittar ingen information",
-    "inget underlag i de tillgängliga källorna",
 )
+
+# Personform kontra funktionsform, grammatiskt skild: "vem ÄR X" —
+# kopula med rollpredikat — lovar en PERSON, medan "vem BESLUTAR om X"
+# — agentverb — lovar en FUNKTION, och "prefekten beslutar" är då ett
+# fullständigt svar. Uppmätt 2026-08-25: tre av sex divergenta var
+# funktionsfrågor korrekt besvarade med funktion. Sluten kopulamängd,
+# inte en verblista över domänen.
+_COPULAS = {"är", "var", "blir", "heter", "vart"}
+_HOLDER_PHRASES = ("uppdraget som", "rollen som", "utsedd till")
+
+# Intenter vars svar prövar ett TIDIGARE påstående och inte ska dömas
+# som nya innehavarfrågor.
+_EXCLUDED_INTENTS = {"verification_or_challenge", "social_or_meta"}
+
+
+def _is_person_form(question: str) -> bool:
+    """Lovar frågan en person, inte bara en funktion?"""
+    låg = question.lower()
+    if any(f in låg for f in _HOLDER_PHRASES):
+        return True
+    ord_ = låg.replace("?", " ").split()
+    for i, w in enumerate(ord_):
+        if w in ("vem", "vilka") and i + 1 < len(ord_):
+            return ord_[i + 1] in _COPULAS
+    # "Vilken roll har <namn>" — omvänd innehavarfråga: given person,
+    # efterfrågad roll. Namnet i frågan gör löftet personbundet.
+    if låg.startswith("vilken roll") or "vilken roll har" in låg:
+        return True
+    return False
 
 # Operationer vars löfte är en namngiven innehavare.
 _NAMING_OPERATIONS = {"entity_lookup", "entity_aggregation"}
@@ -97,6 +131,8 @@ def classify_actual(post: dict) -> tuple[str, dict]:
     claims = ((debug.get("synthesis") or {}).get("answer_claims")) or {}
     bindningar = claims.get("bindningar", [])
 
+    if debug.get("abstained") is True:
+        return "avstar", {}
     låg = svar.lower()
     if not svar or any(m in låg for m in _ABSTAIN_MARKERS):
         return "avstar", {}
@@ -148,10 +184,14 @@ def main() -> int:
             })
             continue
 
-        # Substitutionsmåttet: en innehavarfråga vars svar beskriver
-        # utan att namnge och utan att avstå.
+        # Substitutionsmåttet: en PERSONFORMAD innehavarfråga vars
+        # svar beskriver utan att namnge och utan att avstå.
+        # Funktionsfrågor ("vem beslutar om X") frias: funktionen är
+        # där ett fullständigt svar. Verifikationsturer prövar ett
+        # tidigare påstående och döms inte som nya innehavarfrågor.
         if (op in _NAMING_OPERATIONS
-                and intent != "social_or_meta"
+                and intent not in _EXCLUDED_INTENTS
+                and _is_person_form(post.get("question", ""))
                 and faktiskt == "beskriver"):
             divergenta.append({
                 "sekvens": post.get("sequence"), "tur": post.get("turn"),
