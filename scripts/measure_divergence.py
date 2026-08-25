@@ -151,12 +151,30 @@ def classify_actual(post: dict) -> tuple[str, dict]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("jsonl", help="Körningsspår från urd test.")
-    ap.add_argument("--table", default="deliberation_table.yaml")
+    ap.add_argument("--table", default=None,
+                    help="Beslutstabell (default: deliberation_table.yaml "
+                         "i repots rot, oberoende av arbetskatalog).")
     ap.add_argument("--show", type=int, default=0,
                     help="Visa divergenta turer (frågetext kan bära namn).")
     args = ap.parse_args()
 
-    tabell = _load_table(Path(args.table))
+    # Tabellen söks relativt REPOT, inte arbetskatalogen: skriptet
+    # ska ge samma dom oavsett varifrån det körs, och ett fel ska
+    # säga var det letade.
+    if args.table:
+        kandidater = [Path(args.table)]
+    else:
+        rot = Path(__file__).resolve().parent.parent
+        kandidater = [rot / "deliberation_table.yaml",
+                      Path("deliberation_table.yaml")]
+    tabellväg = next((k for k in kandidater if k.exists()), None)
+    if tabellväg is None:
+        raise SystemExit(
+            "Hittar ingen beslutstabell. Letade: "
+            + ", ".join(str(k) for k in kandidater)
+            + ". Är patch 0047 applicerad (git log --oneline | grep -i beslutstabell)?"
+        )
+    tabell = _load_table(tabellväg)
     operationer = tabell["operationer"]
 
     per_op: Counter = Counter()
