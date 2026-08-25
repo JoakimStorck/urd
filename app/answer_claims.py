@@ -44,8 +44,26 @@ _SOURCE_REF = re.compile(r"\[\s*Källa[^\]]*\]", re.IGNORECASE)
 
 # Subjektets art avgör om påståendet går att kontrollera mot beståndet.
 SUBJEKT_NAMN = "namn"           # PROPN — kontrollerbart
-SUBJEKT_PRONOMEN = "pronomen"   # PRON — referenten ligger utanför satsen
+SUBJEKT_PRONOMEN = "pronomen"   # referentiellt PRON — referenten utanför satsen
 SUBJEKT_APPELLATIV = "appellativ"  # vanligt substantiv
+SUBJEKT_FORMELL = "formell"     # utfyllnad — binder ingenting
+
+# Uppmätt 2026-08-24 över batteriet: 17 "overifierbara" bindningar
+# fördelade sig på som(8), det(4), han(2), du(1), detta(1), dessa(1).
+# Tre grammatiska klasser, två av dem lösbara mekaniskt:
+#
+#   som     relativsubjekt — referenten står I MENINGEN (korrelatet),
+#           och parsen pekar ut den; upplöses nedan, flaggas inte
+#   det m fl  formella eller diskursdeiktiska subjekt ("det är viktigt
+#           att...") — binder ingen entitet, egen klass
+#   han m fl  referentiella — referenten ligger utanför satsen; den
+#           äkta overifierbara kategorin, 2 av 17
+#
+# Slutna ordklasser, inte domänlistor.
+_FORMAL_SUBJECTS = {"det", "detta", "dessa", "denna"}
+_REFERENTIAL_PRONOUNS = {
+    "han", "hon", "hen", "denne", "de", "dem", "du", "ni", "jag", "vi",
+}
 
 _MODIFIER_DEPRELS = (
     "flat", "flat:name", "compound", "amod", "nmod", "case", "det",
@@ -113,6 +131,9 @@ def _phrase(word, barn: dict) -> str:
 
 def _subject_kind(word) -> str:
     if word.upos == "PRON":
+        lemma = (word.lemma or word.text).lower()
+        if lemma in _FORMAL_SUBJECTS:
+            return SUBJEKT_FORMELL
         return SUBJEKT_PRONOMEN
     if word.upos == "PROPN":
         return SUBJEKT_NAMN
@@ -153,6 +174,7 @@ def extract_bindings(answer: str) -> list[Bindning]:
             doc = None
         if doc is not None:
             for mening in doc.sentences:
+                ord_efter_id = {w.id: w for w in mening.words}
                 barn: dict[int, list] = {}
                 for w in mening.words:
                     barn.setdefault(w.head, []).append(w)
@@ -166,16 +188,34 @@ def extract_bindings(answer: str) -> list[Bindning]:
                     if not kopula or not subj:
                         continue
                     s = subj[0]
+                    konstruktion = "kopula"
+                    # RELATIVSUBJEKT UPPLÖSES MOT KORRELATET. I "den
+                    # person som är ansvarig" är subjektet "som", men
+                    # referenten står i samma mening: substantivet som
+                    # relativsatsen hänger på (acl:relcl-huvudets
+                    # huvud). Ingen koreferens behövs — bara en båge
+                    # till i parsen. Uppmätt: åtta av sjutton
+                    # "overifierbara" var sådana, alltså bindningar
+                    # som ska upplösas, inte flaggas.
+                    if (s.upos == "PRON"
+                            and (s.lemma or s.text).lower() in ("som", "vilken", "vilket", "vilka")
+                            and head.deprel == "acl:relcl"):
+                        korrelat = ord_efter_id.get(head.head)
+                        if korrelat is not None:
+                            s = korrelat
+                            konstruktion = "kopula:relativ"
                     art = _subject_kind(s)
                     lagg(Bindning(
                         subjekt=_phrase(s, barn),
                         predikat=_phrase(head, barn),
                         subjekt_art=art,
-                        konstruktion="kopula",
-                        # ETT PRONOMENSUBJEKT GÖR PÅSTÅENDET
+                        konstruktion=konstruktion,
+                        # ETT REFERENTIELLT PRONOMEN GÖR PÅSTÅENDET
                         # OKONTROLLERBART: referenten ligger utanför
                         # satsen, och ingen korpuskontroll kan nå den.
-                        verifierbar=art != SUBJEKT_PRONOMEN,
+                        # Ett formellt subjekt binder ingenting och är
+                        # en egen art, inte en overifierbar bindning.
+                        verifierbar=art not in (SUBJEKT_PRONOMEN,),
                         mening=mening.text,
                     ))
 
@@ -201,6 +241,9 @@ def summarize(bindningar: list[Bindning]) -> dict:
     return {
         "antal": len(bindningar),
         "antal_overifierbara": sum(1 for b in bindningar if not b.verifierbar),
+        "antal_formella": sum(
+            1 for b in bindningar if b.subjekt_art == SUBJEKT_FORMELL
+        ),
         "konstruktioner": sorted({b.konstruktion for b in bindningar}),
         "bindningar": [b.as_debug() for b in bindningar],
     }
