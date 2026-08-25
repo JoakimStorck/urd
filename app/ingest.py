@@ -36,7 +36,23 @@ from app.schemas import (
     EvidenceObject,
 )
 
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".xlsx"}
+SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".md", ".markdown"}
+
+# Markdown läses DIREKT, utan Docling. Hela kedjan nedströms —
+# sektionsdelning på #-rubriker, titelinferens, datummarkörer i
+# huvudet — arbetar redan på markdown, eftersom Docling konverterar
+# ALLT till markdown internt. En .md-fil är alltså redan i kedjans
+# arbetsformat, och att skicka den genom en dokumentkonverterare vore
+# ett onödigt steg med egen felyta.
+#
+# Avsedd användning: systemdokument om URD och lokala rutiner, lagda
+# som mapp i dokumentkatalogen. De får ingen särställning — samma
+# indexering, samma Attest-utvinning, samma epistemiska status som
+# varje annan källa. Datering: markdown saknar BeHDa-huvud, så datum
+# hämtas ur innehållsmarkörerna (skriv t.ex. "Beslutsdatum: ÅÅÅÅ-MM-DD"
+# eller "Reviderad: ÅÅÅÅ-MM-DD" i inledningen) eller ur
+# filnamnskonventionen med datum först eller sist.
+_DIRECT_READ_EXTENSIONS = {".md", ".markdown"}
 
 
 @dataclass
@@ -66,6 +82,27 @@ def iter_document_paths(root: Path) -> list[Path]:
     ]
 
 
+def count_unsupported(root: Path) -> dict[str, int]:
+    """
+    Filer i beståndet som ingest INTE tar — per ändelse.
+
+    Tyst överhoppning är fel läge: den som lägger en fil i docs/ i god
+    tro ska få en signal om att den aldrig indexerats, inte upptäcka
+    det veckor senare via ett uteblivet svar. Dolda filer och kataloger
+    räknas inte; de är inte lagda i god tro utan av verktyg.
+    """
+    räkning: dict[str, int] = {}
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        if any(part.startswith(".") for part in p.relative_to(root).parts):
+            continue
+        ext = p.suffix.lower() or "(utan ändelse)"
+        if ext not in SUPPORTED_EXTENSIONS:
+            räkning[ext] = räkning.get(ext, 0) + 1
+    return räkning
+
+
 def compute_source_fingerprint(path: Path) -> str:
     st = path.stat()
     raw = f"{path}:{st.st_size}:{st.st_mtime_ns}"
@@ -74,6 +111,12 @@ def compute_source_fingerprint(path: Path) -> str:
 
 def extract_text_with_fallback(path: Path) -> RawDocument:
     try:
+        if path.suffix.lower() in _DIRECT_READ_EXTENSIONS:
+            return RawDocument(
+                path=path,
+                text=path.read_text(encoding="utf-8"),
+                title=path.stem,
+            )
         result = _get_converter().convert(str(path))
         doc = result.document
 

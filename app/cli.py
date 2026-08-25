@@ -38,6 +38,7 @@ from app.config import settings
 from app.embeddings import Embedder
 from app.ingest import (
     compute_source_fingerprint,
+    count_unsupported,
     ingest_path,
     ingest_evidence_path,
     ingest_path_with_evidence,
@@ -716,6 +717,10 @@ def ingest(
         )
 
     typer.echo("")
+    hoppade = count_unsupported(root)
+    if hoppade:
+        detalj = ", ".join(f"{ext} ({n})" for ext, n in sorted(hoppade.items()))
+        typer.echo(f"Ej indexerbara filtyper i katalogen: {detalj}")
     typer.echo(
         f"Klart. Processade dokument: {total_docs}, chunkar: {total_chunks}, "
         f"skapade: {created}, uppdaterade: {updated}, hoppade över: {skipped}"
