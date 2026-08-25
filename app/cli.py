@@ -1098,6 +1098,8 @@ def attest_build(
     if pattern:
         chunks = [c for c in chunks if pattern.lower() in c.metadata.source_path.lower()]
         typer.echo(f"Filtrerat på {pattern!r}: {len(chunks)} chunkar")
+        typer.echo("Urvalsbygge: dokument utanför mönstret rörs inte, "
+                   "och städning av försvunna dokument hoppas över.")
     conn = attest.connect()
 
     def progress(i, total, path, n):
@@ -1107,6 +1109,7 @@ def attest_build(
         result = attest.build(
             chunks, conn, only_changed=only_changed,
             limit=limit or None, progress=progress,
+            complete=not pattern,
         )
     except RuntimeError as e:
         typer.echo(str(e))

@@ -248,7 +248,8 @@ def _observations_from_chunk(chunk) -> list[dict]:
 
 
 def build(chunks, conn: sqlite3.Connection, only_changed: bool = False,
-          limit: int | None = None, progress=None) -> dict:
+          limit: int | None = None, progress=None,
+          complete: bool = True) -> dict:
     """
     Bygg eller uppdatera observationsindexet.
 
@@ -256,6 +257,14 @@ def build(chunks, conn: sqlite3.Connection, only_changed: bool = False,
     oförändrat. Det är inkrementaliteten: att köra om tusentals
     dokument dagligen är onödigt när fingerprintet redan säger vad som
     ändrats.
+
+    complete=False betyder att anroparen FILTRERAT urvalet (t.ex.
+    --pattern): bygget ersätter då sina dokument men städsteget för
+    försvunna dokument hoppas över. Uppmätt 2026-08-25: ett
+    mönsterbygge över elva protokoll lät städningen tolka beståndets
+    övriga 230 dokument som försvunna från disk och radera 18 947
+    observationer. Städningen kan inte skilja "finns inte på disk"
+    från "ingick inte i urvalet" — det måste anroparen säga.
     """
     if not is_available():
         raise RuntimeError(
@@ -348,7 +357,9 @@ def build(chunks, conn: sqlite3.Connection, only_changed: bool = False,
             progress(i, len(paths), path, len(rows))
 
     # Dokument som försvunnit ur beståndet ska inte lämna spår kvar.
-    if not limit:
+    # ENDAST när bygget sett hela beståndet: ett filtrerat urval säger
+    # ingenting om vad som finns på disk.
+    if complete and not limit:
         for path in list(known):
             if path not in by_doc:
                 conn.execute("DELETE FROM observations WHERE source_path = ?", (path,))
