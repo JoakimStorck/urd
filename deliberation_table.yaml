@@ -1,0 +1,68 @@
+# Deliberationens beslutstabell, version 1 (white paper 3.0).
+#
+# UTFALLSMÄNGDEN ÄR SLUTEN PER OPERATION: operationen definierar inte
+# bara vad som räcker utan vilka utfall som finns. Varje svar ska gå
+# att hänföra till ett utfall ur sin operations mängd — det är vad som
+# gör lagret prövbart.
+#
+# Tabellen läses i detta skede ENDAST av scripts/measure_divergence.py,
+# som dömer i efterhand över körningsspår. Den styr ingenting i drift.
+# Makt ges utfallsklass för utfallsklass, först när divergensen är
+# uppmätt på rätt ställen.
+#
+# "namnger_kraver" anger vilken evidens i SVARET som krävs för att
+# utfallet namnger ska anses föreligga: en verifierbar bindning där
+# något led är namnlikt. Bedömningen görs av bindningsutvinningen
+# (answer_claims) och namnpredikatet (grammar.looks_like_person_name),
+# inte av stränglistor.
+
+version: 1
+
+operationer:
+  entity_lookup:
+    lovar: "en namngiven innehavare av en roll eller plats"
+    utfall:
+      - namnger
+      - namnger_med_forbehall
+      - beskriver_men_namnger_inte   # måste sägas UTTRYCKLIGEN
+      - motstridigt
+      - avstar
+    # Substitutionsfelet: rollbeskrivning som svar på innehavarfråga.
+    # Tills det systemförfattade utfallet finns räknas varje svar som
+    # beskriver utan att namnge som DIVERGENT för denna operation.
+    divergent_nar: beskriver_utan_uttrycklig_markering
+
+  entity_aggregation:
+    lovar: "en uppräkning av namngivna innehavare"
+    utfall: [namnger, beskriver_men_namnger_inte, motstridigt, avstar]
+    divergent_nar: beskriver_utan_uttrycklig_markering
+
+  direct_lookup:
+    lovar: "det regel- eller sakinnehåll frågan pekar ut"
+    utfall: [aterger, saknas, motstridigt, avstar]
+
+  requirements:
+    lovar: "de krav eller behörigheter som gäller"
+    utfall: [aterger, saknas, motstridigt, avstar]
+
+  process:
+    lovar: "gången i en handläggning eller tillsättning"
+    utfall: [aterger, saknas, motstridigt, avstar]
+
+  relation_membership:
+    lovar: "vilken kategori eller relation något tillhör"
+    utfall: [aterger, saknas, motstridigt, avstar]
+
+  aggregation:
+    lovar: "en sammanställning över kategorier eller typer"
+    utfall: [aterger, saknas, motstridigt, avstar]
+
+  comparison:
+    lovar: "en jämförelse mellan namngivna alternativ"
+    utfall: [aterger, saknas, motstridigt, avstar]
+
+# Prövningsfynd som mäts oavsett operation: en overifierbar bindning
+# (referentiellt pronomen som subjekt) i ett svar är alltid ett fynd,
+# eftersom ingen korpuskontroll kan nå den.
+provningsfynd:
+  - overifierbar_bindning
