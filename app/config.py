@@ -320,6 +320,12 @@ class Settings(BaseModel):
     # extraktionsfel, men ett entydigt sådant är fortfarande det bästa
     # beståndet har — och alternativet i det uppmätta fallet var
     # abstain. Provisoriskt värde; kalibreras mot batteriet.
+    # PENSIONERAD 2026-08-25 (patch 0056): reservationskanalen vaktas
+    # nu av skälens art (attest.reservation_worthy) i stället för av
+    # detta relevansgolv, som var kalibrerat mot styrkor uppblåsta
+    # före innehållsräkningen. Nyckeln behålls definierad så att
+    # befintliga miljöer inte faller på okänd variabel; den läses
+    # inte längre någonstans.
     attest_required_min_relevance: float = 0.25
 
     # SÄKERHET.

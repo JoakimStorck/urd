@@ -2125,11 +2125,11 @@ class RagService:
                 })
                 for src in c.sources:
                     rel_by_name[src] = max(rel_by_name.get(src, 0.0), c.relevance)
-                # Var bindningen står. Reserveras som nödvändig passage
-                # bara när beläggningen når golvet — en enda tvetydig
-                # observation ska inte kunna tvinga in en passage som
-                # cross-encodern dömt ut.
-                if c.relevance >= settings.attest_required_min_relevance:
+                # Var bindningen står. Reserveras när bindningen har
+                # entydigt belägg — se attest.reservation_worthy för
+                # varför detta är en artbedömning och inte ett
+                # relevansgolv.
+                if attest.reservation_worthy(c):
                     for loc in c.locations[:2]:
                         if loc not in debug["locations"]:
                             debug["locations"].append(loc)

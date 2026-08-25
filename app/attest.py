@@ -371,6 +371,30 @@ def build(chunks, conn: sqlite3.Connection, only_changed: bool = False,
     return stats
 
 
+def reservation_worthy(candidate) -> bool:
+    """
+    Får kandidatens belägglägen reserveras som nödvändiga passager?
+
+    BEDÖMNING FRAMFÖR TRÖSKEL. Kanalen vaktades tidigare av ett
+    relevansgolv (0,25), satt mot styrkor som var uppblåsta innan
+    beläggning räknades per innehåll. Efter rättelsen låg entydiga
+    bindningar på 0,19 — under golvet — och uppslaget hittade dem utan
+    att kunna använda dem: systemet visste vem som innehar rollen men
+    kunde inte svara på frågan om den. Uppmätt 2026-08-25 i drift.
+
+    Golvets eget syfte var att en enda tvetydig observation inte ska
+    kunna tvinga in en passage. Det syftet mäts inte av en poäng utan
+    av skälens art, som kandidaten redan bär: bindningen ska ha minst
+    ett ENTYDIGT belägg i minst ett dokument. En färsk eller gammal,
+    ofta eller sällan omnämnd bindning är en RANGORDNINGSFRÅGA —
+    relevansen ordnar kandidater sinsemellan — men tillträdet till
+    syntesen avgörs av om beståndet någonstans faktiskt binder, inte
+    av hur ofta.
+    """
+    return (not candidate.ambiguous_only
+            and candidate.unambiguous_documents >= 1)
+
+
 # ---------------------------------------------------------------------------
 # Uppslag
 # ---------------------------------------------------------------------------
