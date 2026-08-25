@@ -1255,6 +1255,7 @@ class RagService:
         preferred_source_paths: list[str] | None = None,
         question_operation: str = "direct_lookup",
         matched_concept_ids: list[str] | None = None,
+        intent: str = "new_main_question",
     ) -> ChatResponse:
         """
         Kör retrieval och syntes.
@@ -1618,7 +1619,7 @@ class RagService:
         # står kvar under: den är fortfarande sann och nyttig, felet
         # var att den utgav sig för att vara svaret.
         _utfall = deliberation.judge_naming_outcome(
-            classification.question_operation, classification.intent,
+            question_operation, intent,
             question, False, _claims_summary,
             grammar_mod.looks_like_person_name,
         )
@@ -2413,6 +2414,7 @@ class RagService:
             preferred_source_paths=preferred_source_paths,
             question_operation=classification.question_operation,
             matched_concept_ids=matched_concept_ids,
+            intent=classification.intent,
         )
 
         # Kontextuell fallback vid abstain. En elliptisk följdfråga
@@ -2445,6 +2447,7 @@ class RagService:
                 background_max_turns=settings.qud_background_turns,
                 question_operation=classification.question_operation,
                 matched_concept_ids=matched_concept_ids,
+                intent=classification.intent,
             )
             rescued = not (retry.debug or {}).get("abstained", False)
             context_fallback = {

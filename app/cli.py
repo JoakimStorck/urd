@@ -1491,6 +1491,10 @@ def attest_coverage(
     term: str = typer.Argument(..., help="Term att mäta, t.ex. studierektor"),
 ) -> None:
     from app import attest, inspect as ins
+    # Latent bugg funnen av räckviddskontrollen 2026-08-25: namnet
+    # importerades bara i felhanteraren längst ned i filen — en annan
+    # räckvidd — så låsfelsvägen här hade fallit med NameError.
+    from app.qdrant_store import StorageLockedError
 
     try:
         store = _build_store_only()

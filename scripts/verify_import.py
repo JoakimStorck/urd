@@ -284,17 +284,24 @@ def _bundna_namn(träd) -> set[str]:
 
 def kontrollera_obundna_namn() -> list[str]:
     """
-    Namn som används men aldrig binds i filen.
+    Namn som används men aldrig binds i filen — samt, sedan 0051,
+    namn som används i EN FUNKTION men bara binds i EN ANNAN.
 
-    Fångar den felklass som varken py_compile eller importkontrollen
-    ser: en funktion som raderas medan anropet står kvar. Namnet slås
-    upp först när koden KÖRS, så modulen importeras utan invändning och
-    felet visar sig i drift.
+    Den filvida kontrollen (0039) samlar bindningar utan hänsyn till
+    räckvidd för att ge få falsklarm. Det var ett dokumenterat val,
+    och det bet 2026-08-25: patch 0050 använde 'classification' i
+    answer() medan namnet bara binds i converse(). py_compile godkände,
+    importen godkände, filvida kontrollen godkände — namnet FANNS ju i
+    filen — och servern föll med NameError på varje tur som nådde
+    syntesen, medan abstain-turer gick igenom. Halvt fungerande är
+    värre än trasigt.
 
-    Uppmätt 2026-08-22: patch 0038 raderade _parenthesis_kind genom en
-    slarvig textersättning. py_compile godtog filen, importkontrollen
-    godtog modulen, och urd attest-build skulle ha fallit på NameError
-    vid nästa körning.
+    Därför prövas nu varje toppnivåfunktion och metod för sig: tillåtna
+    namn är modulnivåns bindningar, builtins och funktionens EGNA
+    bindningar (parametrar, lokaler, nästlade funktioner — nästlade
+    prövas tillsammans med sin yttre, vilket överskattar closures och
+    ger färre falsklarm). En syskonmetods lokaler är inte tillåtna,
+    för de är inte åtkomliga.
     """
     fel = []
     for kat in ("app", "scripts"):
@@ -316,6 +323,72 @@ def kontrollera_obundna_namn() -> list[str]:
                 fel.append(
                     f"{p.relative_to(ROOT)}: {namn!r} används men binds aldrig"
                 )
+            fel.extend(_kontrollera_funktionsräckvidd(träd, p))
+    return fel
+
+
+def _modulnivåbindningar(träd) -> set[str]:
+    """Namn bundna på modulnivå, utan att gå ner i funktionskroppar."""
+    bundna: set[str] = set()
+
+    def gå(satser) -> None:
+        for nod in satser:
+            if isinstance(nod, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                ast.ClassDef)):
+                bundna.add(nod.name)
+                # Gå INTE ner i kroppen — det är en annan räckvidd.
+            elif isinstance(nod, (ast.Import, ast.ImportFrom)):
+                for alias in nod.names:
+                    bundna.add((alias.asname or alias.name).split(".")[0])
+            else:
+                for sub in ast.walk(nod):
+                    if isinstance(sub, ast.Name) and isinstance(
+                            sub.ctx, (ast.Store, ast.Del)):
+                        bundna.add(sub.id)
+                    elif isinstance(sub, ast.ExceptHandler) and sub.name:
+                        bundna.add(sub.name)
+                    elif isinstance(sub, (ast.FunctionDef,
+                                          ast.AsyncFunctionDef,
+                                          ast.ClassDef)):
+                        bundna.add(sub.name)
+
+    gå(träd.body)
+    return bundna
+
+
+def _kontrollera_funktionsräckvidd(träd, p) -> list[str]:
+    modul = _modulnivåbindningar(träd) | _BUILTINS
+    fel: list[str] = []
+
+    toppfunktioner: list = []
+    for nod in träd.body:
+        if isinstance(nod, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            toppfunktioner.append(nod)
+        elif isinstance(nod, ast.ClassDef):
+            for medlem in nod.body:
+                if isinstance(medlem, (ast.FunctionDef,
+                                       ast.AsyncFunctionDef)):
+                    toppfunktioner.append(medlem)
+
+    for fn in toppfunktioner:
+        lokala = _bundna_namn(ast.Module(body=fn.body, type_ignores=[]))
+        args = fn.args
+        for a in (args.posonlyargs + args.args + args.kwonlyargs):
+            lokala.add(a.arg)
+        for a in (args.vararg, args.kwarg):
+            if a is not None:
+                lokala.add(a.arg)
+        tillåtna = modul | lokala
+        saknade = sorted({
+            n.id for n in ast.walk(fn)
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+            and n.id not in tillåtna
+        })
+        for namn in saknade:
+            fel.append(
+                f"{p.relative_to(ROOT)}: {namn!r} används i "
+                f"{fn.name}() men binds inte i den räckvidden"
+            )
     return fel
 
 
