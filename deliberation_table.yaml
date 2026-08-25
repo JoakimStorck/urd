@@ -18,6 +18,13 @@
 
 version: 1
 
+# MAKT, trappat: de utfallsklasser som får ÄNDRA svar i drift.
+# Tom lista = helt tyst lager. Klasser läggs till en i taget, var och
+# en efter uppmätt divergens på rätt ställen (grinden 2026-08-25:
+# 2 divergenta av 36, båda äkta — vakansfallet och pronomenbindningen).
+makt:
+  - beskriver_men_namnger_inte
+
 operationer:
   entity_lookup:
     lovar: "en namngiven innehavare av en roll eller plats"

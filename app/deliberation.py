@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from app import grammar
 
@@ -210,3 +211,133 @@ def compose(question: str, intent: str, operation: str | None,
             ))
     return Atagande(intent=intent, operation=operation,
                     inskrankningar=yttrade + arvda)
+
+
+# ---------------------------------------------------------------------
+# Domen: utfallsklassning och den första maktklassen
+# ---------------------------------------------------------------------
+
+_TABLE_CACHE: dict | None = None
+
+
+def load_table() -> dict:
+    """
+    Beslutstabellen ur repots rot. Feltålig: en saknad eller trasig
+    tabell ger ett TYST lager (tom makt-lista), aldrig ett undantag —
+    deliberationen får aldrig kunna sänka en fråga, och utan tabell
+    faller systemet tillbaka till exakt det beteende det hade före
+    0050.
+    """
+    global _TABLE_CACHE
+    if _TABLE_CACHE is not None:
+        return _TABLE_CACHE
+    try:
+        import yaml
+        rot = Path(__file__).resolve().parent.parent
+        data = yaml.safe_load(
+            (rot / "deliberation_table.yaml").read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    _TABLE_CACHE = data
+    return data
+
+
+def enforced_outcomes() -> set[str]:
+    makt = load_table().get("makt") or []
+    return {str(m) for m in makt} if isinstance(makt, list) else set()
+
+
+# Operationer vars löfte är en namngiven innehavare.
+NAMING_OPERATIONS = {"entity_lookup", "entity_aggregation"}
+
+# Intenter vars svar prövar ett TIDIGARE påstående och inte ska dömas
+# som nya innehavarfrågor.
+EXCLUDED_INTENTS = {"verification_or_challenge", "social_or_meta"}
+
+# Personform kontra funktionsform, grammatiskt skild: "vem ÄR X" —
+# kopula med rollpredikat — lovar en PERSON, medan "vem BESLUTAR om X"
+# — agentverb — lovar en FUNKTION, och "prefekten beslutar" är då ett
+# fullständigt svar. Uppmätt 2026-08-25: tre av sex divergenta var
+# funktionsfrågor korrekt besvarade med funktion.
+_COPULAS = {"är", "var", "blir", "heter", "vart"}
+_HOLDER_PHRASES = ("uppdraget som", "rollen som", "utsedd till")
+
+
+def is_person_form(question: str) -> bool:
+    """Lovar frågan en person, inte bara en funktion?"""
+    låg = (question or "").lower()
+    if any(f in låg for f in _HOLDER_PHRASES):
+        return True
+    ord_ = låg.replace("?", " ").split()
+    for i, w in enumerate(ord_):
+        if w in ("vem", "vilka") and i + 1 < len(ord_):
+            return ord_[i + 1] in _COPULAS
+    # "Vilken roll har <namn>" — omvänd innehavarfråga: given person,
+    # efterfrågad roll. Namnet i frågan gör löftet personbundet.
+    if låg.startswith("vilken roll") or "vilken roll har" in låg:
+        return True
+    return False
+
+
+def role_phrase(question: str) -> str:
+    """
+    Det efterfrågade ledet ur en personformad fråga: "Vem är X?" -> X.
+
+    Deterministisk och medvetet enkel — misslyckas den blir det
+    generiska "rollen", aldrig ett undantag. Systemförfattade meningar
+    får inte kunna sänka en fråga.
+    """
+    ord_ = (question or "").replace("?", " ").split()
+    låg = [w.lower() for w in ord_]
+    for i, w in enumerate(låg):
+        if w in ("vem", "vilka") and i + 1 < len(ord_) and låg[i + 1] in _COPULAS:
+            rest = " ".join(ord_[i + 2:]).strip()
+            return rest or "rollen"
+    return "rollen"
+
+
+def _binder_namn(bindning: dict, namnpredikat) -> bool:
+    if not bindning.get("verifierbar"):
+        return False
+    return (namnpredikat(bindning.get("subjekt", ""))
+            or namnpredikat(bindning.get("predikat", "")))
+
+
+def judge_naming_outcome(operation: str, intent: str, question: str,
+                         abstained: bool, claims: dict | None,
+                         namnpredikat) -> str | None:
+    """
+    Utfallsklass för en innehavarfråga — eller None när domen inte
+    är tillämplig (annan operation, funktionsform, undantagen intent).
+
+    Delas av driftvägen och measure_divergence: en dom, två
+    konsumenter. namnpredikat injiceras (grammar.looks_like_person_name)
+    så att funktionen är prövbar utan modulimportens sidoeffekter.
+    """
+    if operation not in NAMING_OPERATIONS:
+        return None
+    if intent in EXCLUDED_INTENTS:
+        return None
+    if not is_person_form(question):
+        return None
+    if abstained:
+        return "avstar"
+    bindningar = (claims or {}).get("bindningar", [])
+    if any(_binder_namn(b, namnpredikat) for b in bindningar):
+        return "namnger"
+    return "beskriver_men_namnger_inte"
+
+
+def author_unnamed_holder(question: str) -> str:
+    """
+    Det systemförfattade utfallet "beskriver men namnger inte".
+
+    En SATS med sin grund, inte en osäkerhetsredovisning: den påstår
+    vad källorna gör och inte gör. Avgränsningen är ärlig — "källorna"
+    är de som bar svaret, inte beståndet som helhet, för det är vad
+    denna tur faktiskt vet.
+    """
+    return (f"Källorna beskriver {role_phrase(question)} "
+            "men namnger ingen innehavare.")

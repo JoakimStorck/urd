@@ -31,6 +31,7 @@ from app.question_operations import load_question_operations
 from app.source_guard import check_answer as run_source_guard, format_warning
 from app import deliberation
 from app import answer_claims
+from app import grammar as grammar_mod
 from app.corpus_guard import (
     check_answer as run_corpus_guard,
     format_addition as format_corpus_addition,
@@ -1605,13 +1606,36 @@ class RagService:
         t8 = time.perf_counter()
 
         # Bygg debug-info för syntesen
+        _claims_summary = answer_claims.summarize(
+            answer_claims.extract_bindings(synthesis_result.answer)
+        )
+        # DELIBERATIONENS FÖRSTA MAKTKLASS (white paper 3.0, trappat).
+        # Domen delas med measure_divergence; makten styrs av
+        # beslutstabellens makt-lista och gäller en enda utfallsklass:
+        # en personformad innehavarfråga vars svar beskriver utan att
+        # namnge får ett systemförfattat besked som INLEDNING — en sats
+        # med sin grund, inte en osäkerhetsredovisning. Beskrivningen
+        # står kvar under: den är fortfarande sann och nyttig, felet
+        # var att den utgav sig för att vara svaret.
+        _utfall = deliberation.judge_naming_outcome(
+            classification.question_operation, classification.intent,
+            question, False, _claims_summary,
+            grammar_mod.looks_like_person_name,
+        )
+        _makt = _utfall in deliberation.enforced_outcomes()
+        if _makt and _utfall == "beskriver_men_namnger_inte":
+            synthesis_result.answer = (
+                deliberation.author_unnamed_holder(question)
+                + "\n\n" + synthesis_result.answer.lstrip()
+            )
         synthesis_debug = {
             "used_fallback": synthesis_result.used_fallback,
-            # Deliberationens prövningssteg, tyst: vad påstår svaret,
-            # och är påståendena kontrollerbara? Avgör ingenting ännu.
-            "answer_claims": answer_claims.summarize(
-                answer_claims.extract_bindings(synthesis_result.answer)
-            ),
+            "deliberation_outcome": {
+                "klass": _utfall, "systemforfattad": bool(_makt),
+            },
+            # Deliberationens prövningssteg: vad påstår svaret, och är
+            # påståendena kontrollerbara?
+            "answer_claims": _claims_summary,
         }
         if synthesis_result.fallback_reason:
             synthesis_debug["fallback_reason"] = synthesis_result.fallback_reason

@@ -49,6 +49,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import grammar  # noqa: E402
+from app import deliberation  # noqa: E402
 
 # Reservväg för äldre spår utan abstained-fält. Spåret bär sedan länge
 # "abstained" som loggat FAKTUM, och det är det som läses först —
@@ -62,39 +63,6 @@ _ABSTAIN_MARKERS = (
     "hittar inget stöd",
     "hittar ingen information",
 )
-
-# Personform kontra funktionsform, grammatiskt skild: "vem ÄR X" —
-# kopula med rollpredikat — lovar en PERSON, medan "vem BESLUTAR om X"
-# — agentverb — lovar en FUNKTION, och "prefekten beslutar" är då ett
-# fullständigt svar. Uppmätt 2026-08-25: tre av sex divergenta var
-# funktionsfrågor korrekt besvarade med funktion. Sluten kopulamängd,
-# inte en verblista över domänen.
-_COPULAS = {"är", "var", "blir", "heter", "vart"}
-_HOLDER_PHRASES = ("uppdraget som", "rollen som", "utsedd till")
-
-# Intenter vars svar prövar ett TIDIGARE påstående och inte ska dömas
-# som nya innehavarfrågor.
-_EXCLUDED_INTENTS = {"verification_or_challenge", "social_or_meta"}
-
-
-def _is_person_form(question: str) -> bool:
-    """Lovar frågan en person, inte bara en funktion?"""
-    låg = question.lower()
-    if any(f in låg for f in _HOLDER_PHRASES):
-        return True
-    ord_ = låg.replace("?", " ").split()
-    for i, w in enumerate(ord_):
-        if w in ("vem", "vilka") and i + 1 < len(ord_):
-            return ord_[i + 1] in _COPULAS
-    # "Vilken roll har <namn>" — omvänd innehavarfråga: given person,
-    # efterfrågad roll. Namnet i frågan gör löftet personbundet.
-    if låg.startswith("vilken roll") or "vilken roll har" in låg:
-        return True
-    return False
-
-# Operationer vars löfte är en namngiven innehavare.
-_NAMING_OPERATIONS = {"entity_lookup", "entity_aggregation"}
-
 
 def _load_table(path: Path) -> dict:
     import yaml
@@ -116,14 +84,6 @@ def _turns(jsonl: Path):
         yield post
 
 
-def _binder_namn(bindning: dict) -> bool:
-    """Är något led i bindningen namnlikt?"""
-    if not bindning.get("verifierbar"):
-        return False
-    return (grammar.looks_like_person_name(bindning.get("subjekt", ""))
-            or grammar.looks_like_person_name(bindning.get("predikat", "")))
-
-
 def classify_actual(post: dict) -> tuple[str, dict]:
     """Vad gjorde svaret? (utfall, underlag för rapporten)."""
     svar = (post.get("answer") or "").strip()
@@ -137,7 +97,10 @@ def classify_actual(post: dict) -> tuple[str, dict]:
     if not svar or any(m in låg for m in _ABSTAIN_MARKERS):
         return "avstar", {}
 
-    namngivande = [b for b in bindningar if _binder_namn(b)]
+    namngivande = [
+        b for b in bindningar
+        if deliberation._binder_namn(b, grammar.looks_like_person_name)
+    ]
     overifierbara = [b for b in bindningar if not b.get("verifierbar")]
     underlag = {
         "namngivande": len(namngivande),
@@ -207,10 +170,22 @@ def main() -> int:
         # Funktionsfrågor ("vem beslutar om X") frias: funktionen är
         # där ett fullständigt svar. Verifikationsturer prövar ett
         # tidigare påstående och döms inte som nya innehavarfrågor.
-        if (op in _NAMING_OPERATIONS
-                and intent not in _EXCLUDED_INTENTS
-                and _is_person_form(post.get("question", ""))
-                and faktiskt == "beskriver"):
+        # Ett systemförfattat besked ÄR den uttryckliga markeringen —
+        # utfallet "beskriver men namnger inte" med sägs-uttryckligen-
+        # kravet uppfyllt. Läses ur spåret som loggat faktum, inte ur
+        # svarstexten.
+        _delib = ((post["debug"].get("synthesis") or {})
+                  .get("deliberation_outcome") or {})
+        if _delib.get("systemforfattad"):
+            utfall_räknare["beskriver_men_namnger_inte (uttrycklig)"] += 1
+            continue
+
+        dom = deliberation.judge_naming_outcome(
+            op, intent, post.get("question", ""), faktiskt == "avstar",
+            ((post["debug"].get("synthesis") or {}).get("answer_claims")),
+            grammar.looks_like_person_name,
+        )
+        if dom == "beskriver_men_namnger_inte" and faktiskt == "beskriver":
             divergenta.append({
                 "sekvens": post.get("sequence"), "tur": post.get("turn"),
                 "skäl": "innehavarfråga besvarad med beskrivning",
