@@ -265,20 +265,43 @@ _COPULAS = {"är", "var", "blir", "heter", "vart"}
 _HOLDER_PHRASES = ("uppdraget som", "rollen som", "utsedd till")
 
 
-def is_person_form(question: str) -> bool:
-    """Lovar frågan en person, inte bara en funktion?"""
+def person_form_kind(question: str) -> str | None:
+    """
+    Frågans innehavarform — eller None när formen inte är personbunden.
+
+    "direkt": rollen är given, personen efterfrågas — "vem ÄR X",
+    "vem har uppdraget som X". Utfallet beskriver-men-namnger-inte är
+    definierat här: källorna kan beskriva rollen utan att peka ut
+    någon.
+
+    "omvand": personen är given, rollen efterfrågas — "vilken roll har
+    <namn>". Här är beskriver-men-namnger-inte ODEFINIERAT: frågan
+    namnger ju själv innehavaren. Uppmätt 2026-08-25, lagrets första
+    felaktiga maktutövning: beskedet "namnger ingen innehavare"
+    författades rakt ovanpå ett svar fullt av personens namn. Den
+    omvända formens brist är en annan — bindningen bärs av pronomen
+    och är OBEKRÄFTAD — och dess åtgärd är prövningen, inte
+    författningen.
+    """
     låg = (question or "").lower()
+    # Uppdragsfraserna prövas FÖRE vem-slingan: "vem har uppdraget som
+    # X" inleds med ett icke-kopulärt verb, och slingan skulle annars
+    # avfärda formen innan frasen hunnit ses. Provet fällde precis den
+    # ordningsföljden.
     if any(f in låg for f in _HOLDER_PHRASES):
-        return True
+        return "direkt"
     ord_ = låg.replace("?", " ").split()
     for i, w in enumerate(ord_):
         if w in ("vem", "vilka") and i + 1 < len(ord_):
-            return ord_[i + 1] in _COPULAS
-    # "Vilken roll har <namn>" — omvänd innehavarfråga: given person,
-    # efterfrågad roll. Namnet i frågan gör löftet personbundet.
+            return "direkt" if ord_[i + 1] in _COPULAS else None
     if låg.startswith("vilken roll") or "vilken roll har" in låg:
-        return True
-    return False
+        return "omvand"
+    return None
+
+
+def is_person_form(question: str) -> bool:
+    """Lovar frågan en person eller en personbunden roll?"""
+    return person_form_kind(question) is not None
 
 
 def role_phrase(question: str) -> str:
@@ -325,6 +348,14 @@ def judge_naming_outcome(operation: str, intent: str, question: str,
     if abstained:
         return "avstar"
     bindningar = (claims or {}).get("bindningar", [])
+    if person_form_kind(question) == "omvand":
+        # Den omvända formen: svaret ska binda den GIVNA personen till
+        # en roll. En pronomenbindning är obekräftad — prövningens
+        # fall. Ett svar utan overifierbara bindningar lämnas odömt
+        # tills prövningen kan jämföra bindningen mot frågans namn.
+        if any(not b.get("verifierbar") for b in bindningar):
+            return "obekraftad_bindning"
+        return None
     if any(_binder_namn(b, namnpredikat) for b in bindningar):
         return "namnger"
     return "beskriver_men_namnger_inte"

@@ -31,7 +31,10 @@ operationer:
     utfall:
       - namnger
       - namnger_med_forbehall
-      - beskriver_men_namnger_inte   # måste sägas UTTRYCKLIGEN
+      - beskriver_men_namnger_inte   # måste sägas UTTRYCKLIGEN; endast DIREKT form
+      - obekraftad_bindning          # omvänd form med pronomenbindning —
+                                     # väntar på prövningen; får ALDRIG in i
+                                     # makt före ersättningsmekanismen
       - motstridigt
       - avstar
     # Substitutionsfelet: rollbeskrivning som svar på innehavarfråga.
