@@ -279,6 +279,13 @@ _ISO_DATE = r"(\d{4}-\d{2}-\d{2})"
 _CONTENT_DATE_PATTERNS = [
     re.compile(r"[Rr]evi(?:sed|derad)(?:\s+den)?\s*:?\s*" + _ISO_DATE),
     re.compile(r"Beslutsdatum\s*:?\s*\n?\s*" + _ISO_DATE),
+    # Protokollens markör. Uppmätt 2026-08-25: elva IL-protokoll där
+    # de fem med datum sist i filnamnet blev odaterade — beståndets
+    # FÄRSKASTE dokument var blinda för aktualitetsvägningen. Ett
+    # protokoll fastställs inte och beslutas inte; dess datum heter
+    # Sammanträdesdatum. Generiskt "Datum:" läggs INTE till — hellre
+    # None än gissning, och ett ensamt "Datum" kan avse vad som helst.
+    re.compile(r"Sammanträdesdatum\s*:?\s*\n?\s*" + _ISO_DATE),
     re.compile(
         r"(?:Fastställd|Fastställt|Beslutad|Beslutat|Gäller från(?:\s+och\s+med)?)"
         r"(?:\s+den)?\s*:?\s*" + _ISO_DATE,
@@ -287,6 +294,13 @@ _CONTENT_DATE_PATTERNS = [
 
 _FILENAME_REV_RE = re.compile(r"rev(\d{8})")
 _FILENAME_DATE_RE = re.compile(r"^(\d{8})[_\s-]|^(\d{4}-\d{2}-\d{2})")
+# Datum SIST i namnet är en lika verklig konvention som datum först:
+# "Protokoll IL IIT 2026-04-21.pdf", "Protokoll IL IIT 20260505.pdf".
+# Kravet på avgränsare före och filändelse efter gör att löpnummer
+# och diarienummer i namn inte kan misstas för datum.
+_FILENAME_DATE_END_RE = re.compile(
+    r"[_\s-](\d{8})\.\w+$|[_\s-](\d{4}-\d{2}-\d{2})\.\w+$"
+)
 
 _DIARIENUMMER_RE = re.compile(
     r"Diarienummer\s*:?\s*\n?\s*([A-ZÅÄÖ][A-Za-zÅÄÖåäö]{0,3}\s?\d{4}\s?[/-]\s?\d+)"
@@ -337,9 +351,10 @@ def extract_document_header_info(
         if m:
             document_date = _compact_to_iso(m.group(1))
         if document_date is None:
-            m = _FILENAME_DATE_RE.match(file_name)
+            m = (_FILENAME_DATE_RE.match(file_name)
+                 or _FILENAME_DATE_END_RE.search(file_name))
             if m:
-                raw_date = m.group(1) or m.group(2)
+                raw_date = next(g for g in m.groups() if g)
                 document_date = (
                     _compact_to_iso(raw_date) if len(raw_date) == 8
                     else (raw_date if _valid_iso_date(raw_date) else None)
