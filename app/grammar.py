@@ -1037,6 +1037,90 @@ def _title_identity(words, stext: str) -> list[Feature]:
     return out
 
 
+def _apposed_name_identity(words, stext: str) -> list[Feature]:
+    """
+    Namn som apposition till en rollfras: rollen bär, namnet identifierar.
+
+    UPPMÄTT PARSERBETEENDE 2026-08-25 (Stanza, sv):
+
+        Vår nye prefekt och ordförande för IL, N.N., hälsade alla.
+          3 prefekt     NOUN  head=12 nsubj    <- ROLLEN är satsled
+          5 ordförande  NOUN  head=3  conj
+          9 N            PROPN head=3  appos    <- NAMNET hänger under rollen
+         10 N            PROPN head=9  flat:name
+
+    Detta är INVERSEN av _title_identity, som kräver att titeln hänger
+    under namnet. Här är rollfrasen den refererande enheten och namnet
+    den identifierande appositionen — ingen av titelregelns riktningar
+    träffar, oavsett hur dess vakter kalibreras. Konstruktionen var
+    därför osynlig för utvinningen trots att den är en av beståndets
+    tydligaste bindningsformer: kommainramningen gör identiteten
+    explicit i stället för att lämna den åt närhet i texten.
+
+    DISKRIMINATORN MOT UPPRÄKNING SITTER I PARSEN. "Prefekten, N.N.
+    och N.N. deltog" ger namnen som conj under rollen, inte som appos
+    — samordning, inte identifiering. Regeln kräver appos och kan
+    därför inte återinföra de uppräkningsartefakter 0057/0058 rensade
+    bort.
+
+    SAMORDNADE ROLLER BINDER BÅDA. "prefekt och ordförande för IL,
+    N.N.," är inte tvetydig på samma sätt som prenominalt "Prefekt och
+    HR-expert N.N.": där kan samordningen dela två personer, här är
+    hela den samordnade frasen appositionens referent. Båda rollerna
+    gäller alltså samma person, och drag produceras för var och en
+    utan tvetydighetsmarkering.
+    """
+    out: list[Feature] = []
+    for w in words:
+        if w.deprel != "appos" or w.upos != "PROPN":
+            continue
+        # Namnledet ska vara ett personnamn: minst två namnled, samma
+        # formmässiga villkor som titelregeln använder.
+        if not any(
+            x.head == w.id and x.deprel in ("flat", "flat:name")
+            and words[x.id - 1].upos == "PROPN"
+            for x in words
+        ):
+            continue
+        if not (0 < w.head <= len(words)):
+            continue
+        head = words[w.head - 1]
+        # Huvudet ska vara ett vanligt substantiv — en rollfras. Är
+        # huvudet ett egennamn hör konstruktionen till titelregeln
+        # eller är en närvarolista av namn.
+        if head.upos not in _NOMINAL_UPOS or head.upos == "PROPN":
+            continue
+        # Preposition under namnet => inte identifierande apposition.
+        if any(x.head == w.id and x.deprel == "case" for x in words):
+            continue
+
+        name = _phrase(words, w.id)
+        if (_LEGAL_REF.search(name) or _is_placeholder(name)
+                or _is_code_like(name) or _EMAIL.search(name)):
+            continue
+
+        roles = [head] + [
+            x for x in words if x.head == head.id and x.deprel == "conj"
+            and x.upos in _NOMINAL_UPOS and x.upos != "PROPN"
+        ]
+        for r in roles:
+            role_text = _phrase(words, r.id)
+            if (_EMAIL.search(role_text) or _is_code_like(role_text)
+                    or _LEGAL_REF.search(role_text)):
+                continue
+            scope = _role_scope(words, r.id)
+            out.append(Feature(
+                kind="identitet", a=name,
+                b=normalize_title(
+                    role_text, getattr(words[r.id - 1], "lemma", None),
+                ),
+                relation="identifierande:appos", sentence=stext,
+                strength=PRESUPPOSED, ambiguous=False,
+                extra={"scope": scope} if scope else {},
+            ))
+    return out
+
+
 # Protokollens standardsektioner. Verbkravet fångade "Vid protokollet"
 # men inte "Justeras" och "Mötet avslutades" — de innehåller finita
 # verb och passerar därför.
@@ -1134,7 +1218,9 @@ def _identity(words, stext: str) -> list[Feature]:
     kostar inget och är rätt mekanismer om konstruktionerna återinförs
     med bättre avgränsning.
     """
-    return _title_identity(words, stext) + _appointment_identity(words, stext)
+    return (_title_identity(words, stext)
+            + _apposed_name_identity(words, stext)
+            + _appointment_identity(words, stext))
 
 
 # Parentesen bär tre SKILDA relationer, som handklassningen
