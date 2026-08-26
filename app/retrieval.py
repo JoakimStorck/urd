@@ -31,6 +31,7 @@ from app.question_operations import load_question_operations
 from app.source_guard import check_answer as run_source_guard, format_warning
 from app import deliberation
 from app import answer_claims
+from app import answer_hygiene
 from app import grammar as grammar_mod
 from app.corpus_guard import (
     check_answer as run_corpus_guard,
@@ -1608,6 +1609,14 @@ class RagService:
             for h in hits_for_synthesis
             if h.metadata.file_name
         )
+        # SAMMANSLAGNING FÖRE KÄLLVAKTEN. Likalydande meningar slås
+        # ihop deterministiskt — se answer_hygiene för varför detta är
+        # mekanism och inte en tredje promptomskrivning. Ordningen
+        # spelar roll: vakten ska pröva den text användaren faktiskt
+        # får se, och sammanslagningen flyttar källhänvisningar.
+        synthesis_result.answer, merged_sentences = (
+            answer_hygiene.merge_repeated_sentences(synthesis_result.answer)
+        )
         guard_report = run_source_guard(
             synthesis_result.answer,
             guard_texts,
@@ -1727,6 +1736,7 @@ class RagService:
                 "klass": _utfall, "systemforfattad": bool(_makt),
             },
             "abstain_rescued_by_attest": abstain_rescued_by_attest,
+            "merged_sentences": merged_sentences,
             "frame_year": frame_year,
             "frame_excluded": frame_debug,
             # Deliberationens prövningssteg: vad påstår svaret, och är
