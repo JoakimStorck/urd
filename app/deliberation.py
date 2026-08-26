@@ -170,6 +170,30 @@ def extract_constraints(question: str) -> list[Inskrankning]:
     return ut
 
 
+def asserted_year(question: str) -> int | None:
+    """
+    Frågans efterfrågade år, när den uttrycker ett.
+
+    RAMENS ÖVRE GRÄNS, INTE DESS ENDA PUNKT. Åldern är inte
+    motsägelse: ett belägg från 2022 kan mycket väl gälla 2023,
+    eftersom en bindning står tills något säger annat. Men ett belägg
+    från 2026 säger ingenting om 2023 — det är senare händelser, och
+    att låta dem bära svaret är att svara på en annan fråga än den
+    ställda.
+
+    Året är därför en övre gräns: källor daterade det året eller
+    tidigare får bära svaret, senare källor inte. Flera årtal i samma
+    fråga tolkas som ett intervall vars sista år är gränsen.
+
+    DEKLARERAD GRÄNS: endast utskrivna årtal. "I fjol", "förra
+    mandatperioden" och liknande deiktika utvinns som inskränkningar
+    men bär ingen gräns — de kräver att systemet vet vilken tidpunkt
+    som är nu i förhållande till beståndet, vilket är en annan fråga.
+    """
+    år = [int(m.group(0)) for m in _YEAR.finditer(question or "")]
+    return max(år) if år else None
+
+
 def compose(question: str, intent: str, operation: str | None,
             state) -> Atagande:
     """

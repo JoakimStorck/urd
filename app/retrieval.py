@@ -499,6 +499,49 @@ def _ensure_comparison_balance(
     return result
 
 
+def _within_frame(hits: list[SourceHit], year: int | None) -> tuple[list[SourceHit], list[dict]]:
+    """
+    Håll reserverade passager innanför frågans tidsram.
+
+    ÅTAGANDETS FÖRSTA VERKSTÄLLIGHET. Frågans årtal har utvunnits och
+    loggats sedan 0043 med status "ej upprätthållen" — det var en
+    ärlig etikett, för ingenting upprätthöll det. Uppmätt 2026-08-26:
+    tre frågor om samma roll i nuläget, 2023 och 2022 fick IDENTISKA
+    reserverade passager. Att svaren ändå blev ungefär rätt berodde på
+    att den vanliga poolen råkade lyfta rätt årsprotokoll, inte på att
+    ramen verkade.
+
+    GRÄNSEN ÄR ÖVRE, INTE TVÅSIDIG. Ålder är inte motsägelse: en
+    bindning från 2022 kan mycket väl gälla 2023, eftersom den står
+    tills något säger annat. Men ett belägg från 2026 säger ingenting
+    om 2023 — det är senare händelser, och att låta dem bära svaret är
+    att besvara en annan fråga än den ställda. Källor daterade det
+    efterfrågade året eller tidigare behålls därför, senare utesluts,
+    och de behållna ordnas med den senaste först så att den närmast
+    föregående bindningen väger tyngst.
+
+    Odaterade passager behålls: frånvaro av datum är inte belägg för
+    att passagen ligger utanför ramen, och att kasta dem vore att
+    straffa en dokumentegenskap i stället för att pröva frågan.
+    """
+    if year is None:
+        return hits, []
+    kvar: list[SourceHit] = []
+    uteslutna: list[dict] = []
+    for h in hits:
+        datum = h.metadata.document_date
+        if datum and len(datum) >= 4 and datum[:4].isdigit() and int(datum[:4]) > year:
+            uteslutna.append({
+                "file_name": h.metadata.file_name,
+                "document_date": datum,
+                "skäl": f"daterad efter frågans år {year}",
+            })
+            continue
+        kvar.append(h)
+    kvar.sort(key=lambda h: h.metadata.document_date or "", reverse=True)
+    return kvar, uteslutna
+
+
 def _add_required_passages(
     selected: list[SourceHit],
     required: list[SourceHit],
@@ -1419,8 +1462,10 @@ class RagService:
         # att stöd saknas, och här FINNS stöd: entydiga bindningar med
         # utpekat läge i originaltexten. Att avstå när beståndet binder
         # är inte ärlig återhållsamhet utan ett falskt besked.
+        frame_year = deliberation.asserted_year(question)
         if not hits and attest_locations:
-            rescued_hits = self._chunks_at(attest_locations)
+            rescued_hits, _ = _within_frame(
+                self._chunks_at(attest_locations), frame_year)
             if rescued_hits:
                 logger.info(
                     "abstain hävd: %d reserverad(e) passage(r) ur "
@@ -1515,8 +1560,10 @@ class RagService:
         # kandidatpoolen eller passerat rerankens golv.
         required_debug: list[dict] = []
         required_chunk_ids: set[str] = set()
+        frame_debug: list[dict] = []
         if attest_locations:
-            required_hits = self._chunks_at(attest_locations)
+            required_hits, frame_debug = _within_frame(
+                self._chunks_at(attest_locations), frame_year)
             required_chunk_ids = {h.chunk_id for h in required_hits}
             hits_for_synthesis, required_debug = _add_required_passages(
                 hits_for_synthesis, required_hits,
@@ -1680,6 +1727,8 @@ class RagService:
                 "klass": _utfall, "systemforfattad": bool(_makt),
             },
             "abstain_rescued_by_attest": abstain_rescued_by_attest,
+            "frame_year": frame_year,
+            "frame_excluded": frame_debug,
             # Deliberationens prövningssteg: vad påstår svaret, och är
             # påståendena kontrollerbara?
             "answer_claims": _claims_summary,

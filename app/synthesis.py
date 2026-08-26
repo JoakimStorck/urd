@@ -131,6 +131,10 @@ EXTRA INSTRUKTION FÖR DENNA FRÅGETYP:
   eller mycket kort som avslutande bakgrund. En rollbeskrivning är
   aldrig ett svar på en vem-fråga.
 - Namnger ingen källa någon innehavare: säg det rakt, i en mening.
+- Gäller frågan ett visst år eller en förfluten tid: använd källor
+  daterade det året eller tidigare, skriv i preteritum, och ange
+  vilket datum uppgiften bär. En källa daterad efter den efterfrågade
+  tiden besvarar en annan fråga.
 """
 
 OPERATION_BLOCKS = {
