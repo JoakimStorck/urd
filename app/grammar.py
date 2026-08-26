@@ -643,6 +643,45 @@ def _has_single_letter_led(phrase: str) -> bool:
     )
 
 
+def _same_line(stext: str, a: str, b: str) -> bool:
+    """
+    Står båda leden på SAMMA rad i källtexten?
+
+    LAYOUTGRÄNS ÄR INTE SYNTAX. Uppmätt 2026-08-27: underskrifts- och
+    beslutsblock plattas ut av dokumentkonverteringen till rader utan
+    avslutande interpunktion, varpå parsern slår ihop dem till en enda
+    mening:
+
+        Uppdrag som studierektor ... annonseras enligt förslag
+        <namn>
+        Institutionen för information och teknik
+
+    Namnet på rad två apposerades då mot "förslag" på rad ett och mot
+    "Institutionen" på rad tre, och gav fyra bindningar som ingen text
+    påstår. Radbrytningen i ett sådant block är dokumentets struktur,
+    inte satsens: två led på olika rader har ingen syntaktisk relation
+    att utvinna.
+
+    Villkoret prövas bara när meningen faktiskt bär en radbrytning.
+    Radbruten löptext — en mening som fortsätter på nästa rad — är
+    ovanlig i beståndets markdown, men skulle den förekomma är
+    kostnaden ett uteblivet belägg, inte ett falskt.
+
+    DEKLARERAD GRÄNS: blocket innehåller ofta den SANNA bindningen —
+    namnet över institutionen är en underskrift som säger vem som
+    beslutade. Den kan bara läsas strukturellt, inte som prosa, och
+    kräver underskriftskonstruktionen som ännu inte är byggd.
+    """
+    if "\n" not in stext or not a or not b:
+        return True
+    rader = stext.split("\n")
+    ia = next((i for i, r in enumerate(rader) if a in r), None)
+    ib = next((i for i, r in enumerate(rader) if b in r), None)
+    if ia is None or ib is None:
+        return True
+    return ia == ib
+
+
 def _has_preceding_own_title(words, name_id: int) -> bool:
     """
     Bär namnet sin egen titel FÖRE sig?
@@ -1034,6 +1073,8 @@ def _title_identity(words, stext: str) -> list[Feature]:
                 continue
 
         name = _phrase(words, w.head)
+        if not _same_line(stext, name, _phrase(words, w.id)):
+            continue
         if _LEGAL_REF.search(name) or _LEGAL_REF.search(_phrase(words, w.id)):
             continue
         if _has_single_letter_led(name):
@@ -1155,6 +1196,8 @@ def _apposed_name_identity(words, stext: str) -> list[Feature]:
                 or _has_single_letter_led(name)):
             continue
 
+        if not _same_line(stext, name, _phrase(words, head.id)):
+            continue
         roles = [head] + [
             x for x in words if x.head == head.id and x.deprel == "conj"
             and x.upos in _NOMINAL_UPOS and x.upos != "PROPN"
