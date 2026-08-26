@@ -616,6 +616,33 @@ def _conj_chain(words, head_id: int) -> list[int]:
     return chain
 
 
+def _has_single_letter_led(phrase: str) -> bool:
+    """
+    Bär frasen ett enbokstavsled? Då är den ingen persons namn.
+
+    Uppmätt 2026-08-26: dokumenthuvudets registerblock ("Beslutat av
+    Rektor / Diarienummer C 2025/1220") gav en titelbindning från
+    registerbeteckningen till rollen, med relevans 0,89 över fyra
+    dokument. Stanza taggar beteckningens första led som PROPN och
+    versalen som flat:name, så tvånamnsvillkoret — infört 2026-08-15
+    mot just denna felklass — passerades av formen.
+
+    Villkoret är formmässigt och inte en lista över registerord:
+    personnamn i svensk förvaltningstext skrivs ut, och ett led om en
+    enda bokstav hör till en beteckning, inte till en person.
+
+    DEKLARERAD KOSTNAD: initialer utan punkt ("N. B. Andersson")
+    faller också bort. Det är rätt riktning — ett uteblivet belägg
+    kostar mindre än ett falskt, och den formen är sällsynt i
+    beståndets textslag.
+    """
+    return any(
+        len(led.strip(".").strip()) == 1
+        for led in phrase.split()
+        if led.strip(".").strip()
+    )
+
+
 def _has_preceding_own_title(words, name_id: int) -> bool:
     """
     Bär namnet sin egen titel FÖRE sig?
@@ -1009,6 +1036,8 @@ def _title_identity(words, stext: str) -> list[Feature]:
         name = _phrase(words, w.head)
         if _LEGAL_REF.search(name) or _LEGAL_REF.search(_phrase(words, w.id)):
             continue
+        if _has_single_letter_led(name):
+            continue
         if _is_placeholder(name):
             continue
         if _is_code_like(name) or _is_code_like(_phrase(words, w.id)):
@@ -1122,7 +1151,8 @@ def _apposed_name_identity(words, stext: str) -> list[Feature]:
 
         name = _phrase(words, w.id)
         if (_LEGAL_REF.search(name) or _is_placeholder(name)
-                or _is_code_like(name) or _EMAIL.search(name)):
+                or _is_code_like(name) or _EMAIL.search(name)
+                or _has_single_letter_led(name)):
             continue
 
         roles = [head] + [
