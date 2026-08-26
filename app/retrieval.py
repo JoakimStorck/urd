@@ -1400,6 +1400,38 @@ class RagService:
         top_candidate_prob = (
             rerank_top[0].get("relevance_prob") if rerank_top else None
         )
+        abstain_rescued_by_attest = False
+
+        # RESERVATIONSKANALEN LIGGER FÖRE ABSTAIN-PORTEN.
+        #
+        # Uppmätt 2026-08-26: beståndets STARKASTE rollbindning — tio
+        # dokument, tjugoen entydiga observationer — gav svaret "jag
+        # hittar inget tydligt stöd". Ingen kandidat nådde
+        # cross-encoderns golv, så answer() returnerade sitt
+        # abstain-svar långt innan _add_required_passages någonsin
+        # kördes. Kanalen byggdes just för att evidentiell nödvändighet
+        # inte är samma sak som relevanspoäng, men kunde bara verka på
+        # frågor som redan klarat relevansgolvet. Där en roll råkade ha
+        # normtext över golvet hölls dörren öppen; där den inte hade
+        # det stängdes den före beläggen.
+        #
+        # Detta är inte att mjuka upp abstain-designen. Abstain betyder
+        # att stöd saknas, och här FINNS stöd: entydiga bindningar med
+        # utpekat läge i originaltexten. Att avstå när beståndet binder
+        # är inte ärlig återhållsamhet utan ett falskt besked.
+        if not hits and attest_locations:
+            rescued_hits = self._chunks_at(attest_locations)
+            if rescued_hits:
+                logger.info(
+                    "abstain hävd: %d reserverad(e) passage(r) ur "
+                    "bindningsuppslaget bär frågan (bästa relevans %.3f "
+                    "under golv %.2f)",
+                    len(rescued_hits),
+                    top_candidate_prob if top_candidate_prob is not None else -1.0,
+                    settings.select_min_prob,
+                )
+                hits = rescued_hits
+                abstain_rescued_by_attest = True
 
         if not hits:
             # Abstain är ett legitimt svar, men det får inte vara stumt.
@@ -1647,6 +1679,7 @@ class RagService:
             "deliberation_outcome": {
                 "klass": _utfall, "systemforfattad": bool(_makt),
             },
+            "abstain_rescued_by_attest": abstain_rescued_by_attest,
             # Deliberationens prövningssteg: vad påstår svaret, och är
             # påståendena kontrollerbara?
             "answer_claims": _claims_summary,
