@@ -134,6 +134,11 @@ EXTRA INSTRUKTION FÖR DENNA FRÅGETYP:
   tidsordning med den senaste först. Skriv inte att någon är den
   nuvarande innehavaren om källorna inte säger det.
 - Hänvisa alltid med [Källa N], aldrig med filnamn.
+- Finns en sammanställning av bindningar överst: den är uträknad ur
+  källorna och anger vilka roller, spann och källor som hör ihop. Följ
+  dess gruppering — en rad i listan är EN mening i svaret — men hämta
+  formuleringen ur källtexten. Lägg ihop roller som hör till samma
+  person i samma mening när det blir naturligt.
 - Beskriv rollens uppgifter bara om frågan också efterfrågar dem,
   eller mycket kort som avslutande bakgrund. En rollbeskrivning är
   aldrig ett svar på en vem-fråga.
@@ -265,6 +270,7 @@ def synthesize(
     background_max_turns: int = 0,
     question_operation: str = "direct_lookup",
     required_chunk_ids: set[str] | None = None,
+    binding_summary: str | None = None,
 ) -> SynthesisResult:
     """
     Enstegssyntes med detaljbevarande prompt.
@@ -275,6 +281,8 @@ def synthesize(
     en källa för påståenden — den är bara en tolkningsnyckel.
     """
     sources_block = _format_sources_for_direct(hits, required_chunk_ids)
+    if binding_summary:
+        sources_block = binding_summary + "\n\n" + sources_block
 
     background_block = ""
     if background_turns and background_max_turns > 0:

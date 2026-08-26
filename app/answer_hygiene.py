@@ -144,3 +144,66 @@ def _merge_into(sentence: str, extra_sources: list[int],
         resultat = _ISO_DATE.sub("", resultat)
         resultat = resultat.replace("\x00SPANN\x00", spann)
     return re.sub(r"\s{2,}", " ", resultat).strip()
+
+
+# ---------------------------------------------------------------------------
+# Bindningssammanställning
+# ---------------------------------------------------------------------------
+
+def format_bindings(bindings: list[dict], hits, frame_year: int | None = None) -> str:
+    """
+    Beståndets bindningar i sammanställd form, för syntesprompten.
+
+    VARFÖR SAMMANSTÄLLNINGEN GES FÄRDIG. Uppslaget har redan grupperat
+    observationerna per person och roll, räknat dokument och beräknat
+    spann. Att skicka enbart råtext och hoppas att modellen gör om den
+    grupperingen är att be den härleda något systemet redan vet — och
+    uppmätt 2026-08-26 gör den det dåligt: tre belägg om samma person
+    blev tre meningar på olika detaljnivå i stället för en.
+
+    AGGREGATET BÄR INTE SVARET. Sammanställningen är ett läshjälpmedel
+    härlett ur passagerna som ändå skickas med; originaltexten bär
+    fortfarande påståendet, och prompten säger det uttryckligen. Detta
+    är samma hållning som reservationskanalen: Attest pekar ut var
+    bindningen står, syntesen formulerar ur källan.
+
+    Källhänvisningarna beräknas mot den FAKTISKA numreringen i
+    hits_for_synthesis, så att raden pekar på samma [Källa N] som
+    källblocket. En bindning vars belägg inte finns bland källorna tas
+    inte med — den kan inte verifieras av läsaren och hör därför inte
+    hemma i svarets underlag.
+    """
+    if not bindings:
+        return ""
+    index_by_name: dict[str, list[int]] = {}
+    for i, h in enumerate(hits, start=1):
+        index_by_name.setdefault(h.metadata.file_name, []).append(i)
+
+    rader: list[str] = []
+    for b in bindings:
+        if frame_year and (b.get("first_date") or "")[:4].isdigit():
+            if int(b["first_date"][:4]) > frame_year:
+                continue
+        nr: list[int] = []
+        for namn in b.get("sources", []):
+            nr.extend(index_by_name.get(namn, []))
+        if not nr:
+            continue
+        rad = f"- {b['subjekt']} — {b['roll']}"
+        if b.get("avser"):
+            rad += f" (avser {b['avser']})"
+        forst, sist = b.get("first_date"), b.get("last_date")
+        if forst and sist and forst != sist:
+            rad += f", belagt {forst} till {sist}"
+        elif forst or sist:
+            rad += f", belagt {forst or sist}"
+        rad += " [" + ", ".join(f"Källa {n}" for n in sorted(set(nr))) + "]"
+        rader.append(rad)
+
+    if not rader:
+        return ""
+    return (
+        "BINDNINGAR SOM BESTÅNDET UTTRYCKER (sammanställda ur källorna "
+        "nedan — formulera svaret ur källtexten, inte ur denna lista):\n"
+        + "\n".join(rader)
+    )

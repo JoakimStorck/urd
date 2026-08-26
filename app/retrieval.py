@@ -839,6 +839,7 @@ class CandidatePool:
     attest_debug: dict | None
     attest_relevance_by_path: dict[str, float]
     attest_locations: list[tuple[str, int]]
+    attest_bindings: list[dict]
     attest_boost_debug: list[dict]
     t1: float
     t2: float
@@ -1107,9 +1108,11 @@ class RagService:
         attest_debug: dict | None = None
         attest_relevance_by_path: dict[str, float] = {}
         attest_locations: list[tuple[str, int]] = []
+        attest_bindings: list[dict] = []
         if question_operation == "entity_lookup" and settings.attest_selection:
             attest_relevance_by_path, attest_debug = self._attest_source_paths(question)
             attest_locations = (attest_debug or {}).get("locations", [])
+            attest_bindings = (attest_debug or {}).get("bindings", [])
             if attest_relevance_by_path:
                 preferred_source_paths = list(
                     dict.fromkeys(
@@ -1285,6 +1288,7 @@ class RagService:
             attest_debug=attest_debug,
             attest_relevance_by_path=attest_relevance_by_path,
             attest_locations=attest_locations,
+            attest_bindings=attest_bindings,
             attest_boost_debug=attest_boost_debug,
             t1=t1, t2=t2, t3=t3, t4=t4,
         )
@@ -1394,6 +1398,7 @@ class RagService:
         attest_debug = pool.attest_debug
         attest_relevance_by_path = pool.attest_relevance_by_path
         attest_locations = pool.attest_locations
+        attest_bindings = pool.attest_bindings
         attest_boost_debug = pool.attest_boost_debug
         t1, t2, t3, t4 = pool.t1, pool.t2, pool.t3, pool.t4
 
@@ -1570,6 +1575,14 @@ class RagService:
                 hits_for_synthesis, required_hits,
             )
 
+        binding_summary = ""
+        if attest_bindings and question_operation in (
+            "entity_lookup", "entity_aggregation",
+        ):
+            binding_summary = answer_hygiene.format_bindings(
+                attest_bindings, hits_for_synthesis, frame_year,
+            )
+
         synthesis_result = synthesize(
             question,
             hits_for_synthesis,
@@ -1578,6 +1591,7 @@ class RagService:
             background_max_turns=background_max_turns,
             question_operation=question_operation,
             required_chunk_ids=required_chunk_ids,
+            binding_summary=binding_summary or None,
         )
 
         # Mekanisk källvakt: deterministisk efterkontroll av svaret
@@ -1737,6 +1751,9 @@ class RagService:
             },
             "abstain_rescued_by_attest": abstain_rescued_by_attest,
             "merged_sentences": merged_sentences,
+            "binding_summary_rows": (
+                binding_summary.count("\n- ") if binding_summary else 0
+            ),
             "frame_year": frame_year,
             "frame_excluded": frame_debug,
             # Deliberationens prövningssteg: vad påstår svaret, och är
@@ -2155,6 +2172,7 @@ class RagService:
         """
         debug: dict = {
             "terms": [], "candidates": [], "documents": 0, "locations": [],
+            "bindings": [],
         }
         try:
             from app import attest
@@ -2238,6 +2256,19 @@ class RagService:
                     for loc in c.locations[:2]:
                         if loc not in debug["locations"]:
                             debug["locations"].append(loc)
+                    # Bindningen i strukturerad form. Uppslaget har
+                    # redan grupperat observationerna per subjekt och
+                    # roll, räknat dokument och beräknat spann — den
+                    # sammanställningen behöver inte modellen göra om
+                    # ur råtext, och gör den bevisligen dåligt: ett
+                    # svar blev en mening per källa i stället för en
+                    # per bindning.
+                    debug.setdefault("bindings", []).append({
+                        "subjekt": c.subject, "roll": c.object,
+                        "avser": (c.scopes or [None])[0],
+                        "first_date": c.first_date, "last_date": c.last_date,
+                        "sources": list(c.sources),
+                    })
 
         # sources är filnamn; retrieval matchar på full sökväg.
         ranked = sorted(rel_by_name.items(), key=lambda kv: kv[1], reverse=True)
