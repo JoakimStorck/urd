@@ -929,6 +929,26 @@ def _title_identity(words, stext: str) -> list[Feature]:
             continue
         if _has_disjunction(words, w.id):
             continue
+        # UPPRÄKNINGSVAKTEN. Uppmätt 2026-08-25: former som "Prefekt,
+        # N.N. och N.N. föredrar ärendet" och "Prefekten, N.N. och
+        # N.N. (samordnare...)" gav titelbindningar — men kommat är
+        # uppräkningens: tre parter föredrar, rollen är EN av dem och
+        # namnen är ANDRA. Samtliga "entydiga" kandidater för
+        # rollordet i aggregatet var artefakter av denna form, och
+        # reservationskanalen pekade följaktligen på uppräknings-
+        # chunkar där ingen bindning fanns att namnge.
+        #
+        # Vakten är riktningsmedveten: äkta prenominal titel är
+        # kommalös ("Prefekt Anna Andersson föredrar"), så titel FÖRE
+        # namn med komma emellan förkastas. Titel EFTER namn (appos)
+        # bär kommat legitimt ("Anna Andersson, HR-specialist,") och
+        # berörs inte.
+        if w.id < w.head and any(
+            x.upos == "PUNCT" and x.text == ","
+            and w.id < x.id < w.head
+            for x in words
+        ):
+            continue
 
         name = _phrase(words, w.head)
         if _LEGAL_REF.search(name) or _LEGAL_REF.search(_phrase(words, w.id)):
