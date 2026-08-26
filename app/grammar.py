@@ -943,12 +943,42 @@ def _title_identity(words, stext: str) -> list[Feature]:
         # namn med komma emellan förkastas. Titel EFTER namn (appos)
         # bär kommat legitimt ("Anna Andersson, HR-specialist,") och
         # berörs inte.
+        # AVGÖRANDET ÄR INTE KOMMAT ENSAMT (förfining 0058). Svensk
+        # tvåledad samordning tar aldrig blott komma — två led binds
+        # med "och" utan komma — så en kommaseparerad uppräkning som
+        # blandar roll och namn är med nödvändighet minst treledad.
+        # Det ensamma inramade namnet är därför apposition och BINDER:
+        # "Prefekt, N.N., skrev under protokollet." Uppräkningen
+        # avslöjar sig genom sitt tredje led, som i parsen är en
+        # NAMNKONJUNKT under namnet. En rollkonjunkt fäller inte:
+        # "prefekten, N.N., och proprefekten, N.N." är parvisa
+        # appositioner.
+        #
+        # Verbkravet skiljer ut etikettlistan, treledsregelns enda
+        # undantag: "Närvarande: prefekt, N.N." är telegramstil där
+        # "och" utelämnas och tvåledad uppräkning förekommer.
+        # Appositionen bär ett finit verb; etikettlistan bär inget.
         if w.id < w.head and any(
             x.upos == "PUNCT" and x.text == ","
             and w.id < x.id < w.head
             for x in words
         ):
-            continue
+            # En namnkonjunkt signalerar uppräkning bara när den är
+            # NAKEN — bär den sin egen titel är formen parvisa
+            # appositioner ("prefekten, N.N., och proprefekten,
+            # N.N."), där samordningen i parsen går mellan namnen
+            # fast varje namn har sitt eget rolled.
+            namnkonjunkt = any(
+                x.head == w.head and x.deprel == "conj"
+                and x.upos == "PROPN"
+                and any(y.head == x.id and y.deprel in ("flat", "flat:name")
+                        and y.upos == "PROPN" for y in words)
+                and not _has_own_title(words, x.id)
+                for x in words
+            )
+            har_verb = any(x.upos in ("VERB", "AUX") for x in words)
+            if namnkonjunkt or not har_verb:
+                continue
 
         name = _phrase(words, w.head)
         if _LEGAL_REF.search(name) or _LEGAL_REF.search(_phrase(words, w.id)):
