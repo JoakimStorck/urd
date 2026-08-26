@@ -114,8 +114,29 @@ VIKTIGT om samtalsbakgrunden:
   eller "det" refererar till), men den är inte faktamaterial.
 """
 
+# Innehavarfrågorna hade inget eget block, trots att de är den enda
+# frågetyp vars löfte är en PERSON. Uppmätt 2026-08-26: en "vem"-fråga
+# besvarades med fyra meningar om vad rollen innebär, och bindningen
+# — svaret på frågan — kom sist under rubriken "i historiska
+# protokoll". Rollbeskrivningen är bakgrund; den efterfrågades inte.
+_HOLDER_BLOCK = """
+EXTRA INSTRUKTION FÖR DENNA FRÅGETYP:
+- Frågan gäller VEM, inte vad. Svara med personen i första meningen,
+  tillsammans med det datum källan bär: "Enligt <källa> (<datum>) är
+  <namn> <roll>."
+- Namnger flera källor olika personer: redovisa samtliga med sina
+  datum, i tidsordning med den senaste först. Skriv inte att någon är
+  den nuvarande innehavaren om källorna inte säger det.
+- Beskriv rollens uppgifter bara om frågan också efterfrågar dem,
+  eller mycket kort som avslutande bakgrund. En rollbeskrivning är
+  aldrig ett svar på en vem-fråga.
+- Namnger ingen källa någon innehavare: säg det rakt, i en mening.
+"""
+
 OPERATION_BLOCKS = {
     "direct_lookup": "",
+    "entity_lookup": _HOLDER_BLOCK,
+    "entity_aggregation": _HOLDER_BLOCK,
     "relation_membership": """
 EXTRA INSTRUKTION FÖR DENNA FRÅGETYP:
 - Svara först med ett kort besked: ja, nej, eller framgår inte tydligt.
