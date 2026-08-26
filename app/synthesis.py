@@ -32,7 +32,9 @@ from app.synthesis_types import SynthesisResult
 # Källformatering
 # ---------------------------------------------------------------------------
 
-def _format_sources_for_direct(hits: list[SourceHit]) -> str:
+def _format_sources_for_direct(
+    hits: list[SourceHit], required_ids: set[str] | None = None,
+) -> str:
     """
     Formatera källor för huvudprompten.
 
@@ -57,6 +59,16 @@ def _format_sources_for_direct(hits: list[SourceHit]) -> str:
             elif meta.document_weight == "norm":
                 label += ", normkälla"
             header += f" [{label}]"
+        # RESERVERADE PASSAGER MÄRKS. De hämtas in genom en egen kanal
+        # därför att beståndet binder frågans led just där, och de
+        # passerar medvetet inte relevansgolvet — deras poäng är
+        # därför låg eller noll. Omärkta hamnar de sist i högen bland
+        # normtexter på 0,97 och läses som skräp. Uppmätt 2026-08-26:
+        # de två passager som band frågans roll till en person nådde
+        # syntesen men användes inte, och svaret sade att källorna inte
+        # namnger någon.
+        if required_ids and hit.chunk_id in required_ids:
+            header += " [INHÄMTAD: binder frågans led till en person]"
         blocks.append(f"{header}\n{hit.text}")
     return "\n\n".join(blocks)
 
@@ -168,6 +180,15 @@ GRUNDREGLER FÖR KÄLLTYP OCH AKTUALITET:
 - Källornas datum anges i källhuvudet. Om källor med olika datum ger
   motstridiga uppgifter har den nyare företräde — redovisa i så fall
   båda datumen i svaret så att skillnaden är synlig.
+- ÅLDER ÄR INTE MOTSÄGELSE. Att ett belägg är gammalt gör det inte
+  osant: att tid har gått är ingen ny uppgift. Redovisa vad källan
+  säger tillsammans med dess datum, och reservera dig endast när en
+  annan källa faktiskt säger något annat. Skriv aldrig att något inte
+  framgår när en källa anger det — säg i stället vad den anger och
+  när.
+- En källa märkt [INHÄMTAD: binder frågans led till en person] är
+  hämtad just därför att den binder frågans led. Använd den och
+  redovisa bindningen med källans datum.
 
 GRUNDREGLER FÖR RELEVANS:
 
@@ -211,6 +232,7 @@ def synthesize(
     background_turns: list[dict] | None = None,
     background_max_turns: int = 0,
     question_operation: str = "direct_lookup",
+    required_chunk_ids: set[str] | None = None,
 ) -> SynthesisResult:
     """
     Enstegssyntes med detaljbevarande prompt.
@@ -220,7 +242,7 @@ def synthesize(
     följdfråga ska tolkas mot tidigare turer). Bakgrunden är inte
     en källa för påståenden — den är bara en tolkningsnyckel.
     """
-    sources_block = _format_sources_for_direct(hits)
+    sources_block = _format_sources_for_direct(hits, required_chunk_ids)
 
     background_block = ""
     if background_turns and background_max_turns > 0:

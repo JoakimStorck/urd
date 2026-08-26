@@ -1482,8 +1482,10 @@ class RagService:
         # hela beståndet — passagen behöver alltså varken ha nått
         # kandidatpoolen eller passerat rerankens golv.
         required_debug: list[dict] = []
+        required_chunk_ids: set[str] = set()
         if attest_locations:
             required_hits = self._chunks_at(attest_locations)
+            required_chunk_ids = {h.chunk_id for h in required_hits}
             hits_for_synthesis, required_debug = _add_required_passages(
                 hits_for_synthesis, required_hits,
             )
@@ -1495,6 +1497,7 @@ class RagService:
             background_turns=background_turns,
             background_max_turns=background_max_turns,
             question_operation=question_operation,
+            required_chunk_ids=required_chunk_ids,
         )
 
         # Mekanisk källvakt: deterministisk efterkontroll av svaret
@@ -1623,6 +1626,16 @@ class RagService:
             question, False, _claims_summary,
             grammar_mod.looks_like_person_name,
         )
+        # BESKEDET PÅSTÅR NÅGOT OM KÄLLORNA, inte bara om svaret.
+        # "Källorna beskriver X men namnger ingen innehavare" är
+        # OSANT när en reserverad passage binder rollen till en
+        # person — och reserverade passager finns just därför att
+        # beståndet binder där. Uppmätt 2026-08-26: beskedet
+        # författades ovanpå ett svar vars källor bar bindningen.
+        # Att svaret inte utnyttjade dem är ett syntesfel, och ett
+        # falskt påstående om källorna är fel botemedel.
+        if _utfall == "beskriver_men_namnger_inte" and required_chunk_ids:
+            _utfall = "kallor_binder_svaret_utnyttjar_inte"
         _makt = _utfall in deliberation.enforced_outcomes()
         if _makt and _utfall == "beskriver_men_namnger_inte":
             synthesis_result.answer = (
