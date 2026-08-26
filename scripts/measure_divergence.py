@@ -218,10 +218,23 @@ def main() -> int:
 
     if n and not divergenta:
         print("")
-        print("Divergens noll: med denna tabell och detta spår skulle "
-              "lagret inte ha ändrat något svar. Antingen är batteriet "
-              "utan substitutionsfall — eller lagret dekoration. Avgör "
-              "med ett spår som innehåller innehavarfrågor.")
+        uttryckliga = utfall_räknare.get(
+            "beskriver_men_namnger_inte (uttrycklig)", 0)
+        namngivna = utfall_räknare.get("namnger", 0)
+        if uttryckliga or namngivna:
+            # TREDJE BENET. Texten skrevs innan lagret hade makt och
+            # kände då bara två tolkningar av divergens noll. Numera
+            # finns en tredje, och den är den eftersträvade: lagret
+            # verkade — svaren namnger eller bär ett systemförfattat
+            # besked — och ingenting återstod att ändra.
+            print(f"Divergens noll MED VERKAN: {namngivna} namngivande "
+                  f"och {uttryckliga} uttryckliga utfall. Lagret och "
+                  "svarsvägen är samstämmiga för detta spår.")
+        else:
+            print("Divergens noll UTAN VERKAN: inga namngivande eller "
+                  "uttryckliga utfall alls. Antingen är batteriet utan "
+                  "innehavarfrågor — eller lagret dekoration. Avgör med "
+                  "ett spår som innehåller sådana frågor.")
     return 0
 
 

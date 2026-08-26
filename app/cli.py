@@ -1530,22 +1530,49 @@ def attest_coverage(
 def attest_lookup(
     term: str = typer.Argument(..., help="Roll eller namn att slå upp."),
     by: str = typer.Option(
-        "object", "--by",
-        help="'object' för 'vem är X', 'subject' för 'vad är X'.",
+        "both", "--by",
+        help=("'both' (standard) visar båda riktningarna, 'object' för "
+              "'vem är X', 'subject' för 'vad är X'."),
     ),
 ) -> None:
     from app import attest
 
     conn = attest.connect()
-    fn = attest.lookup_object if by == "object" else attest.lookup_subject
-    cands = fn(conn, term)
+    # BÅDA RIKTNINGARNA SOM STANDARD. Uppmätt 2026-08-27: en
+    # skräpbindning var osynlig i flera diagnosomgångar därför att
+    # kommandots standardvärde bara frågade i objektriktningen ("vem
+    # binds till denna term"), medan bindningen hade personen som
+    # subjekt. Ett diagnosverktyg som tyst visar halva tabellen
+    # fördröjer felsökning i stället för att stödja den. --by object
+    # eller --by subject begränsar när man vet vad man söker.
+    riktningar = (
+        [("objekt", attest.lookup_object), ("subjekt", attest.lookup_subject)]
+        if by == "both"
+        else [("objekt", attest.lookup_object)] if by == "object"
+        else [("subjekt", attest.lookup_subject)]
+    )
 
-    if not cands:
-        typer.echo(f"Inga observationer för {term!r}.")
-        return
+    totalt = 0
+    for etikett, fn in riktningar:
+        cands = fn(conn, term)
+        totalt += len(cands)
+        if not cands:
+            typer.echo(f"{term!r} som {etikett}: inga observationer.")
+            typer.echo("")
+            continue
+        typer.echo(
+            f"{term!r} som {etikett} — {len(cands)} kandidat(er), "
+            "rangordnade efter relevans."
+        )
+        typer.echo("")
+        _skriv_kandidater(cands)
 
-    typer.echo(f"{term!r} — {len(cands)} kandidat(er), rangordnade efter relevans.")
-    typer.echo("")
+    if not totalt:
+        typer.echo(f"Inga observationer för {term!r} i någon riktning.")
+    return
+
+
+def _skriv_kandidater(cands) -> None:
     for c in cands:
         flag = "  [ENDAST TVETYDIGA BELÄGG]" if c.ambiguous_only else ""
         span = f"{c.first_date or '?'} – {c.last_date or '?'}"
