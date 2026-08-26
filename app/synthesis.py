@@ -124,9 +124,16 @@ EXTRA INSTRUKTION FÖR DENNA FRÅGETYP:
 - Frågan gäller VEM, inte vad. Svara med personen i första meningen,
   tillsammans med det datum källan bär: "Enligt <källa> (<datum>) är
   <namn> <roll>."
-- Namnger flera källor olika personer: redovisa samtliga med sina
-  datum, i tidsordning med den senaste först. Skriv inte att någon är
-  den nuvarande innehavaren om källorna inte säger det.
+- SLÅ IHOP LIKALYDANDE BELÄGG. Säger flera källor samma sak är det EN
+  uppgift med flera belägg, inte flera uppgifter: skriv den en gång,
+  hänvisa till samtliga källor och ange spannet — "Enligt [Källa 2,
+  Källa 5, Källa 6] (2023-01-31 till 2026-06-02) är X proprefekt."
+  Upprepa aldrig samma bindning i mening efter mening.
+- Särredovisa bara SKILLNADER. Namnger källor olika personer, eller
+  olika roller för samma person, redovisa dem var för sig i
+  tidsordning med den senaste först. Skriv inte att någon är den
+  nuvarande innehavaren om källorna inte säger det.
+- Hänvisa alltid med [Källa N], aldrig med filnamn.
 - Beskriv rollens uppgifter bara om frågan också efterfrågar dem,
   eller mycket kort som avslutande bakgrund. En rollbeskrivning är
   aldrig ett svar på en vem-fråga.
