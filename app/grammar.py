@@ -616,6 +616,32 @@ def _conj_chain(words, head_id: int) -> list[int]:
     return chain
 
 
+def _has_preceding_own_title(words, name_id: int) -> bool:
+    """
+    Bär namnet sin egen titel FÖRE sig?
+
+    Positionen skiljer två former som annars ser lika ut i parsen.
+    Parvisa appositioner ställer varje rolled före sitt namn
+    ("prefekten, N.N., och proprefekten, N.N.") — där är samordningen
+    parallell och båda bindningarna gäller. En uppräkning vars sista
+    led bär en parentetisk titel efter sig ("Prefekten, N.N. och N.N.
+    (samordnare...)") är däremot fortfarande en uppräkning: titeln
+    tillhör bara det ledet och säger ingenting om de övriga.
+
+    Uppmätt 2026-08-26: den generösa prövningen (titel i valfri
+    position) lät en uppräkning med parentestitel på sista ledet
+    passera uppräkningsvakten och band rollordet till uppräkningens
+    första namn.
+    """
+    return any(
+        x.head == name_id and x.deprel in ("nmod", "appos")
+        and x.id < name_id
+        and words[x.id - 1].upos in _NOMINAL_UPOS
+        and not any(c.head == x.id and c.deprel == "case" for c in words)
+        for x in words
+    )
+
+
 def _has_own_title(words, name_id: int) -> bool:
     """Bär namnet ett eget nominalt nmod-led, alltså sin egen titel?"""
     return any(
@@ -973,7 +999,7 @@ def _title_identity(words, stext: str) -> list[Feature]:
                 and x.upos == "PROPN"
                 and any(y.head == x.id and y.deprel in ("flat", "flat:name")
                         and y.upos == "PROPN" for y in words)
-                and not _has_own_title(words, x.id)
+                and not _has_preceding_own_title(words, x.id)
                 for x in words
             )
             har_verb = any(x.upos in ("VERB", "AUX") for x in words)
