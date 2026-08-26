@@ -150,6 +150,58 @@ def _merge_into(sentence: str, extra_sources: list[int],
 # Bindningssammanställning
 # ---------------------------------------------------------------------------
 
+def _person_first(b: dict, is_person) -> dict:
+    """
+    Vänd raden så att personen står först.
+
+    Uppslaget lagrar relationen som den står i källan, och parentesen
+    "<sak> (<person>)" ger personen som objekt. Uppmätt 2026-08-26: en
+    sådan rad hamnade i sammanställningen med saken som innehavare.
+    Riktningen i lagret är rätt — den speglar texten — men
+    sammanställningen läses som "vem har vilken roll" och måste därför
+    orienteras.
+
+    Vänds bara när objektet ÄR namnlikt och subjektet inte är det.
+    Är båda eller ingendera namnlika lämnas raden orörd: att gissa
+    riktning vore att lägga till en tolkning som ingen mätt.
+    """
+    subj, obj = b.get("subjekt", ""), b.get("roll", "")
+    if obj and not is_person(subj) and is_person(obj):
+        b = dict(b)
+        b["subjekt"], b["roll"] = obj, subj
+    return b
+
+
+def _dedupe_bindings(bindings: list[dict]) -> list[dict]:
+    """
+    Slå ihop identiska bindningar från uppslagets båda riktningar.
+
+    Uppmätt 2026-08-26: samma bindning stod två gånger i ett svar, en
+    gång per uppslagsriktning — rollen som objekt och namnet som
+    subjekt finner samma kandidat. Spannet slås ihop till
+    föreningen och källorna till unionen, så att den sammanslagna
+    raden säger allt de två sade.
+    """
+    ut: dict[tuple, dict] = {}
+    for b in bindings:
+        nyckel = (
+            (b.get("subjekt") or "").casefold(),
+            (b.get("roll") or "").casefold(),
+            (b.get("avser") or "").casefold(),
+        )
+        if nyckel not in ut:
+            ut[nyckel] = dict(b)
+            ut[nyckel]["sources"] = list(b.get("sources") or [])
+            continue
+        f = ut[nyckel]
+        f["sources"] = list(dict.fromkeys(
+            (f.get("sources") or []) + list(b.get("sources") or [])))
+        for fält, välj in (("first_date", min), ("last_date", max)):
+            a, c = f.get(fält), b.get(fält)
+            f[fält] = välj(x for x in (a, c) if x) if (a or c) else None
+    return list(ut.values())
+
+
 def format_bindings(bindings: list[dict], hits, frame_year: int | None = None) -> str:
     """
     Beståndets bindningar i sammanställd form, för syntesprompten.
@@ -175,12 +227,16 @@ def format_bindings(bindings: list[dict], hits, frame_year: int | None = None) -
     """
     if not bindings:
         return ""
+    bindings = _dedupe_bindings(bindings)
     index_by_name: dict[str, list[int]] = {}
     for i, h in enumerate(hits, start=1):
         index_by_name.setdefault(h.metadata.file_name, []).append(i)
 
+    from app.grammar import looks_like_person_name as _is_person
+
     rader: list[str] = []
     for b in bindings:
+        b = _person_first(b, _is_person)
         if frame_year and (b.get("first_date") or "")[:4].isdigit():
             if int(b["first_date"][:4]) > frame_year:
                 continue
