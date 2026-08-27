@@ -2614,12 +2614,32 @@ class RagService:
             for hit in active_hits
         })
 
-        state.add_turn(
-            question,
-            response.answer,
-            doc_paths,
-            hits=active_hits,
-        )
+        # EN TUR UTAN UNDERLAG FÅR INTE RADERA UNDERLAGET.
+        #
+        # Uppmätt 2026-08-27: en öppningsfråga besvarades ur tre goda
+        # källor, en följdfråga abstainade, och NÄSTA följdfråga
+        # loggades som "elaboration men active_hits är tom". Abstain-
+        # turen hade skrivit över kontexten med tomt, eftersom
+        # response.sources är en tom LISTA och add_turn tolkar listan
+        # som "detta är den nya kontexten" medan None betyder "behåll
+        # föregående". Mekanismen fanns alltså redan; den användes bara
+        # inte här.
+        #
+        # Principen är densamma som för sociala turer: en yttring som
+        # inte tillför något ska inte heller ta bort något. Ett
+        # abstain-svar säger att stöd saknas för DENNA fråga — det är
+        # inget påstående om att föregående svars källor upphört att
+        # gälla, och att låta det tömma arbetsminnet gör tråden
+        # oåterkallelig efter varje misslyckad fråga.
+        if not active_hits:
+            state.add_turn(question, response.answer, state.active_doc_paths)
+        else:
+            state.add_turn(
+                question,
+                response.answer,
+                doc_paths,
+                hits=active_hits,
+            )
 
         # Merga debug-info från retrieval/syntes med vår dispatch-info
         if response.debug is None:

@@ -296,11 +296,33 @@ def _parse_classification_json(raw: str) -> Classification | None:
         return None
 
     intent_raw = str(data.get("intent", "")).strip()
+    substyle_from_intent: str | None = None
+    if intent_raw not in _VALID_INTENTS and intent_raw in _VALID_SUBSTYLES:
+        # SUBSTIL I INTENT-FÄLTET ÄR EN LÄSBAR KLASSIFICERING, INTE ETT
+        # OGILTIGT SVAR. Uppmätt 2026-08-27: klassificeraren svarade
+        # intent="broadening" — en SUBSTIL under related_to_qud, inte
+        # ett intent. Värdet förkastades, hela klassificeringen föll
+        # tillbaka, och turen behandlades som ny huvudfråga utan
+        # ankring till föregående svar; följden blev abstain på en
+        # fråga som hörde till den aktiva tråden.
+        #
+        # Att en substil står i intent-fältet säger entydigt vad
+        # modellen menade: yttringen relaterar till QUD:n, på det sätt
+        # substilen anger. Att kasta den informationen och falla
+        # tillbaka till "ny huvudfråga" är att välja det sämsta av de
+        # tolkningar som står till buds. Repareras mekaniskt i stället
+        # för att formuleras om i prompten — samma skäl som 0067.
+        logger.info(
+            "Substil %r i intent-fältet — läses som related_to_qud.",
+            intent_raw,
+        )
+        substyle_from_intent = intent_raw
+        intent_raw = "related_to_qud"
     if intent_raw not in _VALID_INTENTS:
         logger.warning("Ogiltigt intent-värde: %r", intent_raw)
         return None
 
-    substyle_raw = data.get("substyle")
+    substyle_raw = data.get("substyle") or substyle_from_intent
     substyle: Substyle | None = None
     if substyle_raw is not None and str(substyle_raw).strip().lower() not in ("", "null", "none"):
         candidate = str(substyle_raw).strip()
