@@ -1935,8 +1935,16 @@ class RagService:
                 previous_answer,
                 self.llm,
             )
-            sources_to_show = new_hits if new_hits else hits
-            num_new = len(new_hits)
+            # SAMMA BOKFÖRING PÅ BÅDA VÄGARNA. Huvudvägen räknar
+            # sedan 0073 innehållsidentiska kopior som EN källa;
+            # gjorde inte rework-vägarna det skulle samma bestånd
+            # redovisas olika beroende på vilken väg frågan tog, och
+            # elaboration är den väg där risken är störst eftersom den
+            # hämtar brett ur de aktiva dokumenten.
+            sources_to_show, elab_duplicates = _dedupe_identical_chunks(
+                new_hits if new_hits else hits
+            )
+            num_new = len(sources_to_show) if new_hits else 0
 
             # Mekanisk källvakt även på elaborationsvägen — samma
             # kontrollunderlag som huvudvägen: källtexterna plus
@@ -1987,7 +1995,7 @@ class RagService:
                 previous_answer,
                 self.llm,
             )
-            sources_to_show = hits
+            sources_to_show, elab_duplicates = _dedupe_identical_chunks(hits)
             num_new = 0
 
         else:
@@ -1998,6 +2006,7 @@ class RagService:
         synthesis_debug = {
             "used_fallback": synthesis_result.used_fallback,
             "mode": mode,
+            "duplicate_chunks": elab_duplicates,
             # Även rework-vägen: elaboration och verification
             # producerar bindningspåståenden på samma sätt.
             "answer_claims": answer_claims.summarize(
