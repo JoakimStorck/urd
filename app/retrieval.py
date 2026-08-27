@@ -8,6 +8,7 @@ generaliserar över frågetyper utan handskrivna bonusar.
 import logging
 import math
 import re
+import hashlib
 import time
 from dataclasses import dataclass
 
@@ -601,6 +602,51 @@ def _add_required_passages(
         result.append(hit)
 
     return result, debug
+
+
+def _dedupe_identical_chunks(
+    hits: list[SourceHit],
+) -> tuple[list[SourceHit], list[dict]]:
+    """
+    Samma innehåll under flera sökvägar räknas som EN källa.
+
+    Uppmätt 2026-08-27: ett regeldokument arkiverat i tre mappar
+    indexerades tre gånger, och svaret citerade [Källa 1, 2, 3] för
+    varje påstående. Det ser ut som tre oberoende belägg men är ett.
+    Felet är av samma slag som utvinningens uppräkningsartefakter —
+    systemet överdriver sitt stöd — fast här genom dubblering i stället
+    för genom feltolkning.
+
+    Attest gör redan denna åtskillnad: innehållshash gav 213 dokument
+    ur 241 sökvägar (0028). Retrieval hade ingen motsvarande hygien,
+    och kopiorna förbrukade dessutom platser i syntesurvalet som
+    andra sektioner ur samma dokument kunde ha använt.
+
+    Jämförelsen görs på chunktextens innehåll, inte på filnamn: två
+    filer med samma namn i olika mappar KAN skilja sig, och två med
+    olika namn kan vara identiska. Innehållet är det som avgör om
+    beläggen är oberoende. Den högst rankade kopian behålls med sin
+    plats i ordningen; övriga sökvägar redovisas i debug så att
+    dubbleringen blir mätbar över körningar i stället för att bara
+    försvinna.
+    """
+    sedda: dict[str, SourceHit] = {}
+    ut: list[SourceHit] = []
+    dubbletter: list[dict] = []
+    for h in hits:
+        nyckel = hashlib.sha256(
+            " ".join((h.text or "").split()).encode("utf-8")
+        ).hexdigest()
+        if nyckel in sedda:
+            dubbletter.append({
+                "behallen": sedda[nyckel].metadata.source_path,
+                "utesluten": h.metadata.source_path,
+                "file_name": h.metadata.file_name,
+            })
+            continue
+        sedda[nyckel] = h
+        ut.append(h)
+    return ut, dubbletter
 
 
 def _select_hits_for_synthesis(
@@ -1548,8 +1594,17 @@ class RagService:
         # 8. Syntes: enstegsformulering direkt från källorna
         t6 = time.perf_counter()
 
+        # Dubbletthygien FÖRE urvalet: annars förbrukar kopior av samma
+        # innehåll platser som andra sektioner kunde ha använt.
+        deduped_hits, duplicate_debug = _dedupe_identical_chunks(hits)
+        if duplicate_debug:
+            logger.info(
+                "dubbletter: %d chunk(ar) med identiskt innehåll under "
+                "flera sökvägar uteslöts ur syntesurvalet",
+                len(duplicate_debug),
+            )
         hits_for_synthesis = _select_hits_for_synthesis(
-            hits,
+            deduped_hits,
             question_operation=question_operation,
         )
         if comparison_labels:
@@ -1751,6 +1806,7 @@ class RagService:
             },
             "abstain_rescued_by_attest": abstain_rescued_by_attest,
             "merged_sentences": merged_sentences,
+            "duplicate_chunks": duplicate_debug,
             "binding_summary_rows": (
                 binding_summary.count("\n- ") if binding_summary else 0
             ),
